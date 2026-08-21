@@ -1,5 +1,15 @@
 # Browser test harness
 
+There are two layers:
+
+- **`scripts/harness/`** — product suite. Discovers Playwright, Puppeteer, and
+  agent-browser on this machine and runs the portable glass checks against a
+  running marks server. This is what `npm run smoke:platforms` drives.
+- **`.cursor/harness/`** — Cloud Agent CGNAT runtimes. Optional isolated
+  namespaces (`cg-playwright`, `cg-puppeteer`, `cg-agent`) with hot Chrome on
+  CDP 9222/9223/9224. Used by `.cursor/harness/run-marks-tests.sh` for
+  cross-namespace collab. Not required for `npm run smoke` or `smoke:platforms`.
+
 marks is exercised on three local browser platforms:
 
 | Platform | Role | How it is found |
