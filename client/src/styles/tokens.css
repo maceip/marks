@@ -1,0 +1,134 @@
+:root {
+  color-scheme: light;
+
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-sunken: #f0f1f4;
+
+  --text: #14161a;
+  --text-muted: #5c6370;
+  --text-faint: #9aa1ad;
+
+  --border: #e3e5ea;
+  --border-strong: #cdd1d9;
+
+  --accent: #5b5bd6;
+  --accent-hover: #4a4ac4;
+  --accent-muted: #7c7cf0;
+  --accent-soft: #eeeefc;
+
+  --danger: #d43b3b;
+  --danger-soft: #fdeded;
+  --success: #1f9d55;
+  --success-soft: #e8f6ee;
+  --warning: #b8860b;
+  --warning-soft: #fdf5e2;
+  --info: #2470b3;
+  --info-soft: #eaf3fb;
+
+  --selection: #d8d8f7;
+  --selection-match: #e7e7fb;
+  --search-match: #fdf0c2;
+  --search-match-active: #fadf7f;
+  --active-line: #f7f7fa;
+
+  --code: #b02f6c;
+  --code-bg: #f4f2f7;
+  --code-block-bg: #f8f8fb;
+
+  --syntax-keyword: #8250df;
+  --syntax-string: #0a7b53;
+  --syntax-number: #b8500b;
+  --syntax-fn: #2a5cd7;
+  --syntax-type: #b02f6c;
+  --syntax-comment: #8b909a;
+
+  /* Collaborator colours, shared by both CRDT cursor bindings. */
+  --user-1: #e0567a;
+  --user-2: #2f8f5b;
+  --user-3: #2f6fd0;
+  --user-4: #c2681a;
+  --user-5: #8a4fd8;
+  --user-6: #0f8f9e;
+  --user-7: #c43b8e;
+  --user-8: #6b7a2f;
+
+  --shadow-sm: 0 1px 2px rgb(20 22 26 / 6%);
+  --shadow-md: 0 6px 24px -8px rgb(20 22 26 / 18%);
+  --shadow-lg: 0 20px 48px -16px rgb(20 22 26 / 26%);
+
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono',
+    monospace;
+
+  --editor-font-size: 14.5px;
+  --topbar-height: 52px;
+  --statusbar-height: 30px;
+  --sidebar-width: 268px;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #0d0f12;
+  --surface: #15181d;
+  --surface-raised: #1c2026;
+  --surface-sunken: #101317;
+
+  --text: #e7e9ee;
+  --text-muted: #9aa2b1;
+  --text-faint: #6b7280;
+
+  --border: #262b33;
+  --border-strong: #363d47;
+
+  --accent: #8b8bf5;
+  --accent-hover: #a0a0ff;
+  --accent-muted: #6f6fd0;
+  --accent-soft: #1e1f3a;
+
+  --danger: #f0716f;
+  --danger-soft: #2a1719;
+  --success: #4ec98a;
+  --success-soft: #14251c;
+  --warning: #e0b653;
+  --warning-soft: #262014;
+  --info: #6bb2f0;
+  --info-soft: #131f2b;
+
+  --selection: #2f3564;
+  --selection-match: #262b4f;
+  --search-match: #4a3f16;
+  --search-match-active: #6d5c1d;
+  --active-line: #191d23;
+
+  --code: #f0879c;
+  --code-bg: #21262e;
+  --code-block-bg: #14171c;
+
+  --syntax-keyword: #c39bfa;
+  --syntax-string: #7ed3a5;
+  --syntax-number: #f0b072;
+  --syntax-fn: #86b6f8;
+  --syntax-type: #f0879c;
+  --syntax-comment: #737b88;
+
+  --user-1: #ff8098;
+  --user-2: #5fd28f;
+  --user-3: #74a9f5;
+  --user-4: #f0a45e;
+  --user-5: #bb92f5;
+  --user-6: #4fc6d4;
+  --user-7: #f078bd;
+  --user-8: #b3c46b;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+  --shadow-md: 0 8px 28px -10px rgb(0 0 0 / 70%);
+  --shadow-lg: 0 24px 56px -18px rgb(0 0 0 / 80%);
+}

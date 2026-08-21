@@ -1,0 +1,386 @@
+.marks-preview {
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: 2rem 2.25rem 45vh;
+  font-size: 15px;
+  line-height: 1.72;
+  word-wrap: break-word;
+}
+
+/*
+ * Block wrappers exist for diffing; they must not affect layout.
+ *
+ * `content-visibility` lets the browser skip layout and paint for blocks that
+ * are scrolled out of view, which is what keeps a thousand-block document as
+ * cheap to repaint as a short one. `contain-intrinsic-size: auto` makes it
+ * remember each block's real size once measured, so the scrollbar stays put.
+ */
+.marks-block {
+  margin: 0;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 3rem;
+}
+
+.marks-preview h1,
+.marks-preview h2,
+.marks-preview h3,
+.marks-preview h4,
+.marks-preview h5,
+.marks-preview h6 {
+  margin: 1.7em 0 0.65em;
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: -0.015em;
+  scroll-margin-top: 1rem;
+}
+
+.marks-block:first-child h1,
+.marks-block:first-child h2,
+.marks-block:first-child h3 {
+  margin-top: 0;
+}
+
+.marks-preview h1 {
+  font-size: 1.9em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+
+.marks-preview h2 {
+  font-size: 1.45em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--border);
+}
+
+.marks-preview h3 {
+  font-size: 1.2em;
+}
+
+.marks-preview h4 {
+  font-size: 1.05em;
+}
+
+.marks-preview h5,
+.marks-preview h6 {
+  font-size: 0.95em;
+  color: var(--text-muted);
+}
+
+.marks-anchor {
+  margin-left: 0.4em;
+  color: var(--text-faint);
+  font-weight: 400;
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+h1:hover .marks-anchor,
+h2:hover .marks-anchor,
+h3:hover .marks-anchor,
+h4:hover .marks-anchor {
+  opacity: 1;
+}
+
+.marks-preview p,
+.marks-preview dl {
+  margin: 0 0 1.05em;
+}
+
+.marks-preview ul,
+.marks-preview ol {
+  margin: 0 0 1.05em;
+  padding-left: 1.6em;
+}
+
+.marks-preview li {
+  margin: 0.28em 0;
+}
+
+.marks-preview li > ul,
+.marks-preview li > ol {
+  margin: 0.28em 0;
+}
+
+.marks-preview blockquote {
+  margin: 0 0 1.05em;
+  padding: 0.15em 1em;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-muted);
+}
+
+.marks-preview blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.marks-preview hr {
+  height: 1px;
+  margin: 2em 0;
+  border: 0;
+  background: var(--border);
+}
+
+.marks-preview a {
+  color: var(--accent);
+  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  text-underline-offset: 2px;
+}
+
+.marks-preview img {
+  max-width: 100%;
+  border-radius: var(--radius-sm);
+}
+
+.marks-preview kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+
+.marks-preview mark {
+  padding: 0.1em 0.2em;
+  border-radius: 3px;
+  background: var(--search-match);
+  color: inherit;
+}
+
+/* ---------------------------------------------------------------- code */
+
+.marks-preview code {
+  padding: 0.15em 0.36em;
+  border-radius: 4px;
+  background: var(--code-bg);
+  color: var(--code);
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+}
+
+.marks-preview pre {
+  margin: 0 0 1.15em;
+  padding: 0.9em 1.1em;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--code-block-bg);
+  font-size: 12.8px;
+  line-height: 1.6;
+}
+
+.marks-preview pre code {
+  padding: 0;
+  background: none;
+  color: var(--text);
+  font-size: inherit;
+}
+
+/* highlight.js tokens, expressed with the theme's own variables. */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-section,
+.hljs-doctag,
+.hljs-name {
+  color: var(--syntax-keyword);
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-attribute,
+.hljs-meta .hljs-string {
+  color: var(--syntax-string);
+}
+
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link,
+.hljs-selector-attr,
+.hljs-selector-pseudo {
+  color: var(--syntax-number);
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-function .hljs-title {
+  color: var(--syntax-fn);
+}
+
+.hljs-type,
+.hljs-class .hljs-title,
+.hljs-title.class_,
+.hljs-built_in,
+.hljs-selector-id,
+.hljs-template-variable,
+.hljs-variable {
+  color: var(--syntax-type);
+}
+
+.hljs-comment,
+.hljs-quote,
+.hljs-deletion {
+  color: var(--syntax-comment);
+  font-style: italic;
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 700;
+}
+
+/* --------------------------------------------------------------- tables */
+
+.marks-preview table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  margin: 0 0 1.15em;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+.marks-preview th,
+.marks-preview td {
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+.marks-preview th {
+  background: var(--surface-sunken);
+  font-weight: 600;
+}
+
+.marks-preview tbody tr:nth-child(even) {
+  background: color-mix(in srgb, var(--surface-sunken) 45%, transparent);
+}
+
+/* ----------------------------------------------------------- task lists */
+
+.marks-preview .task-list-item {
+  list-style: none;
+  margin-left: -1.45em;
+}
+
+.marks-preview .task-list-item input[type='checkbox'] {
+  width: 1em;
+  height: 1em;
+  margin-right: 0.5em;
+  accent-color: var(--accent);
+  cursor: pointer;
+  vertical-align: -0.1em;
+}
+
+.marks-preview .task-list-item input[type='checkbox']:checked + label,
+.marks-preview .task-list-item input[type='checkbox']:checked ~ * {
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------- callouts */
+
+.marks-callout {
+  margin: 0 0 1.15em;
+  padding: 0.85em 1.1em;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+}
+
+.marks-callout > :last-child {
+  margin-bottom: 0;
+}
+
+.marks-callout-title {
+  margin-bottom: 0.4em !important;
+  font-weight: 650;
+}
+
+.marks-callout-info {
+  border-left-color: var(--info);
+  background: var(--info-soft);
+}
+
+.marks-callout-success {
+  border-left-color: var(--success);
+  background: var(--success-soft);
+}
+
+.marks-callout-warning {
+  border-left-color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.marks-callout-danger {
+  border-left-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.marks-callout-note {
+  border-left-color: var(--text-faint);
+}
+
+/* ------------------------------------------------------------ footnotes */
+
+.footnotes {
+  margin-top: 2.5em;
+  padding-top: 1.2em;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.footnote-backref {
+  text-decoration: none;
+}
+
+/* ------------------------------------------------------- math + diagrams */
+
+.katex-display {
+  margin: 1.2em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.2em 0;
+}
+
+.marks-mermaid {
+  margin: 0 0 1.2em;
+}
+
+.marks-mermaid-out {
+  display: flex;
+  justify-content: center;
+  padding: 1em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+}
+
+.marks-mermaid-out:empty {
+  min-height: 80px;
+}
+
+.marks-mermaid-out svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.marks-diagram-error {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+@media (max-width: 900px) {
+  .marks-preview {
+    padding: 1.25rem 1.15rem 45vh;
+    font-size: 15.5px;
+  }
+}
