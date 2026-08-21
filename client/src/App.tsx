@@ -2,15 +2,20 @@ import type { EditorView } from '@codemirror/view';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { loadUser } from './collab';
 import type { EngineName } from './collab/types';
+import { CommentsDrawer } from './components/CommentsDrawer';
+import { ContextMenu } from './components/ContextMenu';
 import { EmptyState } from './components/EmptyState';
 import type { CursorInfo } from './components/EditorPane';
 import { Icon, icons } from './components/Icon';
+import { OpeningShell } from './components/OpeningShell';
 import { Outline } from './components/Outline';
 import { PerfHud } from './components/PerfHud';
 import { Sidebar } from './components/Sidebar';
 import { StatusBar } from './components/StatusBar';
 import { TopBar, type ViewMode } from './components/TopBar';
+import { VoiceBar } from './components/VoiceBar';
 import { Workspace } from './components/Workspace';
+import { useBrowserSurface } from './hooks/useBrowserSurface';
 import { useDocumentMeta } from './hooks/useDocumentMeta';
 import { useDocuments } from './hooks/useDocuments';
 import { useRoute } from './hooks/useRoute';
@@ -51,13 +56,17 @@ export function App() {
   const documents = useDocuments();
   const docId = route.name === 'document' ? route.id : null;
   const { meta, engine, resolved } = useDocumentMeta(docId);
-  const { session, status, peers } = useSession(resolved ? docId : null, engine, user);
+  const { session, status, peers, comments } = useSession(resolved ? docId : null, engine, user);
 
   const scrollSync = useMemo(() => new ScrollSync(), []);
   const tracker = useRef(new LatencyTracker(240));
   const latest = useRef<PreviewStats | null>(null);
   const textRef = useRef('');
   const viewRef = useRef<EditorView | null>(null);
+  const previewRef = useRef<HTMLElement | null>(null);
+  const getView = useCallback(() => viewRef.current, []);
+  const getPreview = useCallback(() => previewRef.current, []);
+  const surface = useBrowserSurface(session, getView, getPreview);
 
   const [snapshot, setSnapshot] = useState<HudSnapshot>(EMPTY_SNAPSHOT);
   const [headings, setHeadings] = useState<Heading[]>([]);
@@ -184,6 +193,7 @@ export function App() {
           documents={documents.documents}
           activeId={docId}
           loading={documents.loading}
+          stale={documents.stale}
           onOpen={openDocument}
           onCreate={(nextEngine) => void createDocument(nextEngine)}
           onDelete={(id) => void removeDocument(id)}
@@ -203,11 +213,14 @@ export function App() {
           sidebarOpen={sidebarOpen}
           hudOpen={hudOpen}
           outlineOpen={outlineOpen}
+          commentsOpen={surface.commentsOpen}
+          commentCount={comments.filter((comment) => !comment.resolved).length}
           onModeChange={setMode}
           onToggleSidebar={() => setSidebarOpen((open) => !open)}
           onToggleTheme={toggleTheme}
           onToggleHud={() => setHudOpen((open) => !open)}
           onToggleOutline={() => setOutlineOpen((open) => !open)}
+          onToggleComments={() => surface.setCommentsOpen(!surface.commentsOpen)}
         />
 
         {route.name === 'benchmark' ? (
@@ -215,19 +228,36 @@ export function App() {
             <Benchmark onBack={() => navigate({ name: 'home' })} />
           </Suspense>
         ) : session ? (
-          <Workspace
-            session={session}
-            mode={mode}
-            scrollSync={scrollSync}
-            onStats={handleStats}
-            onHeadings={setHeadings}
-            onCursor={setCursor}
-            onView={handleView}
-          />
-        ) : docId ? (
-          <div className="empty-state">
-            <p className="hint">Opening document…</p>
+          <div
+            className="workspace-shell"
+            onFocusCapture={(event) => {
+              const target = event.target as HTMLElement;
+              if (target.closest('.preview-pane')) surface.setLastSurface('preview');
+              else if (target.closest('.editor-pane')) surface.setLastSurface('editor');
+            }}
+          >
+            {!surface.hydrated && (
+              <OpeningShell cached={Boolean(meta)} offline={surface.network === 'offline'} />
+            )}
+            <Workspace
+              session={session}
+              mode={mode}
+              scrollSync={scrollSync}
+              onStats={handleStats}
+              onHeadings={setHeadings}
+              onCursor={setCursor}
+              onView={handleView}
+              onPreview={(element) => {
+                previewRef.current = element;
+              }}
+              onComment={surface.beginComment}
+              onVoice={surface.toggleVoice}
+              voiceActive={surface.voiceStatus === 'listening'}
+            />
+            <VoiceBar status={surface.voiceStatus} interim={surface.voiceInterim} onStop={surface.stopVoice} />
           </div>
+        ) : docId ? (
+          <OpeningShell cached={Boolean(meta)} offline={surface.network === 'offline'} />
         ) : (
           <EmptyState
             onCreate={(nextEngine) => void createDocument(nextEngine)}
@@ -244,9 +274,40 @@ export function App() {
             latencyP50={snapshot.p50}
             latencyP95={snapshot.p95}
             peers={peers.length || 1}
+            network={surface.network}
           />
         )}
       </main>
+
+      {surface.contextMenu && (
+        <ContextMenu
+          x={surface.contextMenu.x}
+          y={surface.contextMenu.y}
+          actions={surface.contextMenu.actions}
+          onClose={surface.closeContextMenu}
+        />
+      )}
+
+      {surface.commentsOpen && session && route.name !== 'benchmark' && (
+        <CommentsDrawer
+          comments={comments}
+          draftQuote={surface.draftQuote}
+          onSubmitDraft={surface.submitComment}
+          onCancelDraft={surface.cancelDraft}
+          onResolve={(id) => session.resolveComment(id)}
+          onDelete={(id) => session.deleteComment(id)}
+          onSelect={(comment) => {
+            const view = viewRef.current;
+            if (!view) return;
+            view.dispatch({
+              selection: { anchor: comment.from, head: comment.to },
+              scrollIntoView: true,
+            });
+            view.focus();
+          }}
+          onClose={() => surface.setCommentsOpen(false)}
+        />
+      )}
 
       {outlineOpen && route.name !== 'benchmark' && (
         <aside className="outline-drawer" aria-label="Outline">

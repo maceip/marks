@@ -127,6 +127,7 @@ export function PreviewPane({
       className="pane preview-pane"
       aria-label="Preview"
       ref={scrollRef}
+      tabIndex={0}
       onScroll={() => handlers.current.onScroll()}
     >
       <div className="marks-preview" ref={contentRef} onClick={handleClick} />

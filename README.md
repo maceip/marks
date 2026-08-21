@@ -78,7 +78,10 @@ people to expect:
 - **Callouts** — `:::info`, `:::success`, `:::warning`, `:::danger`, `:::note`
 - **Presence**: avatars, live remote cursors and selections
 - **Per-user undo** — undoing reverts your edits, never a collaborator's
-- **Offline editing**, with local persistence and automatic resync
+- **Offline editing**, with local persistence, multi-tab replica sync, and automatic resync
+- **Comments** anchored to a source range, stored on the same CRDT as the markdown
+- **Voice input** where the browser exposes SpeechRecognition
+- **Document-scoped copy / paste / select-all / right-click**, including HTML→markdown paste
 - **Light and dark themes**, and a layout that works on a phone
 - **Export** to `.md`, and a share link that is just the URL
 
@@ -86,6 +89,7 @@ people to expect:
 
 ```
 client/                     Vite + React + TypeScript
+  browser/                  clipboard, context menu, voice, comments, tab sync, cache
   collab/                   CollabSession interface, Loro and Yjs engines
   markdown/                 markdown-it setup, block diffing, DOM patching
   workers/                  markdown.worker.ts, bench.worker.ts
@@ -175,6 +179,7 @@ parse and render time, bytes on the wire, and the encoded size of the document.
 ## Tests
 
 ```bash
+npm run test:browser # clipboard, comments, context-menu, select-all, tab isolation
 npm run smoke        # drives two browsers against a running server
 npm run measure      # latency on a large generated document
 ```
@@ -212,4 +217,6 @@ npm run smoke
 [Vite](https://vite.dev) · [Express](https://expressjs.com)
 
 The research behind the CRDT choices, with papers and implementations from
-January 2025 to August 2026, is in [docs/RESEARCH.md](docs/RESEARCH.md).
+January 2025 to August 2026, is in [docs/RESEARCH.md](docs/RESEARCH.md). The
+browser-surface review — right-click, clipboard, voice, comments, caching,
+multi-tab, slow/offline — is in [docs/BROWSER-SURFACE.md](docs/BROWSER-SURFACE.md).

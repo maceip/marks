@@ -1,4 +1,5 @@
 import type { Extension } from '@codemirror/state';
+import type { CommentRecord } from '../browser/comments';
 
 export type EngineName = 'loro' | 'yjs';
 
@@ -56,6 +57,16 @@ export interface CollabSession {
   onTextChange(listener: (text: string) => void): () => void;
   onStatusChange(listener: (status: ConnectionStatus) => void): () => void;
   onPeersChange(listener: (peers: Peer[]) => void): () => void;
+
+  comments(): CommentRecord[];
+  addComment(input: { from: number; to: number; quote: string; body: string }): string;
+  resolveComment(id: string): void;
+  deleteComment(id: string): void;
+  onCommentsChange(listener: (comments: CommentRecord[]) => void): () => void;
+
+  /** True once the local replica has been read, even if the document is empty. */
+  hydrated(): boolean;
+  onHydrated(listener: () => void): () => void;
 
   destroy(): void;
 }

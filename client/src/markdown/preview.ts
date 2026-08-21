@@ -1,7 +1,11 @@
 import DOMPurify, { type Config } from 'dompurify';
 import MarkdownWorker from '../workers/markdown.worker?worker';
-import { renderDiagrams } from './mermaid';
+import { watchDiagrams } from './mermaid';
 import type { BlockPatch, Heading, RenderRequest, RenderResponse, RenderStats } from './types';
+
+/** First paint inserts this many blocks before yielding to the browser. */
+const FIRST_PAINT_BLOCKS = 48;
+const IDLE_PAINT_BLOCKS = 40;
 
 export interface PreviewStats extends RenderStats {
   /** Time from the edit landing to the preview being painted. */
@@ -36,12 +40,15 @@ export class PreviewRenderer {
   private inFlight: { seq: number; submittedAt: number } | null = null;
   private queued: { text: string; submittedAt: number } | null = null;
   private destroyed = false;
+  private idleHandle = 0;
+  private readonly unwatchDiagrams: () => void;
 
   private statsListener: ((stats: PreviewStats) => void) | null = null;
   private headingsListener: ((headings: Heading[]) => void) | null = null;
 
   constructor(private readonly container: HTMLElement) {
     this.worker.onmessage = (event: MessageEvent<RenderResponse>) => this.onRendered(event.data);
+    this.unwatchDiagrams = watchDiagrams(container);
   }
 
   onStats(listener: (stats: PreviewStats) => void): void {
@@ -65,6 +72,7 @@ export class PreviewRenderer {
 
   /** Drop all caches and re-render from scratch (theme changes, doc switches). */
   invalidate(text: string): void {
+    this.cancelIdle();
     this.post({ type: 'reset' });
     this.nodes.clear();
     this.container.replaceChildren();
@@ -113,31 +121,63 @@ export class PreviewRenderer {
       });
     });
 
-    void renderDiagrams(this.container);
     this.pump();
   }
 
   /** Keyed reconciliation: unchanged runs of blocks cost zero DOM operations. */
   private patch(blocks: BlockPatch[]): number {
-    const next = new Map<string, HTMLElement>();
+    this.cancelIdle();
+    if (this.nodes.size === 0 && blocks.length > FIRST_PAINT_BLOCKS) {
+      const first = this.patchRange(blocks, 0, FIRST_PAINT_BLOCKS, false);
+      this.scheduleRemainder(blocks, FIRST_PAINT_BLOCKS);
+      return first;
+    }
+    return this.patchRange(blocks, 0, blocks.length, true);
+  }
+
+  private scheduleRemainder(blocks: BlockPatch[], start: number): void {
+    let offset = start;
+    const step = () => {
+      if (this.destroyed) return;
+      const end = Math.min(offset + IDLE_PAINT_BLOCKS, blocks.length);
+      this.patchRange(blocks, offset, end, end === blocks.length);
+      offset = end;
+      if (offset < blocks.length) this.idleHandle = requestIdleOrFrame(step);
+    };
+    this.idleHandle = requestIdleOrFrame(step);
+  }
+
+  private cancelIdle(): void {
+    if (!this.idleHandle) return;
+    cancelIdleOrFrame(this.idleHandle);
+    this.idleHandle = 0;
+  }
+
+  private patchRange(blocks: BlockPatch[], start: number, end: number, retire: boolean): number {
+    const slice = blocks.slice(start, end);
     let touched = 0;
 
     // Retire stale nodes *before* walking the list. Leaving them in place
     // would sit between the nodes we want to keep, and every subsequent block
     // would be re-inserted to step over them — turning a one-block edit into
     // one DOM move per block in the document.
-    const keys = new Set(blocks.map((block) => block.key));
-    for (const [key, node] of this.nodes) {
-      if (!keys.has(key)) {
-        node.remove();
-        this.nodes.delete(key);
-        touched += 1;
+    if (retire) {
+      const keys = new Set(blocks.map((block) => block.key));
+      for (const [key, node] of this.nodes) {
+        if (!keys.has(key)) {
+          node.remove();
+          this.nodes.delete(key);
+          touched += 1;
+        }
       }
     }
 
-    let cursor = this.container.firstElementChild as HTMLElement | null;
+    const before = start === 0 ? this.container.firstElementChild : this.nodes.get(blocks[start - 1]?.key ?? '')?.nextElementSibling;
+    let cursor = (before ?? this.container.firstElementChild) as HTMLElement | null;
 
-    for (const block of blocks) {
+    const next = start === 0 ? new Map<string, HTMLElement>() : this.nodes;
+
+    for (const block of slice) {
       let node = this.nodes.get(block.key);
 
       if (!node) {
@@ -169,9 +209,23 @@ export class PreviewRenderer {
 
   destroy(): void {
     this.destroyed = true;
+    this.cancelIdle();
+    this.unwatchDiagrams();
     this.worker.terminate();
     this.nodes.clear();
     this.statsListener = null;
     this.headingsListener = null;
   }
+}
+
+function requestIdleOrFrame(callback: () => void): number {
+  if (typeof requestIdleCallback === 'function') {
+    return requestIdleCallback(() => callback(), { timeout: 80 });
+  }
+  return requestAnimationFrame(() => callback());
+}
+
+function cancelIdleOrFrame(handle: number): void {
+  if (typeof cancelIdleCallback === 'function') cancelIdleCallback(handle);
+  else cancelAnimationFrame(handle);
 }

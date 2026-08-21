@@ -1,7 +1,10 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { registerServiceWorker } from './browser';
 import { App } from './App';
 import './styles/index.css';
+
+registerServiceWorker();
 
 const container = document.getElementById('root');
 if (!container) throw new Error('missing #root');

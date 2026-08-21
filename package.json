@@ -19,6 +19,7 @@
     "start": "npm run start --workspace=server",
     "typecheck": "npm run typecheck --workspace=client && npm run typecheck --workspace=server",
     "clean": "rm -rf client/dist server/dist node_modules/.vite",
+    "test:browser": "node --experimental-strip-types --test client/src/browser/*.test.ts",
     "smoke": "node scripts/smoke.mjs",
     "measure": "node scripts/measure.mjs"
   },

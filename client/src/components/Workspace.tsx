@@ -16,6 +16,10 @@ interface WorkspaceProps {
   onHeadings: (headings: Heading[]) => void;
   onCursor: (cursor: CursorInfo) => void;
   onView: (view: EditorView | null) => void;
+  onPreview?: (element: HTMLElement | null) => void;
+  onComment?: () => void;
+  onVoice?: () => void;
+  voiceActive?: boolean;
 }
 
 const SPLIT_KEY = 'marks:split';
@@ -35,6 +39,10 @@ function WorkspaceView({
   onHeadings,
   onCursor,
   onView,
+  onPreview,
+  onComment,
+  onVoice,
+  voiceActive,
 }: WorkspaceProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [split, setSplit] = useState(loadSplit);
@@ -49,8 +57,11 @@ function WorkspaceView({
   );
 
   const handleContainer = useCallback(
-    (element: HTMLElement | null) => scrollSync.setPreview(element),
-    [scrollSync],
+    (element: HTMLElement | null) => {
+      scrollSync.setPreview(element);
+      onPreview?.(element);
+    },
+    [scrollSync, onPreview],
   );
 
   // Only sync scrolling when both panes are actually on screen.
@@ -99,6 +110,9 @@ function WorkspaceView({
           onView={handleView}
           onScroll={() => scrollSync.fromEditor()}
           onCursor={onCursor}
+          onComment={onComment}
+          onVoice={onVoice}
+          voiceActive={voiceActive}
         />
       )}
 

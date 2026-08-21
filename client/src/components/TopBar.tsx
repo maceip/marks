@@ -17,11 +17,14 @@ interface TopBarProps {
   sidebarOpen: boolean;
   hudOpen: boolean;
   outlineOpen: boolean;
+  commentsOpen?: boolean;
+  commentCount?: number;
   onModeChange: (mode: ViewMode) => void;
   onToggleSidebar: () => void;
   onToggleTheme: () => void;
   onToggleHud: () => void;
   onToggleOutline: () => void;
+  onToggleComments?: () => void;
 }
 
 const STATUS_LABEL: Record<ConnectionStatus, string> = {
@@ -111,6 +114,22 @@ export function TopBar(props: TopBarProps) {
         >
           <Icon path={icons.outline} />
         </button>
+
+        {props.onToggleComments && (
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Comments"
+            aria-pressed={Boolean(props.commentsOpen)}
+            title="Comments"
+            onClick={props.onToggleComments}
+          >
+            <Icon path={icons.comment} />
+            {(props.commentCount ?? 0) > 0 && (
+              <span className="icon-badge">{props.commentCount}</span>
+            )}
+          </button>
+        )}
 
         <button
           type="button"

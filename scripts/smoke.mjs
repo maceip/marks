@@ -230,6 +230,35 @@ try {
   const previewScroll = await a.page.evaluate(() => document.querySelector('.preview-pane').scrollTop);
   check('editor scrolling moves the preview', previewScroll > 0, `previewScrollTop=${previewScroll}`);
 
+  /* ---------------------------------------------------- browser surface - */
+  console.log('\nbrowser surface');
+  await a.page.click('.preview-pane');
+  await a.page.keyboard.press('Control+A');
+  const previewSelection = await a.page.evaluate(() => document.getSelection()?.toString() ?? '');
+  check(
+    'select-all in the preview stays inside the document',
+    previewSelection.includes('Smoke test document') && !previewSelection.includes('Benchmark engines'),
+    previewSelection ? `chars=${previewSelection.length}` : 'empty selection',
+  );
+
+  await a.page.locator('.marks-preview').click({ button: 'right', position: { x: 24, y: 24 } });
+  await settle(a.page, 200);
+  check('preview right-click opens the marks menu', (await a.page.locator('.context-menu').count()) === 1);
+  await a.page.keyboard.press('Escape');
+
+  await a.page.click('.cm-content');
+  await a.page.keyboard.press('Control+A');
+  await a.page.click('button[aria-label="Comment"]');
+  await settle(a.page, 200);
+  check('comment composer opens on a selection', (await a.page.locator('.comment-composer textarea').count()) === 1);
+  await a.page.fill('.comment-composer textarea', 'A review note');
+  await a.page.click('.comment-composer button.primary');
+  await settle(a.page, 500);
+  check('a comment is stored on the document', (await a.page.locator('.comment-card').count()) >= 1);
+
+  check('voice input is offered', (await a.page.locator('button[aria-label="Voice input"]').count()) === 1);
+  check('opening shell does not stay up', (await a.page.locator('.opening-shell').count()) === 0);
+
   await a.page.click('button[title="Preview"]');
   await settle(a.page, 400);
   check('preview-only mode hides the editor', !(await a.page.locator('.editor-pane').isVisible()));

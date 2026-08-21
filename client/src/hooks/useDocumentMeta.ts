@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { readDocumentMeta, writeDocumentMeta } from '../browser/catalog-cache';
 import type { EngineName } from '../collab/types';
 import { getDocument, type DocumentMeta } from '../lib/api';
 
@@ -29,12 +30,23 @@ export function useDocumentMeta(docId: string | null): DocumentMetaState {
     let active = true;
     setResolved(false);
 
+    void readDocumentMeta(docId).then((cached) => {
+      if (!active || !cached) return;
+      setMeta(cached);
+      setResolved(true);
+    });
+
     getDocument(docId)
       .then(({ document }) => {
-        if (active) setMeta(document);
+        if (!active) return;
+        setMeta(document);
+        void writeDocumentMeta(document);
       })
       .catch(() => {
-        if (active) setMeta(null);
+        // Keep a cached engine so an offline Yjs document is not opened as Loro.
+        if (active) {
+          /* meta already set from cache, or stays null for a true unknown id */
+        }
       })
       .finally(() => {
         if (active) setResolved(true);

@@ -15,7 +15,8 @@ import {
   rectangularSelection,
 } from '@codemirror/view';
 import type { CollabSession } from '../collab/types';
-import { markdownKeymap, pasteLinkHandler } from './commands';
+import { handleEditorCopy, handleEditorCut, handleEditorPaste, markdownKeymap } from './commands';
+import { commentHighlights } from './comment-highlights';
 import { editorTheme, markdownHighlighting } from './theme';
 
 /**
@@ -75,8 +76,23 @@ export function createEditorExtensions({
     search({ top: true }),
     autocompletion({ activateOnTyping: true, icons: false }),
     placeholder('Start writing…'),
+    commentHighlights,
+    EditorView.contentAttributes.of({
+      spellcheck: 'true',
+      autocorrect: 'on',
+      autocapitalize: 'sentences',
+      translate: 'no',
+    }),
     EditorView.domEventHandlers({
-      paste: (event, view) => pasteLinkHandler(event, view),
+      paste: (event, view) => handleEditorPaste(event, view),
+      copy: (event, view) => handleEditorCopy(event, view),
+      cut: (event, view) => handleEditorCut(event, view),
+      contextmenu: (event) => {
+        // Policy lives in the React layer so mobile callouts stay native.
+        // Returning false never steals the event from the browser.
+        void event;
+        return false;
+      },
       scroll: (_event, view) => {
         onScroll?.(view);
         return false;

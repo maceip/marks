@@ -1,5 +1,6 @@
 import { EditorSelection, type ChangeSpec, type StateCommand } from '@codemirror/state';
 import type { EditorView, KeyBinding } from '@codemirror/view';
+import { isPlainUrl, markdownFromClipboard, writeClipboardEvent } from '../browser';
 
 /** Wrap or unwrap each selection range with a marker, e.g. `**bold**`. */
 export function toggleWrap(marker: string, placeholder = ''): StateCommand {
@@ -188,7 +189,7 @@ export const continueList: StateCommand = ({ state, dispatch }) => {
 /** Pasting a URL over a selection turns it into a link instead of replacing it. */
 export function pasteLinkHandler(event: ClipboardEvent, view: EditorView): boolean {
   const pasted = event.clipboardData?.getData('text/plain')?.trim();
-  if (!pasted || !/^https?:\/\/\S+$/i.test(pasted) || pasted.includes('\n')) return false;
+  if (!pasted || !isPlainUrl(pasted)) return false;
 
   const range = view.state.selection.main;
   if (range.empty) return false;
@@ -199,6 +200,61 @@ export function pasteLinkHandler(event: ClipboardEvent, view: EditorView): boole
     userEvent: 'input.paste',
   });
   return true;
+}
+
+/**
+ * Paste: URL-over-selection, then rich HTML → markdown, then native.
+ *
+ * Returning true consumes the event. Returning false lets CodeMirror insert
+ * the plain text the way a contenteditable would.
+ */
+export function handleEditorPaste(event: ClipboardEvent, view: EditorView): boolean {
+  if (!event.clipboardData) return false;
+  if (pasteLinkHandler(event, view)) {
+    event.preventDefault();
+    return true;
+  }
+
+  const converted = markdownFromClipboard(event.clipboardData);
+  const plain = event.clipboardData.getData('text/plain');
+  if (!converted || converted === plain) return false;
+
+  const range = view.state.selection.main;
+  view.dispatch({
+    changes: { from: range.from, to: range.to, insert: converted },
+    userEvent: 'input.paste',
+  });
+  event.preventDefault();
+  return true;
+}
+
+export function handleEditorCopy(event: ClipboardEvent, view: EditorView): boolean {
+  const range = view.state.selection.main;
+  if (range.empty) return false;
+  const text = view.state.sliceDoc(range.from, range.to);
+  return writeClipboardEvent(event, { text, markdown: text });
+}
+
+export function handleEditorCut(event: ClipboardEvent, view: EditorView): boolean {
+  const range = view.state.selection.main;
+  if (range.empty) return false;
+  const text = view.state.sliceDoc(range.from, range.to);
+  if (!writeClipboardEvent(event, { text, markdown: text })) return false;
+  view.dispatch({
+    changes: { from: range.from, to: range.to, insert: '' },
+    userEvent: 'delete.cut',
+  });
+  return true;
+}
+
+export function insertAtSelection(view: EditorView, text: string, userEvent = 'input'): void {
+  const range = view.state.selection.main;
+  view.dispatch({
+    changes: { from: range.from, to: range.to, insert: text },
+    selection: { anchor: range.from + text.length },
+    scrollIntoView: true,
+    userEvent,
+  });
 }
 
 export const markdownKeymap: KeyBinding[] = [

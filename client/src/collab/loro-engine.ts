@@ -2,7 +2,26 @@ import { Annotation, Prec, type Extension } from '@codemirror/state';
 import { ViewPlugin, keymap, type EditorView } from '@codemirror/view';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 import { LoroEphemeralPlugin } from 'loro-codemirror';
-import { EphemeralStore, LoroDoc, UndoManager, VersionVector } from 'loro-crdt';
+import { Cursor, EphemeralStore, LoroDoc, UndoManager, VersionVector } from 'loro-crdt';
+import {
+  COMMENT_ORIGIN,
+  COMMENTS_MAP,
+  createCommentId,
+  decodeBytes,
+  encodeBytes,
+  parseComment,
+  persistLockName,
+  readCommentMap,
+  readNetworkQuality,
+  resolveCommentRange,
+  serializeComment,
+  snapshotFetchTimeoutMs,
+  TabChannel,
+  tabChannelName,
+  withPersistLock,
+  fetchWithTimeout,
+  type CommentRecord,
+} from '../browser';
 import { MSG_EPHEMERAL, MSG_SERVER_VV, MSG_SNAPSHOT, MSG_SYNCED, MSG_UPDATE, frame, toBase64Url } from './protocol';
 import { TEXT_KEY, type CollabSession, type ConnectionStatus, type EngineStats, type Peer, type SessionOptions } from './types';
 
@@ -64,11 +83,24 @@ export class LoroEngine implements CollabSession {
   private readonly textListeners = new Set<(text: string) => void>();
   private readonly statusListeners = new Set<(status: ConnectionStatus) => void>();
   private readonly peerListeners = new Set<(peers: Peer[]) => void>();
+  private readonly commentListeners = new Set<(comments: CommentRecord[]) => void>();
+  private readonly hydratedListeners = new Set<() => void>();
+  private cachedComments: CommentRecord[] = [];
+  private isHydrated = false;
+  private lastServerVV: Uint8Array | null = null;
+  private snapshotReplyTimer: number | null = null;
+  private readonly tabs: TabChannel;
 
   constructor({ docId, user }: SessionOptions) {
     this.docId = docId;
     this.user = user;
-    this.undoManager = new UndoManager(this.doc, {});
+    this.undoManager = new UndoManager(this.doc, { excludeOriginPrefixes: [COMMENT_ORIGIN] });
+    this.tabs = new TabChannel(tabChannelName('loro', docId), {
+      onHello: () => this.scheduleTabSnapshot(),
+      onRequestSnapshot: () => this.scheduleTabSnapshot(),
+      onUpdate: (bytes) => this.importFromTab(bytes, 'update'),
+      onSnapshot: (bytes) => this.importFromTab(bytes, 'snapshot'),
+    });
 
     this.extension = [
       // The binding's cursor and selection layers, which are the parts of
@@ -87,15 +119,21 @@ export class LoroEngine implements CollabSession {
     this.unsubscribers.push(
       this.doc.subscribe(() => {
         this.emitText();
+        this.emitComments();
         this.scheduleLocalSave();
       }),
-      this.doc.subscribeLocalUpdates((bytes) => this.send(MSG_UPDATE, bytes)),
+      this.doc.subscribeLocalUpdates((bytes) => {
+        this.send(MSG_UPDATE, bytes);
+        this.tabs.sendUpdate(bytes);
+      }),
       this.ephemeral.subscribe(() => this.refreshPeers()),
       this.ephemeral.subscribeLocalUpdates((bytes) => this.send(MSG_EPHEMERAL, bytes)),
     );
 
     window.addEventListener('online', this.handleOnline);
     window.addEventListener('offline', this.handleOffline);
+    document.addEventListener('visibilitychange', this.handleVisibility);
+    window.addEventListener('pagehide', this.handlePageHide);
 
     void this.start();
   }
@@ -259,13 +297,79 @@ export class LoroEngine implements CollabSession {
     return () => this.peerListeners.delete(listener);
   }
 
+  comments(): CommentRecord[] {
+    return this.cachedComments;
+  }
+
+  addComment(input: { from: number; to: number; quote: string; body: string }): string {
+    const id = createCommentId();
+    const text = this.doc.getText(TEXT_KEY);
+    let startCursor: string | undefined;
+    let endCursor: string | undefined;
+    try {
+      const start = text.getCursor(input.from);
+      const end = text.getCursor(input.to);
+      if (start) startCursor = encodeBytes(start.encode());
+      if (end) endCursor = encodeBytes(end.encode());
+    } catch {
+      // Cursors are an optimisation; quote+offset still work.
+    }
+
+    const record: CommentRecord = {
+      id,
+      body: input.body,
+      author: this.user.name,
+      colorIndex: this.user.colorIndex,
+      createdAt: Date.now(),
+      resolved: false,
+      from: input.from,
+      to: input.to,
+      quote: input.quote,
+      startCursor,
+      endCursor,
+    };
+    this.doc.getMap(COMMENTS_MAP).set(id, serializeComment(record));
+    this.doc.commit({ origin: COMMENT_ORIGIN });
+    return id;
+  }
+
+  resolveComment(id: string): void {
+    const existing = this.commentById(id);
+    if (!existing || existing.resolved) return;
+    this.doc.getMap(COMMENTS_MAP).set(id, serializeComment({ ...existing, resolved: true }));
+    this.doc.commit({ origin: COMMENT_ORIGIN });
+  }
+
+  deleteComment(id: string): void {
+    this.doc.getMap(COMMENTS_MAP).delete(id);
+    this.doc.commit({ origin: COMMENT_ORIGIN });
+  }
+
+  onCommentsChange(listener: (comments: CommentRecord[]) => void): () => void {
+    this.commentListeners.add(listener);
+    return () => this.commentListeners.delete(listener);
+  }
+
+  hydrated(): boolean {
+    return this.isHydrated;
+  }
+
+  onHydrated(listener: () => void): () => void {
+    this.hydratedListeners.add(listener);
+    if (this.isHydrated) queueMicrotask(listener);
+    return () => this.hydratedListeners.delete(listener);
+  }
+
   /* ------------------------------------------------------------- lifecycle */
 
   private async start(): Promise<void> {
     // Local cache first: it is the fastest path to visible content.
     await this.loadLocalSnapshot();
+    this.markHydrated();
+    this.tabs.hello();
     // Then the server's snapshot over plain HTTP, which is cacheable and
-    // arrives without waiting for a WebSocket handshake.
+    // arrives without waiting for a WebSocket handshake. A local copy plus a
+    // slow network means we do not block the editor on that request.
     await this.loadServerSnapshot();
     if (this.destroyed) return;
 
@@ -287,18 +391,27 @@ export class LoroEngine implements CollabSession {
   }
 
   private async loadServerSnapshot(): Promise<void> {
+    const quality = readNetworkQuality();
+    const hasLocal = this.getText().length > 0 || this.counters.snapshotBytes > 0;
+    const timeoutMs = snapshotFetchTimeoutMs(quality, hasLocal);
+    if (timeoutMs <= 0) return;
+
     try {
-      const response = await fetch(`/api/documents/${this.docId}/snapshot?shallow=1`, {
-        headers: { Accept: 'application/octet-stream' },
-      });
+      const response = await fetchWithTimeout(
+        `/api/documents/${this.docId}/snapshot?shallow=1`,
+        { headers: { Accept: 'application/octet-stream' } },
+        timeoutMs,
+      );
       if (!response.ok || response.status === 204 || this.destroyed) return;
       const bytes = new Uint8Array(await response.arrayBuffer());
       if (bytes.byteLength === 0) return;
       this.counters.received += bytes.byteLength;
       this.doc.import(bytes);
       this.emitText();
+      this.emitComments();
     } catch {
-      // Offline: the local cache and the WebSocket retry loop cover us.
+      // Offline, aborted, or slow: the local cache and the WebSocket retry
+      // loop cover us. Do not surface a failed snapshot as a document error.
     }
   }
 
@@ -374,6 +487,53 @@ export class LoroEngine implements CollabSession {
     this.setStatus('offline');
   };
 
+  private handleVisibility = (): void => {
+    if (document.visibilityState === 'hidden') {
+      this.flushLocalSave();
+      return;
+    }
+    this.tabs.requestSnapshot();
+  };
+
+  private handlePageHide = (): void => {
+    this.flushLocalSave();
+  };
+
+  private importFromTab(bytes: Uint8Array, kind: 'update' | 'snapshot'): void {
+    if (this.destroyed || bytes.byteLength === 0) return;
+    try {
+      this.doc.import(bytes);
+    } catch (error) {
+      console.error('[marks] rejected tab update', error);
+      return;
+    }
+    // Another tab typed this. If we are the one still on the socket, the
+    // server will not see it unless we forward. Import is idempotent.
+    if (kind === 'update') this.send(MSG_UPDATE, bytes);
+    else if (this.lastServerVV) this.sendMissingSince(this.lastServerVV);
+  }
+
+  private scheduleTabSnapshot(): void {
+    if (this.snapshotReplyTimer !== null || this.destroyed) return;
+    this.snapshotReplyTimer = window.setTimeout(() => {
+      this.snapshotReplyTimer = null;
+      if (this.destroyed) return;
+      try {
+        this.tabs.sendSnapshot(this.doc.export({ mode: 'snapshot' }));
+      } catch {
+        // An empty replica has nothing to share.
+      }
+    }, 32);
+  }
+
+  private flushLocalSave(): void {
+    if (this.saveTimer !== null) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    void this.saveLocalSnapshot();
+  }
+
   /* -------------------------------------------------------------- messages */
 
   private onMessage(raw: ArrayBuffer): void {
@@ -401,6 +561,7 @@ export class LoroEngine implements CollabSession {
         }
         break;
       case MSG_SERVER_VV:
+        this.lastServerVV = payload;
         this.sendMissingSince(payload);
         break;
       case MSG_SYNCED:
@@ -448,11 +609,19 @@ export class LoroEngine implements CollabSession {
   }
 
   private async saveLocalSnapshot(): Promise<void> {
-    if (this.destroyed) return;
+    // Export first, synchronously, so a destroy() that flips `destroyed`
+    // while we wait for the persist lock still writes the bytes we hold.
+    let snapshot: Uint8Array;
     try {
-      const snapshot = this.doc.export({ mode: 'snapshot' });
+      snapshot = this.doc.export({ mode: 'snapshot' });
       this.counters.snapshotBytes = snapshot.byteLength;
-      await idbSet(this.cacheKey, snapshot);
+    } catch {
+      return;
+    }
+    try {
+      await withPersistLock(persistLockName('loro', this.docId), async () => {
+        await idbSet(this.cacheKey, snapshot);
+      });
     } catch {
       // Storage pressure or private mode: the server copy is authoritative.
     }
@@ -508,20 +677,70 @@ export class LoroEngine implements CollabSession {
     // Flush before the destroyed flag goes up: `saveLocalSnapshot` bails on it,
     // so edits still sitting inside the save debounce — everything typed in the
     // last 800 ms, which offline is the only copy of — would be lost.
-    if (this.saveTimer !== null) clearTimeout(this.saveTimer);
-    this.saveTimer = null;
-    void this.saveLocalSnapshot();
+    this.flushLocalSave();
 
     this.destroyed = true;
     window.removeEventListener('online', this.handleOnline);
     window.removeEventListener('offline', this.handleOffline);
+    document.removeEventListener('visibilitychange', this.handleVisibility);
+    window.removeEventListener('pagehide', this.handlePageHide);
     if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
+    if (this.snapshotReplyTimer !== null) clearTimeout(this.snapshotReplyTimer);
     for (const unsubscribe of this.unsubscribers) unsubscribe();
+    this.tabs.destroy();
     this.socket?.close();
     this.socket = null;
     this.ephemeral.destroy();
     this.textListeners.clear();
     this.statusListeners.clear();
     this.peerListeners.clear();
+    this.commentListeners.clear();
+    this.hydratedListeners.clear();
+  }
+
+  private markHydrated(): void {
+    if (this.isHydrated) return;
+    this.isHydrated = true;
+    this.emitComments();
+    for (const listener of this.hydratedListeners) listener();
+  }
+
+  private emitComments(): void {
+    this.cachedComments = this.readComments();
+    for (const listener of this.commentListeners) listener(this.cachedComments);
+  }
+
+  private commentById(id: string): CommentRecord | null {
+    const json = this.doc.getMap(COMMENTS_MAP).toJSON() as Record<string, unknown>;
+    return parseComment(json[id]);
+  }
+
+  private readComments(): CommentRecord[] {
+    const map = this.doc.getMap(COMMENTS_MAP);
+    const raw = readCommentMap(map.entries());
+    const text = this.getText();
+    return raw.map((comment) => {
+      const fromCursors = this.rangeFromCursors(comment);
+      const resolved = fromCursors ?? resolveCommentRange(comment, text);
+      return resolved ? { ...comment, from: resolved.from, to: resolved.to } : comment;
+    });
+  }
+
+  private rangeFromCursors(comment: CommentRecord): { from: number; to: number } | null {
+    if (!comment.startCursor || !comment.endCursor) return null;
+    try {
+      const startBytes = decodeBytes(comment.startCursor);
+      const endBytes = decodeBytes(comment.endCursor);
+      if (!startBytes || !endBytes) return null;
+      const start = this.doc.getCursorPos(Cursor.decode(startBytes));
+      const end = this.doc.getCursorPos(Cursor.decode(endBytes));
+      if (!start || !end) return null;
+      return {
+        from: Math.min(start.offset, end.offset),
+        to: Math.max(start.offset, end.offset),
+      };
+    } catch {
+      return null;
+    }
   }
 }

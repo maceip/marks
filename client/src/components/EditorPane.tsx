@@ -2,6 +2,7 @@ import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { useLayoutEffect, useRef } from 'react';
 import type { CollabSession } from '../collab/types';
+import { setCommentHighlights } from '../editor/comment-highlights';
 import { createEditorExtensions } from '../editor/setup';
 import { Toolbar } from './Toolbar';
 
@@ -17,9 +18,21 @@ interface EditorPaneProps {
   onView: (view: EditorView | null) => void;
   onScroll: () => void;
   onCursor: (info: CursorInfo) => void;
+  onComment?: () => void;
+  onVoice?: () => void;
+  voiceActive?: boolean;
 }
 
-export function EditorPane({ session, showToolbar, onView, onScroll, onCursor }: EditorPaneProps) {
+export function EditorPane({
+  session,
+  showToolbar,
+  onView,
+  onScroll,
+  onCursor,
+  onComment,
+  onVoice,
+  voiceActive,
+}: EditorPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
 
@@ -61,9 +74,14 @@ export function EditorPane({ session, showToolbar, onView, onScroll, onCursor }:
 
     viewRef.current = view;
     handlers.current.onView(view);
+    view.dispatch({ effects: setCommentHighlights.of(session.comments()) });
+    const offComments = session.onCommentsChange((comments) => {
+      view.dispatch({ effects: setCommentHighlights.of(comments) });
+    });
     view.focus();
 
     return () => {
+      offComments();
       handlers.current.onView(null);
       viewRef.current = null;
       view.destroy();
@@ -72,7 +90,14 @@ export function EditorPane({ session, showToolbar, onView, onScroll, onCursor }:
 
   return (
     <section className="pane editor-pane" aria-label="Markdown source">
-      {showToolbar && <Toolbar getView={() => viewRef.current} />}
+      {showToolbar && (
+        <Toolbar
+          getView={() => viewRef.current}
+          onComment={onComment}
+          onVoice={onVoice}
+          voiceActive={voiceActive}
+        />
+      )}
       <div className="editor-host" ref={hostRef} />
     </section>
   );

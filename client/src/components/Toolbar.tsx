@@ -21,6 +21,9 @@ import { Icon, icons } from './Icon';
 
 interface ToolbarProps {
   getView: () => EditorView | null;
+  onComment?: () => void;
+  onVoice?: () => void;
+  voiceActive?: boolean;
 }
 
 interface Action {
@@ -63,7 +66,7 @@ function shortcutLabel(shortcut?: string): string {
   return ` (${shortcut.replace('Mod', isMac ? '⌘' : 'Ctrl')})`;
 }
 
-export function Toolbar({ getView }: ToolbarProps) {
+export function Toolbar({ getView, onComment, onVoice, voiceActive }: ToolbarProps) {
   const run = (command: StateCommand) => {
     const view = getView();
     if (!view) return;
@@ -90,6 +93,35 @@ export function Toolbar({ getView }: ToolbarProps) {
           ))}
         </div>
       ))}
+      {(onComment || onVoice) && (
+        <div className="toolbar-group">
+          {onComment && (
+            <button
+              type="button"
+              className="toolbar-button"
+              title="Comment (Ctrl+Alt+M)"
+              aria-label="Comment"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={onComment}
+            >
+              <Icon path={icons.comment} />
+            </button>
+          )}
+          {onVoice && (
+            <button
+              type="button"
+              className={`toolbar-button${voiceActive ? ' active' : ''}`}
+              title="Voice input (Ctrl+Shift+S)"
+              aria-label="Voice input"
+              aria-pressed={voiceActive}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={onVoice}
+            >
+              <Icon path={icons.mic} />
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

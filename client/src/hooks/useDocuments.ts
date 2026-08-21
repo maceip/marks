@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { forgetDocumentMeta, readCatalog, writeCatalog } from '../browser/catalog-cache';
 import type { EngineName } from '../collab/types';
 import * as api from '../lib/api';
 
@@ -8,6 +9,7 @@ export interface DocumentsState {
   documents: api.DocumentMeta[];
   loading: boolean;
   error: string | null;
+  stale: boolean;
   refresh: () => Promise<void>;
   create: (engine: EngineName) => Promise<api.DocumentMeta>;
   remove: (id: string) => Promise<void>;
@@ -23,6 +25,7 @@ export function useDocuments(): DocumentsState {
   const [documents, setDocuments] = useState<api.DocumentMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [stale, setStale] = useState(false);
   const mounted = useRef(true);
 
   const refresh = useCallback(async () => {
@@ -31,6 +34,8 @@ export function useDocuments(): DocumentsState {
       if (!mounted.current) return;
       setDocuments(next);
       setError(null);
+      setStale(false);
+      void writeCatalog(next);
     } catch (cause) {
       if (mounted.current) setError(cause instanceof Error ? cause.message : 'Request failed');
     } finally {
@@ -40,6 +45,12 @@ export function useDocuments(): DocumentsState {
 
   useEffect(() => {
     mounted.current = true;
+    void readCatalog().then((cached) => {
+      if (!mounted.current || !cached || cached.length === 0) return;
+      setDocuments(cached);
+      setStale(true);
+      setLoading(false);
+    });
     void refresh();
 
     const interval = window.setInterval(() => {
@@ -69,10 +80,11 @@ export function useDocuments(): DocumentsState {
   const remove = useCallback(
     async (id: string) => {
       await api.deleteDocument(id);
+      void forgetDocumentMeta(id);
       await refresh();
     },
     [refresh],
   );
 
-  return { documents, loading, error, refresh, create, remove };
+  return { documents, loading, error, stale, refresh, create, remove };
 }

@@ -1,3 +1,4 @@
+import type { NetworkQuality } from '../browser';
 import type { ConnectionStatus } from '../collab/types';
 import { formatCount, formatMs, readingTime } from '../lib/format';
 import type { CursorInfo } from './EditorPane';
@@ -10,6 +11,7 @@ interface StatusBarProps {
   latencyP50: number;
   latencyP95: number;
   peers: number;
+  network?: NetworkQuality;
 }
 
 export function StatusBar({
@@ -20,6 +22,7 @@ export function StatusBar({
   latencyP50,
   latencyP95,
   peers,
+  network = 'online',
 }: StatusBarProps) {
   return (
     <footer className="statusbar">
@@ -41,6 +44,7 @@ export function StatusBar({
           preview p50 {formatMs(latencyP50)} · p95 {formatMs(latencyP95)}
         </span>
         <span>{peers === 1 ? 'only you' : `${peers} people`}</span>
+        {network === 'slow' && <span title="The network is constrained; edits stay local until it catches up">slow network</span>}
         <span className={`status status-${status}`}>
           <span className="status-dot" />
           {status}

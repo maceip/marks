@@ -9,6 +9,7 @@ interface SidebarProps {
   documents: DocumentMeta[];
   activeId: string | null;
   loading: boolean;
+  stale?: boolean;
   onOpen: (id: string) => void;
   onCreate: (engine: EngineName) => void;
   onDelete: (id: string) => void;
@@ -19,6 +20,7 @@ export function Sidebar({
   documents,
   activeId,
   loading,
+  stale,
   onOpen,
   onCreate,
   onDelete,
@@ -87,6 +89,7 @@ export function Sidebar({
 
       <div className="doc-list">
         {loading && documents.length === 0 && <p className="hint">Loading…</p>}
+        {stale && documents.length > 0 && <p className="hint">Showing last known documents.</p>}
         {!loading && filtered.length === 0 && <p className="hint">No documents yet.</p>}
 
         {filtered.map((doc) => (

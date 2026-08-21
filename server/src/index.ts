@@ -32,6 +32,7 @@ if (hasClientBuild) {
   // SPA fallback: any non-API path renders the client shell.
   app.use((req, res, next) => {
     if (req.method !== 'GET' || req.path.startsWith('/api')) return next();
+    res.setHeader('Cache-Control', 'no-cache');
     res.sendFile(path.join(CLIENT_DIST, 'index.html'));
   });
 }
