@@ -10,6 +10,9 @@ const EPHEMERAL_TIMEOUT_MS = 30_000;
 const LOCAL_SAVE_DEBOUNCE_MS = 800;
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 8_000;
+/** The server's close code for a document that no longer exists. */
+const CLOSE_DOCUMENT_DELETED = 4404;
+
 /** Version vectors above this size are not worth putting in a URL. */
 const MAX_VV_QUERY_BYTES = 4_096;
 
@@ -327,16 +330,23 @@ export class LoroEngine implements CollabSession {
       // Push anything the server is missing (edits made while offline).
       this.send(MSG_EPHEMERAL, this.ephemeral.encodeAll());
     });
-    socket.addEventListener('close', () => this.onDisconnect(socket));
+    socket.addEventListener('close', (event) => this.onDisconnect(socket, event.code));
     socket.addEventListener('error', () => this.onDisconnect(socket));
   }
 
-  private onDisconnect(socket: WebSocket): void {
+  private onDisconnect(socket: WebSocket, code?: number): void {
     if (this.socket !== socket) return;
     this.socket = null;
     if (this.destroyed) return;
 
     this.setStatus('offline');
+
+    // The document was deleted. Retrying would recreate it from this replica.
+    if (code === CLOSE_DOCUMENT_DELETED) {
+      this.destroyed = true;
+      return;
+    }
+
     this.scheduleReconnect();
   }
 
@@ -495,12 +505,17 @@ export class LoroEngine implements CollabSession {
   }
 
   destroy(): void {
+    // Flush before the destroyed flag goes up: `saveLocalSnapshot` bails on it,
+    // so edits still sitting inside the save debounce — everything typed in the
+    // last 800 ms, which offline is the only copy of — would be lost.
+    if (this.saveTimer !== null) clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    void this.saveLocalSnapshot();
+
     this.destroyed = true;
     window.removeEventListener('online', this.handleOnline);
     window.removeEventListener('offline', this.handleOffline);
     if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
-    if (this.saveTimer !== null) clearTimeout(this.saveTimer);
-    void this.saveLocalSnapshot();
     for (const unsubscribe of this.unsubscribers) unsubscribe();
     this.socket?.close();
     this.socket = null;

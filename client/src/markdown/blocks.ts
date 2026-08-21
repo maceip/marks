@@ -1,4 +1,4 @@
-import type { MarkdownIt, Token } from 'markdown-it';
+import type { Token } from 'markdown-it';
 
 /**
  * cyrb53 — a fast, well-distributed 53-bit string hash.
@@ -75,9 +75,39 @@ export function envSignature(env: Record<string, unknown>): string {
   return `${hashString(references)}:${footnotes?.list?.length ?? 0}:${hashString(abbreviations)}`;
 }
 
+/**
+ * Plain text of an inline token, for use as a label.
+ *
+ * Reading `token.content` would return the markdown source, markers and all;
+ * the parsed children carry the text itself. Nothing is escaped here — this is
+ * rendered by React, which does the escaping.
+ */
+function inlineText(inline: Token): string {
+  if (!inline.children?.length) return (inline.content ?? '').trim();
+
+  let text = '';
+  for (const child of inline.children) {
+    switch (child.type) {
+      case 'text':
+      case 'code_inline':
+      case 'emoji':
+      case 'image': // `content` holds the alt text
+        text += child.content;
+        break;
+      case 'softbreak':
+      case 'hardbreak':
+        text += ' ';
+        break;
+      default:
+        break; // opening and closing markup tokens carry no text
+    }
+  }
+
+  return text.trim();
+}
+
 export function collectHeadings(
   tokens: Token[],
-  md: MarkdownIt,
 ): Array<{ level: number; text: string; slug: string; line: number }> {
   const headings: Array<{ level: number; text: string; slug: string; line: number }> = [];
 
@@ -87,10 +117,9 @@ export function collectHeadings(
     const inline = tokens[i + 1];
     if (!inline || inline.type !== 'inline') continue;
 
-    const text = (inline.content ?? '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').trim();
     headings.push({
       level: Number(token.tag.slice(1)) || 1,
-      text: md.utils.escapeHtml(text),
+      text: inlineText(inline),
       slug: String(token.attrGet('id') ?? ''),
       line: token.map ? token.map[0] : 0,
     });

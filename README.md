@@ -179,11 +179,13 @@ npm run smoke        # drives two browsers against a running server
 npm run measure      # latency on a large generated document
 ```
 
-`npm run smoke` checks 32 behaviours end to end: rendering (math, diagrams,
-tables, highlighting), incremental repainting, convergence between two peers,
-presence, per-user undo, preview-to-source edits, offline editing and resync,
-both engines, and the server's REST surface. It needs a build and a running
-server:
+`npm run smoke` checks 37 behaviours end to end: rendering (math, diagrams,
+tables, highlighting), incremental repainting, scroll sync, the outline,
+convergence between two peers, presence, per-user undo, preview-to-source
+edits, offline editing and resync, both engines, and the server's REST surface
+— including that a deleted document stays deleted while someone still has it
+open, and that connecting the wrong CRDT protocol to a document is refused. It
+needs a build and a running server:
 
 ```bash
 npm run build && npm start &

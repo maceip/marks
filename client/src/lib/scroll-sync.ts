@@ -102,23 +102,34 @@ export class ScrollSync {
     return startLine + (endLine - startLine) * Math.min(Math.max(fraction, 0), 1);
   }
 
+  /**
+   * Index every rendered block by source line.
+   *
+   * The blocks are descendants of the scroll container, not its children — the
+   * pane holds a single content element — so they are queried rather than
+   * walked. Offsets are measured against the container's own scroll origin,
+   * which keeps them correct regardless of what sits between the two.
+   */
   private buildIndex(preview: HTMLElement): BlockOffset[] {
-    if (
-      preview.childElementCount === this.indexedChildren &&
-      preview.scrollHeight === this.indexedHeight
-    ) {
+    const blocks = preview.querySelectorAll<HTMLElement>('.marks-block[data-line]');
+    if (blocks.length === this.indexedChildren && preview.scrollHeight === this.indexedHeight) {
       return this.index;
     }
 
+    // One batched read pass: every rect is measured before anything is written.
+    const origin = preview.getBoundingClientRect().top - preview.scrollTop;
     const offsets: BlockOffset[] = [];
-    for (const child of Array.from(preview.children) as HTMLElement[]) {
-      const line = Number(child.dataset.line ?? NaN);
+
+    for (const block of blocks) {
+      const line = Number(block.dataset.line ?? NaN);
       if (Number.isNaN(line)) continue;
-      offsets.push({ line, top: child.offsetTop, bottom: child.offsetTop + child.offsetHeight });
+      const rect = block.getBoundingClientRect();
+      const top = rect.top - origin;
+      offsets.push({ line, top, bottom: top + rect.height });
     }
 
     this.index = offsets;
-    this.indexedChildren = preview.childElementCount;
+    this.indexedChildren = blocks.length;
     this.indexedHeight = preview.scrollHeight;
     return offsets;
   }

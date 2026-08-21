@@ -65,7 +65,10 @@ function render(seq: number, text: string): RenderResponse {
     nextCache.set(key, html);
 
     const patch: BlockPatch = { key, line: Math.max(group.line, 0) };
-    if (!present.has(key)) {
+    // Generated blocks — the footnote list — keep the same key while their
+    // contents change, since the key can only be derived from the token types.
+    // They are re-rendered every pass, so they must also be re-sent.
+    if (!present.has(key) || group.source === null) {
       patch.html = html;
       bytes += html.length;
     }
@@ -81,7 +84,7 @@ function render(seq: number, text: string): RenderResponse {
     type: 'rendered',
     seq,
     blocks,
-    headings: collectHeadings(tokens, md),
+    headings: collectHeadings(tokens),
     stats: {
       blocks: blocks.length,
       dirty,

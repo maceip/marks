@@ -98,11 +98,18 @@ export function createDocument(opts: {
 /**
  * Persist a CRDT snapshot. Called from the room layer on a debounce, so this is
  * the single place where `title`/`chars`/`updated_at` are recomputed.
+ *
+ * A missing row is not created here. Rooms register their document when they
+ * open, so by the time a store happens the row exists — unless the document was
+ * deleted while the room was still live. Recreating it would undo the deletion,
+ * and this call site does not know which engine wrote the bytes, so the row
+ * would come back with the wrong one.
+ *
+ * @returns whether the document still existed and was written.
  */
-export function saveState(id: string, state: Uint8Array, title: string, chars: number): void {
-  if (!documentExists(id)) {
-    createDocument({ id, title });
-  }
+export function saveState(id: string, state: Uint8Array, title: string, chars: number): boolean {
+  if (!documentExists(id)) return false;
+
   stmts.saveState.run({
     id,
     state: Buffer.from(state),
@@ -110,6 +117,7 @@ export function saveState(id: string, state: Uint8Array, title: string, chars: n
     chars,
     updated_at: Date.now(),
   });
+  return true;
 }
 
 export function renameDocument(id: string, title: string): DocumentRow | undefined {
@@ -117,8 +125,41 @@ export function renameDocument(id: string, title: string): DocumentRow | undefin
   return getDocument(id);
 }
 
+/**
+ * Ids deleted recently, with the time they were deleted.
+ *
+ * A client whose socket is closed by a deletion will reconnect, and an unknown
+ * id is normally created on connect — that is how a URL creates a document. A
+ * short tombstone keeps that from silently undoing the deletion. It is
+ * deliberately in-memory: it only has to outlive the reconnect attempts of
+ * clients that were connected at the time, and after a restart no room is live.
+ */
+const tombstones = new Map<string, number>();
+const TOMBSTONE_TTL_MS = 5 * 60_000;
+
 export function deleteDocument(id: string): boolean {
-  return stmts.remove.run(id).changes > 0;
+  const deleted = stmts.remove.run(id).changes > 0;
+  if (deleted) {
+    tombstones.set(id, Date.now());
+    if (tombstones.size > 512) pruneTombstones();
+  }
+  return deleted;
+}
+
+/** Whether this id was deleted recently enough that it must not be recreated. */
+export function isRecentlyDeleted(id: string): boolean {
+  const deletedAt = tombstones.get(id);
+  if (deletedAt === undefined) return false;
+  if (Date.now() - deletedAt <= TOMBSTONE_TTL_MS) return true;
+  tombstones.delete(id);
+  return false;
+}
+
+function pruneTombstones(): void {
+  const cutoff = Date.now() - TOMBSTONE_TTL_MS;
+  for (const [id, deletedAt] of tombstones) {
+    if (deletedAt < cutoff) tombstones.delete(id);
+  }
 }
 
 export function databaseFile(): string {

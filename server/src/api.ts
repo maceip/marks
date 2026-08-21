@@ -9,7 +9,7 @@ import {
   listDocuments,
   type Engine,
 } from './store.js';
-import { yjsTextFromState } from './yjs-room.js';
+import { discardYjsDocument, yjsLiveText, yjsTextFromState } from './yjs-room.js';
 
 export const api = Router();
 
@@ -40,7 +40,15 @@ api.get('/documents/:id', (req, res) => {
 });
 
 api.delete('/documents/:id', (req, res) => {
-  res.json({ deleted: deleteDocument(req.params.id) });
+  const id = req.params.id;
+
+  // Remove the row first: any store still in flight for this document then
+  // finds it missing and becomes a no-op, rather than racing the teardown.
+  const deleted = deleteDocument(id);
+  LoroRoom.discard(id);
+  discardYjsDocument(id);
+
+  res.json({ deleted });
 });
 
 /**
@@ -99,8 +107,13 @@ api.get('/documents/:id/export', (req, res) => {
 });
 
 function readMarkdown(id: string): string {
+  // Prefer a resident replica: both engines persist on a debounce, so the
+  // stored row can trail what the editor is showing by several seconds.
   const room = LoroRoom.resident(id);
   if (room) return room.text();
+
+  const live = yjsLiveText(id);
+  if (live !== undefined) return live;
 
   const stored = getState(id);
   if (!stored?.state || stored.state.length === 0) return '';

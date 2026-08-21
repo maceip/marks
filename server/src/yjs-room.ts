@@ -4,7 +4,7 @@ import type { IncomingMessage } from 'node:http';
 import type { RawData, WebSocket } from 'ws';
 import * as Y from 'yjs';
 import { PERSIST_DEBOUNCE_MS, PERSIST_MAX_WAIT_MS } from './config.js';
-import { createDocument, documentExists, getState, saveState } from './store.js';
+import { createDocument, getState, isRecentlyDeleted, saveState } from './store.js';
 import { deriveTitle } from './title.js';
 
 /** Shared type holding the markdown source. Must match the client. */
@@ -23,8 +23,21 @@ export const hocuspocus = new Hocuspocus({
   extensions: [
     new Database({
       fetch: async ({ documentName }) => {
-        if (!documentExists(documentName)) createDocument({ id: documentName, engine: 'yjs' });
-        return getState(documentName)?.state ?? null;
+        const stored = getState(documentName);
+        if (!stored) {
+          if (isRecentlyDeleted(documentName)) {
+            throw new Error(`document ${documentName} was deleted`);
+          }
+          createDocument({ id: documentName, engine: 'yjs' });
+          return null;
+        }
+        // The two CRDTs have incompatible binary formats; opening a Loro
+        // document with this engine would hand it an empty replica and let it
+        // overwrite the stored state.
+        if (stored.engine !== 'yjs') {
+          throw new Error(`document ${documentName} is a ${stored.engine} document`);
+        }
+        return stored.state ?? null;
       },
       store: async ({ documentName, state, document }) => {
         const markdown = document.getText(YJS_TEXT_KEY).toString();
@@ -64,11 +77,24 @@ function toUint8Array(data: RawData): Uint8Array {
   return new Uint8Array(data as ArrayBuffer);
 }
 
-/** Current document state, for the REST fast-open endpoint. */
-export function yjsSnapshot(id: string): Uint8Array | null {
-  const stored = getState(id);
-  if (!stored?.state) return null;
-  return stored.state;
+/**
+ * Markdown from the live document, if Hocuspocus still holds it.
+ *
+ * Its store runs on a debounce, so the row in SQLite can trail the editor by
+ * seconds; anything reading a document for a user needs the resident copy.
+ */
+export function yjsLiveText(id: string): string | undefined {
+  const document = hocuspocus.documents.get(id);
+  return document?.getText(YJS_TEXT_KEY).toString();
+}
+
+/**
+ * Drop a deleted document: close its connections and forget it, so nothing
+ * writes it back out after the row is gone.
+ */
+export function discardYjsDocument(id: string): void {
+  hocuspocus.closeConnections(id);
+  hocuspocus.documents.delete(id);
 }
 
 export function yjsTextFromState(state: Uint8Array): string {

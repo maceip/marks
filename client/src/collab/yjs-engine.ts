@@ -5,6 +5,9 @@ import { IndexeddbPersistence } from 'y-indexeddb';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import { colorVar } from './user';
+
+/** How often the encoded document size is recomputed for the metrics panel. */
+const SNAPSHOT_MEASURE_INTERVAL_MS = 2_000;
 import { TEXT_KEY, type CollabSession, type ConnectionStatus, type EngineStats, type Peer, type SessionOptions } from './types';
 
 /**
@@ -28,6 +31,7 @@ export class YjsEngine implements CollabSession {
   private currentStatus: ConnectionStatus = 'connecting';
   private cachedPeers: Peer[] = [];
   private counters = { received: 0, sent: 0, snapshotBytes: 0 };
+  private lastMeasured = 0;
 
   private readonly textListeners = new Set<(text: string) => void>();
   private readonly statusListeners = new Set<(status: ConnectionStatus) => void>();
@@ -68,9 +72,15 @@ export class YjsEngine implements CollabSession {
     ];
 
     this.text.observe(() => this.emitText());
-    this.doc.on('update', (update: Uint8Array) => {
-      this.counters.sent += update.byteLength;
-      this.counters.snapshotBytes = Y.encodeStateAsUpdate(this.doc).byteLength;
+
+    // Classify by transaction origin, which is the only way to tell the three
+    // sources apart: the provider applies remote updates with itself as the
+    // origin, y-indexeddb replays the local cache with itself as the origin,
+    // and a local edit arrives with neither.
+    this.doc.on('update', (update: Uint8Array, origin: unknown) => {
+      if (origin === this.provider) this.counters.received += update.byteLength;
+      else if (origin !== this.persistence) this.counters.sent += update.byteLength;
+      this.measureSnapshot();
     });
     this.provider.awareness?.on('change', () => this.refreshPeers());
     this.refreshPeers();
@@ -105,6 +115,17 @@ export class YjsEngine implements CollabSession {
 
   stats(): EngineStats {
     return { ...this.counters };
+  }
+
+  /**
+   * Encoding the whole document is O(document), so it is sampled rather than
+   * run on every keystroke.
+   */
+  private measureSnapshot(): void {
+    const now = performance.now();
+    if (now - this.lastMeasured < SNAPSHOT_MEASURE_INTERVAL_MS) return;
+    this.lastMeasured = now;
+    this.counters.snapshotBytes = Y.encodeStateAsUpdate(this.doc).byteLength;
   }
 
   onTextChange(listener: (text: string) => void): () => void {

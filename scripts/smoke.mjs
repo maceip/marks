@@ -83,6 +83,20 @@ flowchart LR
 ## Second section
 
 More prose so the document has several blocks to diff against.
+
+## Fish **&** chips
+
+Enough trailing prose to make the document taller than the pane, so scrolling
+has somewhere to go. Repeated deliberately.
+
+Enough trailing prose to make the document taller than the pane, so scrolling
+has somewhere to go. Repeated deliberately.
+
+Enough trailing prose to make the document taller than the pane, so scrolling
+has somewhere to go. Repeated deliberately.
+
+Enough trailing prose to make the document taller than the pane, so scrolling
+has somewhere to go. Repeated deliberately.
 `;
 
 try {
@@ -191,8 +205,30 @@ try {
 
   await a.page.click('button[aria-label="Document outline"]');
   await settle(a.page, 400);
-  check('outline lists headings', (await a.page.locator('.outline-item').count()) > 1);
+  const outlineItems = await a.page.locator('.outline-item').allInnerTexts();
+  check('outline lists headings', outlineItems.length > 2, `${outlineItems.length} entries`);
+  check(
+    'outline shows plain heading text',
+    outlineItems.some((text) => text.trim() === 'Fish & chips'),
+    JSON.stringify(outlineItems.map((text) => text.trim())),
+  );
   await a.page.click('button[aria-label="Close outline"]');
+
+  // Scroll sync is easy to break silently: the preview index is built from
+  // block elements that are descendants, not children, of the scroll pane.
+  await a.page.evaluate(() => {
+    document.querySelector('.preview-pane').scrollTop = 0;
+    document.querySelector('.cm-scroller').scrollTop = 0;
+  });
+  await settle(a.page, 400);
+  await a.page.evaluate(() => {
+    const scroller = document.querySelector('.cm-scroller');
+    scroller.scrollTop = Math.floor(scroller.scrollHeight / 2);
+    scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
+  });
+  await settle(a.page, 600);
+  const previewScroll = await a.page.evaluate(() => document.querySelector('.preview-pane').scrollTop);
+  check('editor scrolling moves the preview', previewScroll > 0, `previewScrollTop=${previewScroll}`);
 
   await a.page.click('button[title="Preview"]');
   await settle(a.page, 400);
@@ -268,12 +304,59 @@ try {
   const snapshot = await fetch(`${BASE}/api/documents/${docId}/snapshot`);
   check('snapshot endpoint serves CRDT state', snapshot.ok && Number(snapshot.headers.get('content-length') ?? 1) !== 0);
 
+  // Exporting has to read the live document: both engines persist on a
+  // debounce, so a download right after typing would otherwise lose the tail.
+  await d.page.click('.cm-content');
+  await d.page.keyboard.press('Control+End');
+  await d.page.keyboard.type(' Freshly typed.');
+  await settle(d.page, 400);
+  const freshExport = await (await fetch(`${BASE}/api/documents/${docId}/export`)).text();
+  check('export includes edits newer than the last store', freshExport.includes('Freshly typed'));
+
+  // A document with a live room must stay deleted: the room holds a pending
+  // write that would otherwise recreate the row.
+  const doomed = await open(`${BASE}/`);
+  await doomed.page.waitForSelector('.new-doc', { timeout: 20_000 });
+  await doomed.page.click('.new-doc .button.primary');
+  await doomed.page.waitForSelector('.cm-content', { timeout: 20_000 });
+  await settle(doomed.page, 2000);
+  const doomedId = doomed.page.url().split('/d/')[1];
+  await doomed.page.click('.cm-content');
+  await doomed.page.keyboard.type('# About to be deleted');
+  await settle(doomed.page, 300);
+
+  await fetch(`${BASE}/api/documents/${doomedId}`, { method: 'DELETE' });
+  await settle(doomed.page, 4000); // past the persist debounce
+  const afterDelete = await fetch(`${BASE}/api/documents/${doomedId}`);
+  check('a deleted document stays deleted while its room is live', afterDelete.status === 404, `status ${afterDelete.status}`);
+
+  // Connecting the wrong protocol to an existing document would hand it an
+  // empty replica and let the first edit overwrite the stored state.
+  const mismatch = await d.page.evaluate(
+    (url) =>
+      new Promise((resolve) => {
+        const socket = new WebSocket(url);
+        socket.onopen = () => resolve('accepted');
+        socket.onerror = () => resolve('rejected');
+        socket.onclose = () => resolve('rejected');
+        setTimeout(() => resolve('timeout'), 4000);
+      }),
+    `${BASE.replace(/^http/, 'ws')}/collab/loro/${docId}`,
+  );
+  check('mismatched engine is refused at the socket', mismatch === 'rejected', String(mismatch));
+
   /* ---------------------------------------------------- errors ---------- */
   // The offline section deliberately cuts the network, so its failed requests
   // are expected rather than a defect.
   const consoleErrors = pages
     .flatMap((handle) => handle.errors)
-    .filter((text) => !/favicon|ERR_INTERNET_DISCONNECTED|Failed to load resource/i.test(text));
+    .filter(
+      (text) =>
+        !/favicon|ERR_INTERNET_DISCONNECTED|Failed to load resource/i.test(text) &&
+        // The engine-mismatch and deletion checks deliberately provoke refused
+        // WebSocket connections.
+        !/WebSocket connection to .*collab/i.test(text),
+    );
   check('no console errors', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | '));
 } finally {
   await browser.close();

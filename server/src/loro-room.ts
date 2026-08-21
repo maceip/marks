@@ -8,6 +8,9 @@ import { deriveTitle } from './title.js';
 /** Container id holding the markdown source. Must match the client. */
 export const TEXT_CONTAINER = 'markdown';
 
+/** Close code telling a client the document is gone, not that the link dropped. */
+export const CLOSE_DOCUMENT_DELETED = 4404;
+
 /** Presence entries older than this are dropped by the ephemeral store. */
 const EPHEMERAL_TIMEOUT_MS = 30_000;
 
@@ -26,6 +29,7 @@ export class LoroRoom {
   private readonly sockets = new Set<WebSocket>();
 
   private dirty = false;
+  private discarded = false;
   private persistTimer: NodeJS.Timeout | null = null;
   private maxWaitTimer: NodeJS.Timeout | null = null;
   private evictTimer: NodeJS.Timeout | null = null;
@@ -55,6 +59,28 @@ export class LoroRoom {
   /** The live replica if the room is resident, otherwise undefined. */
   static resident(id: string): LoroRoom | undefined {
     return LoroRoom.rooms.get(id);
+  }
+
+  /**
+   * Tear a room down without persisting it, for a document that has been
+   * deleted. A live room holds a pending write and possibly other connected
+   * clients; either would otherwise write the document back out after the row
+   * is gone.
+   */
+  static discard(id: string): void {
+    const room = LoroRoom.rooms.get(id);
+    if (!room) return;
+
+    room.discarded = true;
+    room.dirty = false;
+    room.clearTimers();
+    room.cancelEviction();
+    // A dedicated code so the client stops reconnecting instead of retrying
+    // into a document that no longer exists.
+    for (const socket of room.sockets) socket.close(CLOSE_DOCUMENT_DELETED, 'document deleted');
+    room.sockets.clear();
+    room.ephemeral.destroy();
+    LoroRoom.rooms.delete(id);
   }
 
   static async flushAll(): Promise<void> {
@@ -180,6 +206,7 @@ export class LoroRoom {
   }
 
   private markDirty(): void {
+    if (this.discarded) return;
     this.dirty = true;
     if (this.persistTimer) clearTimeout(this.persistTimer);
     this.persistTimer = setTimeout(() => this.persistNow(), PERSIST_DEBOUNCE_MS);
@@ -188,20 +215,27 @@ export class LoroRoom {
   }
 
   private persistNow(): void {
-    if (this.persistTimer) clearTimeout(this.persistTimer);
-    if (this.maxWaitTimer) clearTimeout(this.maxWaitTimer);
-    this.persistTimer = null;
-    this.maxWaitTimer = null;
-    if (!this.dirty) return;
+    this.clearTimers();
+    if (!this.dirty || this.discarded) return;
     this.dirty = false;
 
     const markdown = this.text();
     try {
-      saveState(this.id, this.snapshot(), deriveTitle(markdown), markdown.length);
+      // A false return means the document was deleted underneath us.
+      if (!saveState(this.id, this.snapshot(), deriveTitle(markdown), markdown.length)) {
+        this.discarded = true;
+      }
     } catch (error) {
       console.error(`[loro] ${this.id}: persist failed`, error);
       this.dirty = true;
     }
+  }
+
+  private clearTimers(): void {
+    if (this.persistTimer) clearTimeout(this.persistTimer);
+    if (this.maxWaitTimer) clearTimeout(this.maxWaitTimer);
+    this.persistTimer = null;
+    this.maxWaitTimer = null;
   }
 
   private scheduleEviction(): void {

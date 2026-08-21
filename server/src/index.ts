@@ -8,7 +8,7 @@ import { api } from './api.js';
 import { CLIENT_DIST, HOST, PORT } from './config.js';
 import { LoroRoom } from './loro-room.js';
 import { seedIfEmpty } from './seed.js';
-import { databaseFile } from './store.js';
+import { databaseFile, getDocument, isRecentlyDeleted } from './store.js';
 import { handleYjsConnection, hocuspocus } from './yjs-room.js';
 
 const app = express();
@@ -68,6 +68,24 @@ server.on('upgrade', (request, socket, head) => {
   if (engine === 'loro' && !documentId) {
     socket.destroy();
     return;
+  }
+
+  // The two CRDTs have incompatible binary formats. Connecting the wrong
+  // protocol to an existing document would hand it an empty replica, and the
+  // first edit would overwrite the stored state with an unreadable one.
+  // Unknown ids are still allowed through, so a URL can create a document.
+  if (documentId) {
+    const existing = getDocument(documentId);
+    if (existing && existing.engine !== engine) {
+      socket.destroy();
+      return;
+    }
+    // A client that was connected when the document was deleted will try to
+    // reconnect; letting it through would recreate what was just deleted.
+    if (!existing && isRecentlyDeleted(documentId)) {
+      socket.destroy();
+      return;
+    }
   }
 
   // Clients that already hold state announce it, so we can answer with a delta.
