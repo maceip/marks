@@ -11,10 +11,23 @@ const FIXTURE = `# Surface harness
 Hello from the portable suite.
 `;
 
-export async function runSurface(session, { check }) {
+async function createLoroDocument(session) {
   await session.goto('/');
-  await session.waitForSelector('.new-doc', { timeout: 20_000 });
-  await session.click('.new-doc .button.primary');
+  try {
+    await session.waitForSelector('.new-doc .button.primary', { timeout: 8_000 });
+    if (await session.isVisible('.new-doc .button.primary')) {
+      await session.click('.new-doc .button.primary');
+      return;
+    }
+  } catch {
+    // Sidebar is off the DOM below 900px; EmptyState still has a create button.
+  }
+  await session.waitForSelector('.empty-actions .button.primary', { timeout: 15_000 });
+  await session.click('.empty-actions .button.primary');
+}
+
+export async function runSurface(session, { check }) {
+  await createLoroDocument(session);
   await session.waitForSelector('.cm-content', { timeout: 20_000 });
   await session.wait(2000);
 

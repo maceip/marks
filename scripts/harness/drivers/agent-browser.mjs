@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { discoverChrome } from '../chrome.mjs';
 import { discoverDrivers } from '../discover.mjs';
-import { resolveAppUrl } from '../env.mjs';
+import { DEFAULT_VIEWPORT, resolveAppUrl } from '../env.mjs';
 import { launchChromeCdp } from './cdp-chrome.mjs';
 import { serializeEvaluate } from './session.mjs';
 
@@ -116,6 +116,15 @@ export async function launch(options = {}) {
 
   const ctx = { session, port: cdp.port };
   const base = options.base;
+  const viewport = options.viewport ?? DEFAULT_VIEWPORT;
+
+  try {
+    await runCli(bin, ['open', 'about:blank'], { ...ctx, timeout: 20_000 });
+    await runCli(bin, ['set', 'viewport', String(viewport.width), String(viewport.height)], ctx);
+  } catch (error) {
+    await cdp.close();
+    throw error;
+  }
 
   const api = {
     name: 'agent-browser',

@@ -10,6 +10,11 @@ export function serializeEvaluate(fn, arg) {
   })()`;
 }
 
-export function normalizeKey(key) {
-  return String(key).replace(/^Control\+/i, 'Control+').replace(/^Meta\+/i, 'Meta+');
+export function normalizeKey(key, { lowerModifiers = false } = {}) {
+  let next = String(key);
+  next = next.replace(/^Control\+/i, 'Control+').replace(/^Meta\+/i, 'Meta+').replace(/^Alt\+/i, 'Alt+');
+  if (lowerModifiers) {
+    next = next.replace(/^(Control|Meta|Alt|Shift)\+([A-Z])$/, (_, mod, letter) => `${mod}+${letter.toLowerCase()}`);
+  }
+  return next;
 }

@@ -1,5 +1,6 @@
 import { discoverChrome } from '../chrome.mjs';
 import { CHROME_LAUNCH_ARGS, DEFAULT_VIEWPORT, launchEnv, resolveAppUrl } from '../env.mjs';
+import { normalizeKey } from './session.mjs';
 
 async function loadPuppeteer() {
   try {
@@ -65,7 +66,7 @@ export function wrap({ browser, page, base, chrome }) {
       await handle.type(value);
     },
     async press(key) {
-      await page.keyboard.press(key);
+      await page.keyboard.press(normalizeKey(key, { lowerModifiers: true }));
     },
     async type(text, { delay = 0 } = {}) {
       await page.keyboard.type(text, { delay });
