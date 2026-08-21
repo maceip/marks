@@ -66,7 +66,20 @@ export function wrap({ browser, page, base, chrome }) {
       await handle.type(value);
     },
     async press(key) {
-      await page.keyboard.press(normalizeKey(key, { lowerModifiers: true }));
+      const chord = normalizeKey(key, { lowerModifiers: true });
+      const parts = chord.split('+');
+      if (parts.length === 1) {
+        await page.keyboard.press(parts[0]);
+        return;
+      }
+      const letter = parts.at(-1);
+      const modifiers = parts.slice(0, -1);
+      for (const modifier of modifiers) await page.keyboard.down(modifier);
+      try {
+        await page.keyboard.press(letter);
+      } finally {
+        for (const modifier of modifiers.slice().reverse()) await page.keyboard.up(modifier);
+      }
     },
     async type(text, { delay = 0 } = {}) {
       await page.keyboard.type(text, { delay });

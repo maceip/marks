@@ -148,27 +148,25 @@ export async function launch(options = {}) {
       await runCli(bin, ['click', selector], ctx);
     },
     async rightClick(selector, { x = 24, y = 24 } = {}) {
-      try {
-        await runCli(bin, ['click', selector, '--button', 'right'], ctx);
-      } catch {
-        await runEval(
-          bin,
-          `(() => {
-            const el = document.querySelector(${JSON.stringify(selector)});
-            if (!el) throw new Error(${JSON.stringify(`rightClick: ${selector} not found`)});
-            const box = el.getBoundingClientRect();
-            el.dispatchEvent(new MouseEvent('contextmenu', {
-              bubbles: true,
-              cancelable: true,
-              clientX: box.left + ${Number(x)},
-              clientY: box.top + ${Number(y)},
-              button: 2,
-            }));
-            return true;
-          })()`,
-          ctx,
-        );
+      const { parsed } = await runEval(
+        bin,
+        `(() => {
+          const el = document.querySelector(${JSON.stringify(selector)});
+          if (!el) throw new Error(${JSON.stringify(`rightClick: ${selector} not found`)});
+          const box = el.getBoundingClientRect();
+          return { x: Math.round(box.left + ${Number(x)}), y: Math.round(box.top + ${Number(y)}) };
+        })()`,
+        ctx,
+      );
+      const point = resultOf(parsed);
+      const px = Number(point?.x);
+      const py = Number(point?.y);
+      if (!Number.isFinite(px) || !Number.isFinite(py)) {
+        throw new Error(`rightClick: could not locate ${selector}: ${JSON.stringify(parsed)}`);
       }
+      await runCli(bin, ['mouse', 'move', String(px), String(py)], ctx);
+      await runCli(bin, ['mouse', 'down', 'right'], ctx);
+      await runCli(bin, ['mouse', 'up', 'right'], ctx);
     },
     async fill(selector, value) {
       await runCli(bin, ['fill', selector, value], ctx);
