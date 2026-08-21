@@ -3,10 +3,12 @@
     "target": "ES2022",
     "module": "ES2022",
     "moduleResolution": "bundler",
+    "lib": ["ES2023"],
     "strict": true,
-    "skipLibCheck": true,
     "noEmit": true,
-    "lib": ["ES2022"]
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "exactOptionalPropertyTypes": true
   },
   "include": ["src"]
 }
