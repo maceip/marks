@@ -1,10 +1,10 @@
 /**
- * Wire protocol for the Loro sync rooms.
+ * Wire protocol for the ESBT sync rooms.
  *
  * Every frame is binary: one tag byte followed by an opaque payload. Keep this
  * file in sync with `client/src/collab/protocol.ts`.
  */
-export const MSG_UPDATE = 0x01; //  both ways: Loro update or snapshot bytes
+export const MSG_UPDATE = 0x01; //  both ways: ESBT update or snapshot bytes
 export const MSG_EPHEMERAL = 0x02; //  both ways: presence, relayed but never persisted
 export const MSG_SERVER_VV = 0x03; //  server -> client: oplog version vector
 export const MSG_SNAPSHOT = 0x04; //  server -> client: document snapshot

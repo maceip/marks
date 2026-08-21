@@ -11,15 +11,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@hocuspocus/extension-database": "^4.6.0",
-    "@hocuspocus/server": "^4.6.0",
+    "@marks/esbt": "*",
     "better-sqlite3": "^13.0.3",
     "compression": "^1.8.1",
     "express": "^5.2.1",
-    "loro-crdt": "^1.14.1",
     "nanoid": "^6.0.1",
-    "ws": "^8.21.3",
-    "yjs": "^13.6.32"
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

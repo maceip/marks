@@ -1,5 +1,4 @@
-import { LoroDoc } from 'loro-crdt';
-import { TEXT_CONTAINER } from './loro-room.js';
+import { EsbtDoc } from '@marks/esbt';
 import { createDocument, documentExists, listDocuments, saveState } from './store.js';
 import { deriveTitle } from './title.js';
 
@@ -70,10 +69,9 @@ export function seedIfEmpty(): void {
   if (listDocuments().length > 0) return;
   if (documentExists('welcome')) return;
 
-  createDocument({ id: 'welcome', engine: 'loro', title: 'Welcome to marks' });
-  const doc = new LoroDoc();
-  doc.getText(TEXT_CONTAINER).insert(0, WELCOME);
-  doc.commit();
+  createDocument({ id: 'welcome', engine: 'esbt', title: 'Welcome to marks' });
+  const doc = new EsbtDoc({ siteId: 'marks-server:welcome' });
+  doc.setText(WELCOME);
   saveState('welcome', doc.export({ mode: 'snapshot' }), deriveTitle(WELCOME), WELCOME.length);
   console.log('[marks] seeded welcome document');
 }
