@@ -1,0 +1,12 @@
+{
+  "name": "marks-browser-harness",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Three browser-automation harnesses (Playwright, Puppeteer, agent-browser), each with its own Chrome, kept hot behind its own CGNAT subnet.",
+  "dependencies": {
+    "agent-browser": "^0.34.0",
+    "playwright": "^1.62.1",
+    "puppeteer": "^25.8.0"
+  }
+}

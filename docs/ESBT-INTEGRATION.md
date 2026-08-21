@@ -4,6 +4,8 @@ Marks is replacing Loro and Yjs with ESBT (Mechaoui & Imine, [arXiv:2607.28101](
 
 This document is the API the ESBT implementation must satisfy so the existing markdown editor can keep CodeMirror sync, preview writes, offline delta reconnect, per-peer undo, and presence — without changing the algorithm later.
 
+**Contents:** crate API (constructors, `EsbtDoc`, version vectors, undo, presence) · [§6 one-process server](#6-the-server-is-one-process) · [§7 identity / Docs-shaped product](#7-identity-and-the-docs-shaped-product)
+
 Marks will bind to these four constructors and nothing else:
 
 ```ts

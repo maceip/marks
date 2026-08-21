@@ -6,7 +6,8 @@
   "description": "Real-time collaborative markdown editor with Google Docs responsiveness, built on Eg-walker/Fugue CRDTs",
   "workspaces": [
     "client",
-    "server"
+    "server",
+    "esbt"
   ],
   "engines": {
     "node": ">=22.12"
@@ -17,7 +18,7 @@
     "dev:client": "npm run dev --workspace=client",
     "build": "npm run build --workspace=client && npm run build --workspace=server",
     "start": "npm run start --workspace=server",
-    "typecheck": "npm run typecheck --workspace=client && npm run typecheck --workspace=server",
+    "typecheck": "npm run typecheck --workspace=client && npm run typecheck --workspace=server && npm run typecheck --workspace=@marks/esbt",
     "clean": "rm -rf client/dist server/dist node_modules/.vite",
     "test:browser": "node --experimental-strip-types --test client/src/browser/*.test.ts",
     "test:harness": "node --test scripts/harness/*.test.mjs",
