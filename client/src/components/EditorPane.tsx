@@ -74,10 +74,17 @@ export function EditorPane({
 
     viewRef.current = view;
     handlers.current.onView(view);
-    view.dispatch({ effects: setCommentHighlights.of(session.comments()) });
-    const offComments = session.onCommentsChange((comments) => {
-      view.dispatch({ effects: setCommentHighlights.of(comments) });
-    });
+    const paintHighlights = (comments: ReturnType<CollabSession['comments']>) => {
+      // Comment writes go through the same CRDT transaction as the editor
+      // binding. Dispatching decorations synchronously re-enters
+      // EditorView.update and CodeMirror logs a console error.
+      queueMicrotask(() => {
+        if (viewRef.current !== view) return;
+        view.dispatch({ effects: setCommentHighlights.of(comments) });
+      });
+    };
+    paintHighlights(session.comments());
+    const offComments = session.onCommentsChange(paintHighlights);
     view.focus();
 
     return () => {
