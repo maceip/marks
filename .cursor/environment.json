@@ -1,11 +1,27 @@
 {
   "name": "marks",
-  "install": "npm ci && npx playwright install chromium",
+  "install": "npm ci && npx playwright install chromium && bash .cursor/harness/install.sh",
+  "start": "sudo bash .cursor/harness/start.sh",
   "terminals": [
     {
       "name": "dev",
       "command": "npm run dev",
       "description": "Runs the sync server (http://localhost:3000) and the Vite client dev server (http://localhost:5173) together. Open the client URL to use the app; it proxies /api and /collab to the server."
+    },
+    {
+      "name": "playwright",
+      "command": "sudo bash .cursor/harness/launch-harness.sh playwright",
+      "description": "Hot Playwright Chrome (CDP http://127.0.0.1:9222) inside CGNAT namespace cg-playwright (subnet 100.64.10.0/24). Attach with playwright.chromium.connectOverCDP; run clients via: sudo ip netns exec cg-playwright runuser -u ubuntu -- <cmd>."
+    },
+    {
+      "name": "puppeteer",
+      "command": "sudo bash .cursor/harness/launch-harness.sh puppeteer",
+      "description": "Hot Puppeteer Chrome (CDP http://127.0.0.1:9223) inside CGNAT namespace cg-puppeteer (subnet 100.64.20.0/24). Attach with puppeteer.connect({ browserURL }); run clients via: sudo ip netns exec cg-puppeteer runuser -u ubuntu -- <cmd>."
+    },
+    {
+      "name": "agent-browser",
+      "command": "sudo bash .cursor/harness/launch-harness.sh agent",
+      "description": "Hot agent-browser Chrome (CDP http://127.0.0.1:9224) inside CGNAT namespace cg-agent (subnet 100.64.30.0/24). Drive it in-namespace with a pinned HOME so its daemon stays co-located, e.g.: sudo ip netns exec cg-agent runuser -u ubuntu -- env HOME=/home/ubuntu/.cache/harness/agent-home .cursor/harness/node_modules/.bin/agent-browser --cdp 9224 open example.com"
     }
   ],
   "ports": [
