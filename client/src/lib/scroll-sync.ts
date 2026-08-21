@@ -1,0 +1,167 @@
+import type { EditorView } from '@codemirror/view';
+
+interface BlockOffset {
+  line: number;
+  top: number;
+  bottom: number;
+}
+
+/**
+ * Two-way scroll sync between the source pane and the preview.
+ *
+ * Both panes are indexed by source line — preview blocks carry `data-line`
+ * from markdown-it's token maps — so the mapping stays honest even when one
+ * source line renders to a tall block (a table, a diagram) and its neighbour
+ * renders to a single line.
+ */
+export class ScrollSync {
+  private editor: EditorView | null = null;
+  private preview: HTMLElement | null = null;
+  private applying = false;
+  private enabled = true;
+
+  private index: BlockOffset[] = [];
+  private indexedChildren = -1;
+  private indexedHeight = -1;
+
+  setEditor(view: EditorView | null): void {
+    this.editor = view;
+  }
+
+  setPreview(element: HTMLElement | null): void {
+    this.preview = element;
+    this.indexedChildren = -1;
+  }
+
+  setEnabled(enabled: boolean): void {
+    this.enabled = enabled;
+  }
+
+  /** Preview follows the editor. */
+  fromEditor(): void {
+    const { editor, preview } = this;
+    if (!this.enabled || this.applying || !editor || !preview) return;
+
+    this.guard(() => {
+      const line = this.topVisibleEditorLine(editor);
+      const target = this.previewOffsetForLine(line);
+      if (target !== null) preview.scrollTop = target;
+    });
+  }
+
+  /** Editor follows the preview. */
+  fromPreview(): void {
+    const { editor, preview } = this;
+    if (!this.enabled || this.applying || !editor || !preview) return;
+
+    this.guard(() => {
+      const line = this.topVisiblePreviewLine(preview);
+      if (line === null) return;
+
+      const doc = editor.state.doc;
+      const clamped = Math.min(Math.max(line + 1, 1), doc.lines);
+      const block = editor.lineBlockAt(doc.line(clamped).from);
+      editor.scrollDOM.scrollTop = block.top;
+    });
+  }
+
+  /** Scroll both panes to a source line, used by the outline. */
+  scrollToLine(line: number): void {
+    const { editor, preview } = this;
+    this.guard(() => {
+      if (editor) {
+        const doc = editor.state.doc;
+        const clamped = Math.min(Math.max(line + 1, 1), doc.lines);
+        editor.scrollDOM.scrollTop = editor.lineBlockAt(doc.line(clamped).from).top;
+      }
+      if (preview) {
+        const target = this.previewOffsetForLine(line);
+        if (target !== null) preview.scrollTop = target;
+      }
+    });
+  }
+
+  /**
+   * Run a scroll mutation without letting the other pane's scroll handler
+   * bounce it straight back.
+   */
+  private guard(mutate: () => void): void {
+    this.applying = true;
+    mutate();
+    requestAnimationFrame(() => {
+      this.applying = false;
+    });
+  }
+
+  private topVisibleEditorLine(view: EditorView): number {
+    const top = view.scrollDOM.scrollTop;
+    const block = view.lineBlockAtHeight(top);
+    const fraction = block.height > 0 ? (top - block.top) / block.height : 0;
+    const startLine = view.state.doc.lineAt(block.from).number - 1;
+    const endLine = view.state.doc.lineAt(block.to).number - 1;
+    return startLine + (endLine - startLine) * Math.min(Math.max(fraction, 0), 1);
+  }
+
+  private buildIndex(preview: HTMLElement): BlockOffset[] {
+    if (
+      preview.childElementCount === this.indexedChildren &&
+      preview.scrollHeight === this.indexedHeight
+    ) {
+      return this.index;
+    }
+
+    const offsets: BlockOffset[] = [];
+    for (const child of Array.from(preview.children) as HTMLElement[]) {
+      const line = Number(child.dataset.line ?? NaN);
+      if (Number.isNaN(line)) continue;
+      offsets.push({ line, top: child.offsetTop, bottom: child.offsetTop + child.offsetHeight });
+    }
+
+    this.index = offsets;
+    this.indexedChildren = preview.childElementCount;
+    this.indexedHeight = preview.scrollHeight;
+    return offsets;
+  }
+
+  /** Interpolate a scroll offset for a (possibly fractional) source line. */
+  private previewOffsetForLine(line: number): number | null {
+    const preview = this.preview;
+    if (!preview) return null;
+
+    const blocks = this.buildIndex(preview);
+    if (blocks.length === 0) return null;
+    if (line <= blocks[0].line) return 0;
+
+    for (let i = 0; i < blocks.length; i++) {
+      const block = blocks[i];
+      const next = blocks[i + 1];
+      if (!next) return block.top;
+      if (line >= next.line) continue;
+
+      const span = Math.max(next.line - block.line, 1);
+      const fraction = Math.min(Math.max((line - block.line) / span, 0), 1);
+      return block.top + (next.top - block.top) * fraction;
+    }
+
+    return null;
+  }
+
+  private topVisiblePreviewLine(preview: HTMLElement): number | null {
+    const blocks = this.buildIndex(preview);
+    if (blocks.length === 0) return null;
+
+    const top = preview.scrollTop;
+    for (let i = 0; i < blocks.length; i++) {
+      const block = blocks[i];
+      if (block.bottom <= top) continue;
+
+      const next = blocks[i + 1];
+      const height = Math.max(block.bottom - block.top, 1);
+      const fraction = Math.min(Math.max((top - block.top) / height, 0), 1);
+      const span = next ? Math.max(next.line - block.line, 1) : 1;
+      return block.line + span * fraction;
+    }
+
+    return blocks[blocks.length - 1].line;
+  }
+}

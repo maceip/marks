@@ -1,0 +1,45 @@
+import type { EngineName } from '../collab/types';
+
+/** Everything the performance panel and status bar display, sampled together. */
+export interface HudSnapshot {
+  engine: EngineName;
+  /** Preview latency, in milliseconds. */
+  p50: number;
+  p95: number;
+  max: number;
+  samples: number;
+  /** Last render pass. */
+  blocks: number;
+  dirty: number;
+  parseMs: number;
+  renderMs: number;
+  patchMs: number;
+  touched: number;
+  htmlBytes: number;
+  /** Document and network. */
+  chars: number;
+  words: number;
+  snapshotBytes: number;
+  sent: number;
+  received: number;
+}
+
+export const EMPTY_SNAPSHOT: HudSnapshot = {
+  engine: 'loro',
+  p50: 0,
+  p95: 0,
+  max: 0,
+  samples: 0,
+  blocks: 0,
+  dirty: 0,
+  parseMs: 0,
+  renderMs: 0,
+  patchMs: 0,
+  touched: 0,
+  htmlBytes: 0,
+  chars: 0,
+  words: 0,
+  snapshotBytes: 0,
+  sent: 0,
+  received: 0,
+};

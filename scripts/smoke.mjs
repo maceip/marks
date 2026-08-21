@@ -1,0 +1,284 @@
+/**
+ * End-to-end smoke test.
+ *
+ * Drives two real browsers against a running server and checks the things that
+ * are easy to break and hard to notice: convergence between peers, presence,
+ * offline editing, per-user undo, incremental preview rendering, and the
+ * server's derived titles. Run it against a build:
+ *
+ *   npm run build && npm start &
+ *   node scripts/smoke.mjs
+ */
+import { chromium } from 'playwright';
+
+const BASE = process.env.MARKS_URL ?? 'http://localhost:3000';
+const CHROMIUM = process.env.CHROMIUM_PATH ?? undefined;
+const SHOTS = process.env.MARKS_SHOTS ?? null;
+
+const results = [];
+const check = (name, pass, detail = '') => {
+  results.push({ name, pass });
+  console.log(`${pass ? '  ok  ' : ' FAIL '} ${name}${detail ? ` — ${detail}` : ''}`);
+};
+
+// Proxy settings in the environment must not intercept localhost.
+const env = Object.fromEntries(
+  Object.entries(process.env).filter(([key]) => !/^(https?_proxy|all_proxy|no_proxy)$/i.test(key)),
+);
+
+const browser = await chromium.launch({
+  executablePath: CHROMIUM,
+  args: ['--no-proxy-server', '--no-sandbox'],
+  env,
+});
+
+const pages = [];
+async function open(url) {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') errors.push(message.text());
+  });
+  await page.goto(url, { waitUntil: 'domcontentloaded' });
+  const handle = { context, page, errors };
+  pages.push(handle);
+  return handle;
+}
+
+const settle = (page, ms = 1500) => page.waitForTimeout(ms);
+const previewText = (page) => page.locator('.marks-preview').innerText();
+const shot = async (page, name) => {
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/${name}.png` });
+};
+
+const FIXTURE = `# Smoke test document
+
+A paragraph with **bold**, *italic*, \`code\` and a [link](https://example.com).
+
+| Feature | Works |
+| --- | --- |
+| Tables | yes |
+| Math | yes |
+
+- [ ] an unchecked task
+- [x] a checked task
+
+Inline math $e^{i\\pi} + 1 = 0$ and a block:
+
+$$
+\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}
+$$
+
+\`\`\`ts
+export const answer = (): number => 42;
+\`\`\`
+
+\`\`\`mermaid
+flowchart LR
+  A[Edit] --> B[CRDT] --> C[Preview]
+\`\`\`
+
+## Second section
+
+More prose so the document has several blocks to diff against.
+`;
+
+try {
+  /* ---------------------------------------------------- rendering ------- */
+  console.log('\nrendering');
+
+  // A fresh document per run: the suite must not depend on, or leave behind,
+  // state in a shared one.
+  const a = await open(`${BASE}/`);
+  await a.page.waitForSelector('.new-doc', { timeout: 20_000 });
+  await a.page.click('.new-doc .button.primary');
+  await a.page.waitForSelector('.cm-content', { timeout: 20_000 });
+  await settle(a.page, 2500);
+  const docUrl = a.page.url();
+
+  await a.page.click('.cm-content');
+  await a.page.keyboard.insertText(FIXTURE);
+  await a.page.waitForSelector('.marks-preview .marks-block', { timeout: 20_000 });
+  await settle(a.page, 2500);
+
+  check('document renders blocks', (await a.page.locator('.marks-preview .marks-block').count()) > 8);
+  check('math renders', (await a.page.locator('.marks-preview .katex').count()) > 0);
+  check('diagrams render', (await a.page.locator('.marks-mermaid-out svg').count()) > 0);
+  check('tables render', (await a.page.locator('.marks-preview table tr').count()) > 2);
+  check('code is highlighted', (await a.page.locator('.marks-preview code.hljs .hljs-keyword').count()) > 0);
+  check('task lists render', (await a.page.locator('.marks-preview input[type=checkbox]').count()) === 2);
+  await shot(a.page, '01-document');
+
+  /* ---------------------------------------------------- incremental ----- */
+  console.log('\nincremental preview');
+  // Append rather than prepend: typing at the top would swallow the first
+  // heading into a paragraph and change what the outline should contain.
+  await a.page.keyboard.press('Control+End');
+  await a.page.keyboard.type('Edited by peer A. ', { delay: 15 });
+  await settle(a.page, 900);
+  check('typing reaches the preview', (await previewText(a.page)).includes('Edited by peer A'));
+
+  await a.page.keyboard.press('Control+Shift+M');
+  await settle(a.page, 700);
+  const hud = await a.page.locator('.hud').innerText();
+  const dirty = /Blocks\n(\d+) dirty \/ (\d+)/.exec(hud);
+  const domOps = /DOM ops\n(\d+)/.exec(hud);
+  check(
+    'only changed blocks re-render',
+    dirty !== null && Number(dirty[1]) <= 2 && Number(dirty[2]) > 5,
+    dirty ? `${dirty[1]} dirty of ${dirty[2]}` : 'no reading',
+  );
+  check('DOM churn stays proportional to the edit', domOps !== null && Number(domOps[1]) <= 6, domOps?.[1]);
+  await shot(a.page, '02-hud');
+  await a.page.keyboard.press('Control+Shift+M');
+
+  /* ---------------------------------------------------- collaboration --- */
+  console.log('\ncollaboration (loro)');
+  const b = await open(docUrl);
+  await b.page.waitForSelector('.marks-preview .marks-block', { timeout: 20_000 });
+  await settle(b.page, 1500);
+  check("second peer receives the first peer's edits", (await previewText(b.page)).includes('Edited by peer A'));
+
+  await b.page.click('.cm-content');
+  await b.page.keyboard.press('Control+End');
+  await b.page.keyboard.type('\n\nAdded by peer B.\n');
+  await settle(a.page, 1800);
+
+  const aText = await previewText(a.page);
+  const bText = await previewText(b.page);
+  check("first peer receives the second peer's edits", aText.includes('Added by peer B'));
+  check('previews converge', aText === bText);
+  check('presence shows both peers', (await a.page.locator('.presence .avatar').count()) === 2);
+  check('remote cursor is drawn', (await a.page.locator('.cm-cursorLayer > *, .cm-ySelectionCaret').count()) > 0);
+  await shot(a.page, '03-collaboration');
+
+  /* ---------------------------------------------------- undo ------------ */
+  console.log('\nper-user undo');
+  // Screenshots and cross-page waits can move window focus, and a keymap only
+  // fires when the editor actually holds it.
+  await b.page.bringToFront();
+  await b.page.click('.cm-content');
+
+  // Undo granularity depends on each engine's edit-grouping interval, so step
+  // back until this peer's own edit is gone rather than assuming one press.
+  let afterUndo = await previewText(b.page);
+  for (let attempt = 0; attempt < 5 && afterUndo.includes('Added by peer B'); attempt++) {
+    await b.page.keyboard.press('Control+z');
+    await settle(b.page, 700);
+    afterUndo = await previewText(b.page);
+  }
+  check('undo reverts my own edit', !afterUndo.includes('Added by peer B'));
+  check("undo leaves the other peer's edit alone", afterUndo.includes('Edited by peer A'));
+
+  /* ---------------------------------------------------- interaction ----- */
+  console.log('\ninteraction');
+  const box = a.page.locator('.marks-preview input[type=checkbox]').first();
+  const before = await box.isChecked();
+  await box.click();
+  await settle(a.page, 700);
+  const after = await a.page.locator('.marks-preview input[type=checkbox]').first().isChecked();
+  check('clicking a checkbox writes back to the source', before !== after);
+
+  // The edit came from the preview, not the editor, so it also exercises the
+  // path that pushes local non-editor writes back into CodeMirror.
+  const editorSource = await a.page.locator('.cm-content').innerText();
+  check(
+    'a preview edit reaches the editor',
+    editorSource.includes(after ? '[x] an unchecked task' : '[ ] an unchecked task'),
+  );
+
+  await a.page.click('button[aria-label="Document outline"]');
+  await settle(a.page, 400);
+  check('outline lists headings', (await a.page.locator('.outline-item').count()) > 1);
+  await a.page.click('button[aria-label="Close outline"]');
+
+  await a.page.click('button[title="Preview"]');
+  await settle(a.page, 400);
+  check('preview-only mode hides the editor', !(await a.page.locator('.editor-pane').isVisible()));
+  await a.page.click('button[title="Split"]');
+
+  await a.page.click('button[aria-label*="dark theme"], button[aria-label*="light theme"]');
+  await settle(a.page, 800);
+  check('theme toggles', (await a.page.evaluate(() => document.documentElement.dataset.theme)) === 'dark');
+  await shot(a.page, '04-dark');
+
+  /* ---------------------------------------------------- offline --------- */
+  console.log('\noffline');
+  await a.context.setOffline(true);
+  await settle(a.page, 1500);
+  check('offline is reported', (await a.page.locator('.topbar .status').first().innerText()).includes('Offline'));
+
+  await a.page.bringToFront();
+  await a.page.click('.cm-content');
+  // Clicking lands the cursor wherever the click was; type at the end so the
+  // text cannot land inside a fenced block, whose source the preview hides.
+  await a.page.keyboard.press('Control+End');
+  await a.page.keyboard.type('Typed while offline. ');
+  await settle(a.page, 600);
+  const offlineText = await previewText(a.page);
+  check(
+    'editing works offline',
+    offlineText.includes('Typed while offline'),
+    offlineText.includes('Typed while offline') ? '' : `preview tail: ${JSON.stringify(offlineText.slice(-80))}`,
+  );
+
+  await a.context.setOffline(false);
+  await settle(b.page, 4500);
+  check('offline edits sync on reconnect', (await previewText(b.page)).includes('Typed while offline'));
+
+  /* ---------------------------------------------------- yjs engine ------ */
+  console.log('\ncollaboration (yjs)');
+  const c = await open(`${BASE}/`);
+  await c.page.waitForSelector('.new-doc');
+  await c.page.click('.split-toggle');
+  await c.page.locator('.menu-item', { hasText: 'Yjs' }).click();
+  await c.page.waitForSelector('.cm-content', { timeout: 20_000 });
+  await settle(c.page, 2500);
+
+  const yjsUrl = c.page.url();
+  check('new document uses the chosen engine', (await c.page.locator('.topbar .engine-tag').innerText()).trim().toLowerCase() === 'yjs');
+
+  await c.page.click('.cm-content');
+  await c.page.keyboard.type('# Yjs document\n\nFrom peer C. ');
+  await settle(c.page, 1200);
+
+  const d = await open(yjsUrl);
+  await d.page.waitForSelector('.cm-content', { timeout: 20_000 });
+  await settle(d.page, 2500);
+  check('yjs peer receives existing content', (await previewText(d.page)).includes('From peer C'));
+
+  await d.page.click('.cm-content');
+  await d.page.keyboard.press('Control+End');
+  await d.page.keyboard.type('And peer D.');
+  await settle(c.page, 1800);
+  check('yjs peers converge', (await previewText(c.page)) === (await previewText(d.page)));
+  check('yjs presence works', (await c.page.locator('.presence .avatar').count()) === 2);
+
+  /* ---------------------------------------------------- server ---------- */
+  console.log('\nserver');
+  const docId = yjsUrl.split('/d/')[1];
+  const exported = await (await fetch(`${BASE}/api/documents/${docId}/export`)).text();
+  check('server exports the document as markdown', exported.includes('Yjs document') && exported.includes('From peer C'));
+
+  const meta = await (await fetch(`${BASE}/api/documents/${docId}`)).json();
+  check('server derives the title from the first heading', meta.document.title === 'Yjs document', meta.document.title);
+
+  const snapshot = await fetch(`${BASE}/api/documents/${docId}/snapshot`);
+  check('snapshot endpoint serves CRDT state', snapshot.ok && Number(snapshot.headers.get('content-length') ?? 1) !== 0);
+
+  /* ---------------------------------------------------- errors ---------- */
+  // The offline section deliberately cuts the network, so its failed requests
+  // are expected rather than a defect.
+  const consoleErrors = pages
+    .flatMap((handle) => handle.errors)
+    .filter((text) => !/favicon|ERR_INTERNET_DISCONNECTED|Failed to load resource/i.test(text));
+  check('no console errors', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | '));
+} finally {
+  await browser.close();
+}
+
+const failed = results.filter((result) => !result.pass);
+console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
+process.exit(failed.length === 0 ? 0 : 1);
