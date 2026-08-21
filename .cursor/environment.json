@@ -1,0 +1,15 @@
+{
+  "name": "marks",
+  "install": "npm ci && npx playwright install chromium",
+  "terminals": [
+    {
+      "name": "dev",
+      "command": "npm run dev",
+      "description": "Runs the sync server (http://localhost:3000) and the Vite client dev server (http://localhost:5173) together. Open the client URL to use the app; it proxies /api and /collab to the server."
+    }
+  ],
+  "ports": [
+    { "name": "client", "port": 5173 },
+    { "name": "server", "port": 3000 }
+  ]
+}
