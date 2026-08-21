@@ -10,6 +10,7 @@
  *   node scripts/measure.mjs 400        # ~110 KB
  */
 import { chromium } from 'playwright';
+import { CHROME_LAUNCH_ARGS, launchEnv } from './harness/env.mjs';
 
 const BASE = process.env.MARKS_URL ?? 'http://localhost:3000';
 const CHROMIUM = process.env.CHROMIUM_PATH ?? undefined;
@@ -31,13 +32,10 @@ function document_(sections) {
   return out.join('\n');
 }
 
-const env = Object.fromEntries(
-  Object.entries(process.env).filter(([key]) => !/^(https?_proxy|all_proxy|no_proxy)$/i.test(key)),
-);
 const browser = await chromium.launch({
   executablePath: CHROMIUM,
-  args: ['--no-proxy-server', '--no-sandbox'],
-  env,
+  args: CHROME_LAUNCH_ARGS,
+  env: launchEnv(),
 });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 

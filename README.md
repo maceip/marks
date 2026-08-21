@@ -179,22 +179,30 @@ parse and render time, bytes on the wire, and the encoded size of the document.
 ## Tests
 
 ```bash
-npm run test:browser # clipboard, comments, context-menu, select-all, tab isolation
-npm run smoke        # drives two browsers against a running server
-npm run measure      # latency on a large generated document
+npm run test:browser     # clipboard, comments, context-menu, select-all, tab isolation
+npm run test:harness     # chrome discovery for the three platforms
+npm run harness:probe    # print Playwright / Puppeteer / agent-browser + Chrome paths
+npm run smoke            # Playwright two-peer / REST smoke
+npm run smoke:platforms  # portable glass checks on Playwright, Puppeteer, agent-browser
+npm run measure          # latency on a large generated document
 ```
 
-`npm run smoke` checks 37 behaviours end to end: rendering (math, diagrams,
-tables, highlighting), incremental repainting, scroll sync, the outline,
-convergence between two peers, presence, per-user undo, preview-to-source
-edits, offline editing and resync, both engines, and the server's REST surface
-— including that a deleted document stays deleted while someone still has it
-open, and that connecting the wrong CRDT protocol to a document is refused. It
-needs a build and a running server:
+`npm run smoke` is Playwright-only and checks the things that need two real
+browsers or the REST surface: rendering, incremental repainting, scroll sync,
+outline, Loro and Yjs convergence, presence, per-user undo, preview-to-source
+edits, offline resync, live-room delete, and engine-mismatch refusal.
+
+`npm run smoke:platforms` runs the same document-glass checks (select-all,
+context menu, comments, voice affordance, theme, offline status) on all three
+local platforms. How each platform is found, and which Chrome binary they
+launch, is in [docs/TEST-HARNESS.md](docs/TEST-HARNESS.md).
+
+Needs a build and a running server:
 
 ```bash
 npm run build && npm start &
 npm run smoke
+npm run smoke:platforms
 ```
 
 ## Known limits

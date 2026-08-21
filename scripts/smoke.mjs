@@ -8,8 +8,13 @@
  *
  *   npm run build && npm start &
  *   node scripts/smoke.mjs
+ *
+ * Playwright owns this two-peer / REST suite. The same glass checks run on
+ * Puppeteer and agent-browser via npm run smoke:platforms — see
+ * docs/TEST-HARNESS.md.
  */
 import { chromium } from 'playwright';
+import { CHROME_LAUNCH_ARGS, launchEnv } from './harness/env.mjs';
 
 const BASE = process.env.MARKS_URL ?? 'http://localhost:3000';
 const CHROMIUM = process.env.CHROMIUM_PATH ?? undefined;
@@ -21,15 +26,10 @@ const check = (name, pass, detail = '') => {
   console.log(`${pass ? '  ok  ' : ' FAIL '} ${name}${detail ? ` — ${detail}` : ''}`);
 };
 
-// Proxy settings in the environment must not intercept localhost.
-const env = Object.fromEntries(
-  Object.entries(process.env).filter(([key]) => !/^(https?_proxy|all_proxy|no_proxy)$/i.test(key)),
-);
-
 const browser = await chromium.launch({
   executablePath: CHROMIUM,
-  args: ['--no-proxy-server', '--no-sandbox'],
-  env,
+  args: CHROME_LAUNCH_ARGS,
+  env: launchEnv(),
 });
 
 const pages = [];

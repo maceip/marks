@@ -20,12 +20,21 @@
     "typecheck": "npm run typecheck --workspace=client && npm run typecheck --workspace=server",
     "clean": "rm -rf client/dist server/dist node_modules/.vite",
     "test:browser": "node --experimental-strip-types --test client/src/browser/*.test.ts",
+    "test:harness": "node --test scripts/harness/*.test.mjs",
+    "harness:probe": "node scripts/harness/probe.mjs",
     "smoke": "node scripts/smoke.mjs",
+    "smoke:surface": "node scripts/harness/run.mjs --driver=playwright",
+    "smoke:playwright": "node scripts/harness/run.mjs --driver=playwright",
+    "smoke:puppeteer": "node scripts/harness/run.mjs --driver=puppeteer",
+    "smoke:agent-browser": "node scripts/harness/run.mjs --driver=agent-browser",
+    "smoke:platforms": "node scripts/harness/run.mjs --driver=all",
     "measure": "node scripts/measure.mjs"
   },
   "devDependencies": {
+    "agent-browser": "^0.34.0",
     "concurrently": "^9.2.1",
     "playwright": "^1.62.1",
+    "puppeteer-core": "^25.8.0",
     "typescript": "^5.9.3"
   }
 }

@@ -206,8 +206,14 @@ The CRDT engines still own merge; this layer owns the glass.
 
 ```bash
 npm run test:browser
+npm run test:harness
+npm run harness:probe
 npm run typecheck
 # against a production build:
 npm run build && npm start &
-npm run smoke
+npm run smoke              # Playwright two-peer / REST
+npm run smoke:platforms    # Playwright + Puppeteer + agent-browser glass checks
 ```
+
+See [TEST-HARNESS.md](TEST-HARNESS.md) for how the three platforms are
+discovered and which Chrome they launch.
