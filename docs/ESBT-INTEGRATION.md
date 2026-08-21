@@ -239,7 +239,7 @@ Marks writes:
 
 An entry not refreshed within `ttlMs` disappears from `getAllStates`. Values are JSON-cloneable.
 
-Index-based presence is enough for the first cut. Stable cursor anchors by weight can be added later if needed.
+Index-based presence is enough for **cursors in v1**. Comments, suggestions, and follow-mode need weight-stable anchors — see [Identity and the Docs-shaped product](#7-identity-and-the-docs-shaped-product). Do not persist presence. Do not treat `siteId` as a person.
 
 ---
 
@@ -302,12 +302,331 @@ The smoke suite and a worker benchmark will assert:
 
 ---
 
-## Out of scope (marks implements)
+## Out of scope for the ESBT crate (marks implements)
+
+The CRDT does not speak HTTP, SQLite, or OAuth. Marks still has to *design* those correctly or the engine will look unfinished to users. The two places we have spent the least time — and the ones that decide whether this feels like Google Docs — are below.
 
 - WebSocket framing (`tag` byte + payload; see `client/src/collab/protocol.ts`)
-- Room lifecycle, SQLite, HTTP snapshot route
+- Room lifecycle and persistence (today: one process, one SQLite file)
 - CodeMirror two-way sync and remote cursor decorations
-- Auth, access control, engine migration from old Loro/Yjs blobs
+- Auth, ACL, sharing, comments, version history (today: a random name in `localStorage`)
+- Engine migration from old Loro/Yjs blobs
+
+---
+
+## Product gaps the API does not yet cover
+
+The contract above is enough to *type and merge*. It is not enough for the product users compare us to. Google Docs is not “a sequence CRDT in the browser.” It is three stacked systems:
+
+1. A **session** — live replica + WebSocket fan-out for one document.
+2. A **store** — snapshots and an operation log that survive process death.
+3. A **metadata plane** — who you are, who may see/edit/comment, share links, version history.
+
+Marks today collapses (1) and (2) into one Node process and skips (3) entirely. ESBT must not bake process-local or identity-less assumptions into weights, snapshots, or presence, or we cannot grow into that shape.
+
+Sources used while writing this: Google’s Jupiter/Wave-style Docs architecture (central session per document, ACL on the handshake, presence off the op log), [Y-Sweet](https://github.com/jamsocket/y-sweet) (S3 files + document tokens + session backends), [Hocuspocus Redis](https://tiptap.dev/docs/hocuspocus) (any-node-can-serve via pub/sub), [PartyKit / Durable Objects](https://docs.partykit.io/guides/scaling-partykit-servers-with-hibernation/) (one actor per room), [y-protocols awareness](https://github.com/yjs/y-protocols) (15 s refresh / 30 s expiry), Automerge-repo’s PeerId vs StorageId split, and Google Drive’s owner / editor / commenter / viewer + link roles.
+
+---
+
+## 6. The server is one process
+
+### What we actually have
+
+`LoroRoom.rooms` / the future ESBT room map is an in-memory `Map` on one PID. Persistence is `better-sqlite3` on a local file (`MARKS_DB`). Delete tombstones are a `Map` that lives 5 minutes and dies on restart. The HTTP upgrade path creates a document if the id is unknown — the URL *is* the capability. Presence is relayed only to sockets on **this** process.
+
+That is a correct prototype. It is not a Docs backend.
+
+### What breaks the moment there are two processes
+
+| Failure | Why |
+| --- | --- |
+| Split-brain rooms | Alice lands on process A, Bob on B. Each holds a full replica. They never exchange updates. SQLite last-write wins and silently drops a branch. |
+| Presence lies | Avatars and cursors only fan out inside one PID. The other tab looks empty. |
+| Restart resurrects deletes | Tombstones are RAM. A client reconnects after bounce, the unknown id is treated as “create,” the doc comes back. |
+| Cold replica is stale | Debounced persist (1.5 s / 10 s max). Kill -9 in that window loses the tail that clients still have locally — recoverable only if reconnect delta works *and* a room can import client state. It can today on one box; not if the next box has an older snapshot and no oplog sharing. |
+| No sticky routing | A load balancer that is “fair” is hostile. Live CRDT state is not interchangeable across PIDs unless you add a backplane. |
+| SQLite is not the document | A blob in a row cannot be handed to another region, snapshotted independently, or restored without taking the whole DB. Figma and Y-Sweet treat documents as **files** in object storage for this reason. |
+
+Google Docs does not put every document’s OT engine on every server. It pins a document to a **single serialisation point** (a shard / session) and keeps ACL and history in other stores. CRDTs relax the “server must transform,” but they do **not** relax “there should be one live room, or a defined merge path between rooms.”
+
+### What users think “the server” is
+
+They do not care about replicas. They care that:
+
+- Opening the same link on a laptop and a phone shows one document.
+- Closing the laptop lid does not invent a fork that later clobbers the phone.
+- Deleting a doc stays deleted after we deploy.
+- A viral doc with 40 viewers does not take down every other doc (one process = shared event loop, shared SQLite writer).
+- History and share settings survive a restart.
+
+Those are process and metadata problems, not ESBT weight problems.
+
+### Scaling shapes that work with a CRDT (pick one on purpose)
+
+We do **not** need Google’s OT sequencer. We do need an explicit story for “where is the live replica.”
+
+**A. Stay one process until it hurts.** Honest default. Cap concurrent rooms, persist more aggressively, make tombstones durable. Fine for a team tool. Write the rest of this section so we can leave A without rewriting ESBT.
+
+**B. Sticky session backend (Y-Sweet / Jamsocket model).** One live replica per document, scheduled onto a worker. Clients get a short-lived **document token** that includes the worker URL. Persistence is an S3-compatible object (snapshot + oplog), not a SQLite row. Horizontal scale is “more documents,” not “more copies of the same document.” This matches ESBT’s “server is a full peer” design.
+
+**C. Multi-node + pub/sub (Hocuspocus Redis).** Any node accepts the socket. Document updates and ephemeral frames go through Redis. Persistence is Postgres/S3. Harder: every node that has a socket must either hold a replica or be a dumb relay. Dumb relay is simpler but then **no node can answer a shallow snapshot** without reading storage. Full replica on every node that has a subscriber wastes RAM.
+
+**D. One actor per document (Durable Objects / PartyKit).** The platform *is* the sticky map. Hibernation drops RAM when idle; first message rehydrates from storage. y-partykit still cannot hibernate a live Yjs doc as of their current docs — expect the same constraint for ESBT (the tree wants to stay warm). Idle eviction we already have (`ROOM_IDLE_TIMEOUT_MS`); make it load from object storage, not only local SQLite.
+
+Recommendation: **A now, B as the target.** C is the fallback if we must sit behind a dumb load balancer. Do not run two marks processes against one SQLite file and hope.
+
+### Persistence that can move rooms
+
+Before a second process exists:
+
+1. **Durable tombstones.** `documents.deleted_at` (or a `tombstones` table), not a RAM `Map`. Unknown id + tombstone ⇒ 404 / WS 4404, never create.
+2. **Documents as objects.** Snapshot and oplog in object storage keyed by `docId`. SQLite (or Postgres) keeps *metadata only*: title, ACL, deleted_at, current snapshot etag.
+3. **Flush on evict and on SIGTERM.** Already sketched. Also flush when the scheduler steals the room.
+4. **Client is a peer, not a cache.** Offline edits must be importable by *whichever* process next owns the room (`MSG_SERVER_VV` + `export({ mode: 'update', from })`). That is why ESBT’s version vector cannot be process-local.
+5. **Idempotent create.** `PUT /documents/:id` with a create-token, not “unknown URL invents a row.” Share links and doc ids must be different namespaces (see identity).
+
+### What this implies for ESBT (so the crate does not trap us)
+
+The crate should assume **nothing** about a singleton process:
+
+- `siteId` is a replica, including the server’s. The server replica must use a **stable** `siteId` per document (or per deployment), stored with the snapshot — not `random()` on every boot. A new server siteId every restart bloats the version vector and the URL `?vv=`.
+- `export` / `import` are the only way rooms move. No hidden globals, no file locks, no `static Map` inside the crate.
+- Shallow snapshots must be enough to paint; full snapshots must be enough to emit deltas again after rehydrate.
+- Ephemeral state is **not** in the snapshot. A relocated room starts presence empty and waits for clients to `encodeAll()` — same as a refresh. That is correct.
+- Read-only connections: the room must be able to apply and relay **updates** while refusing **local** `transact` from a viewer socket. Enforcement is marks; the crate just should not require generate-ops to stay alive.
+- One document, many subscribers, one in-memory `EsbtDoc` on the owner process. Do not instantiate one `EsbtDoc` per socket.
+
+### Room API marks should grow (not in the crate)
+
+```ts
+interface RoomLease {
+  docId: string;
+  /** Stable server site id for this document. */
+  serverSiteId: string;
+  /** Object-store key / etag of the last durable snapshot. */
+  snapshotRef: string;
+}
+
+interface DocumentStore {
+  load(docId: string): Promise<{ meta: DocumentMeta; snapshot: Uint8Array | null }>;
+  save(docId: string, snapshot: Uint8Array, meta: { title: string; chars: number }): Promise<void>;
+  tombstone(docId: string): Promise<void>;
+  isTombstoned(docId: string): Promise<boolean>;
+}
+
+type Role = 'owner' | 'editor' | 'commenter' | 'viewer';
+
+interface CollabConnect {
+  docId: string;
+  /** Issued by the app server after an ACL check. Not the document id. */
+  token: string;
+}
+```
+
+Handshake: HTTP/WS presents `token` → marks resolves `{ docId, userId, role }` → if role is viewer/commenter, subscribe and relay ephemeral only → if editor/owner, also accept `MSG_UPDATE`. Revoking access closes those sockets (Docs does this when a link role changes). The CRDT never sees the token.
+
+---
+
+## 7. Identity and the Docs-shaped product
+
+This is the thinnest part of marks today, and the part users will judge first.
+
+### What we actually have
+
+`loadUser()` picks “Swift Otter” and a colour, stores it in `localStorage`. Each `EsbtDoc()` mints a new `siteId`. Presence keys are `${siteId}-cm-user`. The document URL is a secret: anyone who has it can read, write, and delete. There is no account, no owner, no viewer, no comment, no history named after a person.
+
+That is a **session costume**, not an identity. Reload in a private window and you are someone else. Two tabs of the same human are two peers. Undo is per replica, which is correct for CRDTs and confusing if we show one avatar.
+
+Google Docs users expect the opposite: I am me on every device; Alice is Alice; sharing is a dialog with roles; unsigned visitors are clearly guests; comments stick to sentences; File → Version history has names and times.
+
+### Four identifiers we must stop collapsing
+
+| Id | Lifetime | Purpose | Today |
+| --- | --- | --- | --- |
+| `userId` | Account (or durable anonymous cookie) | ACL, avatars, blame, @mentions | missing — adjective-animal |
+| `sessionId` | One browser tab / one WS | “which connection is typing” | conflated with siteId |
+| `siteId` | One `EsbtDoc` instance | Weight uniqueness, version vector, undo stack | new UUID every load |
+| `presenceKey` | Until TTL (30 s) | Cursor, selection, follow, idle | `${siteId}-cm-user` |
+
+Automerge-repo makes the same split as **PeerId** (tab/process) vs **StorageId** (durable disk). Yjs awareness is the presence row, *not* the clientID used in the CRDT. Docs adds a fourth thing we lack: a **Drive principal** (Google account or anonymous animal) that owns the ACL.
+
+**ESBT must keep `siteId` unique and unguessable.** Never set `siteId = userId`. Two devices of one user = two sites, one `userId`. Concurrent inserts from those devices need distinct σ or they collide at the last tie-break.
+
+### Proposed identity objects (marks)
+
+```ts
+type Principal =
+  | { kind: 'user'; userId: string; name: string; email?: string; photoUrl?: string }
+  | { kind: 'anonymous'; anonId: string; name: string }; // Docs “anonymous animals”
+
+type Role = 'owner' | 'editor' | 'commenter' | 'viewer';
+
+interface Actor {
+  principal: Principal;
+  sessionId: string;
+  siteId: string;      // this tab's ESBT replica
+  role: Role;
+  colorIndex: number;  // stable hash(userId | anonId), not random
+}
+
+interface SharePolicy {
+  /** Default: restricted. */
+  visibility: 'restricted' | 'link' | 'public';
+  linkRole?: Exclude<Role, 'owner'>;
+  /** Principal → role. Owner is unique. */
+  grants: Array<{ principalId: string; role: Role }>;
+  editorsCanShare: boolean;
+  viewersCanCopy: boolean;
+}
+```
+
+Colour and display name come from `principal`, not from `siteId`. Presence still keys by `sessionId` (two tabs → two carets, **one** avatar in the stack, like Docs). The presence bar today keys on `peer.id` (= site). Change it to `principal.id`.
+
+### What “Google Docs–like” means as a checklist
+
+Users will assume all of this exists. None of it is in ESBT. None of it is in marks.
+
+**Sharing**
+
+- Owner / Editor / Commenter / Viewer, matching [Drive roles](https://developers.google.com/drive/api/guides/ref-roles).
+- Restricted (named people) vs anyone-with-the-link (role on the link) vs public.
+- The **share link is not the document id**. The doc id stays unguessable; the link is a rotatable capability. Y-Sweet’s pattern: app server checks ACL, mints a short-lived **client token**, client opens WS with that token only.
+- Revoke or downgrade a role ⇒ close or demote live sockets. Do not wait for TTL.
+- Editors-can-share and viewers-can-copy are owner flags, not CRDT flags.
+- Unsigned visitors: allow, but show as a generated animal, persist `anonId` in a first-party cookie, and never make them owner. Docs does this; our adjective-animal is accidentally the same idea with no disclosure that it is not an account.
+
+**Presence (separate channel from the document)**
+
+Docs, y-protocols, and every system-design writeup of Docs put cursors on a **best-effort pub/sub**, not in the op log. Cursor traffic is ~10× edit traffic; mixing it into ESBT snapshots would bloat storage and `?vv=`.
+
+Keep `EphemeralStore`. Grow the payload:
+
+```ts
+interface EsbtPresenceState {
+  userId?: string;         // principal, for collapsing tabs
+  sessionId: string;
+  name: string;
+  colorClassName: string;
+  photoUrl?: string;
+  role?: Role;
+  from?: number;           // v1: UTF-16. v2: see anchors
+  to?: number;
+  followSessionId?: string;
+  idle?: boolean;          // no input for ~60 s
+  device?: 'web' | 'mobile';
+}
+```
+
+y-protocols: re-broadcast at least every 15 s, drop after 30 s. We already use 30 s TTL. Add the heartbeat; do not rely on “they will move the caret.”
+
+Follow-mode (“watch Alice”) is a local UI choice plus her `sessionId`. It is not a CRDT event.
+
+**Cursors vs comments: indices are not enough**
+
+Index presence is fine for a caret that is rewritten 10 times a second. It is **wrong** for a comment that must survive an insert above it. The paper’s weights exist for this. v2 presence/comments should carry:
+
+```ts
+interface TextAnchor {
+  /** Weight of the start item, plus offset inside a multi-char item if we ever store runs. */
+  start: { weight: string; offset: number };
+  end: { weight: string; offset: number };
+}
+```
+
+Marks can keep publishing UTF-16 `from`/`to` for the caret layer. The ESBT crate should expose `indexToAnchor(i)` / `anchorToIndex(a)` as soon as comments exist. Without that we will fake comments as markdown `<!-- -->` and they will drift.
+
+**Comments and suggestions (commenter role is otherwise meaningless)**
+
+Drive’s Commenter cannot change the file and **can** attach discussions to ranges. Suggestions are proposed inserts/deletes that only Owner/Editor accept.
+
+Two implementation paths, in order of honesty:
+
+1. **Side table** (ship first). `comments(id, docId, authorId, anchor, body, created_at, resolved)`. Fan-out on the ephemeral channel or a `MSG_COMMENT` frame. Anchors use weights. Not in the ESBT snapshot. Survives like metadata.
+2. **CRDT layer** (later). A second ESBT sequence or a map of marks (Peritext-style) if we move off markdown-source-as-truth. Suggestions become ops that are not in the visible text until accept, at which point they become normal INS.
+
+Do not encode comments as characters in the markdown CRDT. They will show up in export, break hashes, and collide with user content.
+
+**Version history and blame**
+
+Docs: File → See version history, named, time-grouped, restore. Users will look for it the first week.
+
+CRDT snapshots are not a UI history. A restore that “imports an old snapshot” on a live room **merges** (our `import` rule) and will not rewind collaborators. Restore must be a **new** transaction: compute a diff from current `getText()` to the historical string, `setText`/`replaceRange` as the acting user, so the CRDT moves forward.
+
+To show names we must persist authorship **outside** `siteId`:
+
+```ts
+interface AuthoredOp {
+  site: string;
+  seq: number;
+  userId: string;      // principal at generate time
+  sessionId: string;
+  at: number;          // wall clock, display only, not ordering
+}
+```
+
+The ESBT crate does not need wall clocks in the order. Marks should store a sidecar log `(docId, site, seq) → userId` when it accepts a local or authenticated remote op. Blame = map each live character’s creating `(site, seq)` through that log. If we skip the sidecar, history is a pile of anonymous site ids after every refresh.
+
+**Undo vs identity**
+
+Undo stays per `siteId` (this tab). That matches Docs (each client undoes its own typing) and the crate contract. Do **not** undo another device of the same `userId` — that is “revert my other phone” and surprises people. Version history is how you revert *people*.
+
+**Privacy**
+
+Presence can leak emails and photos to everyone on the socket. Viewer-only links should send `{ name, color }` only. Commenter/editor can see emails if the owner’s org policy says so. The crate must not require an email in `EphemeralStore`.
+
+### Handshake and enforcement (marks)
+
+```
+Browser                    App server                 Room process
+   |-- POST /api/session -->|
+   |                    ACL + mint token
+   |<-- { token, role, me }-|
+   |-- WS /collab/esbt/:id?token=... -->|
+                            |-- verify token -------->|
+                            |                    bind Actor
+                            |                    reject UPDATE if role < editor
+```
+
+No token on the current `/collab/loro/:id` path is why “anyone with the URL is an owner.” Fix that before the second process, or every scaled replica is a public writable replica.
+
+Rate limits belong here too: Docs-scale writeups budget ~100 concurrent *editors* per document and treat presence as cheaper. Cap `MSG_UPDATE` per actor; do not cap heartbeat.
+
+### Suggested schema (metadata plane)
+
+```sql
+users          (id, name, email, created_at)
+anonymous      (id, display_name, created_at)
+documents      (id, owner_id, title, snapshot_ref, chars, created_at, updated_at, deleted_at)
+shares         (doc_id, principal_id, principal_kind, role)
+link_grants    (doc_id, token_hash, role, created_at, revoked_at)
+op_authors     (doc_id, site, seq, user_id, session_id, at)
+comments       (id, doc_id, author_id, anchor, body, resolved, created_at)
+```
+
+SQLite can grow these tables on one box. The document **bytes** should leave SQLite as soon as we care about a second process.
+
+### What we ask of the ESBT expert (identity-adjacent)
+
+Not auth. These hooks, so marks can attach a principal without forking the algorithm:
+
+1. Stable, injectable `siteId` (already on `EsbtConfig`).
+2. `indexToAnchor` / `anchorToIndex` when they can; until then, document that items are addressable by `weight` string.
+3. Do not put display names, roles, or emails in weights or snapshots.
+4. Allow a server replica to exist with `subscribeLocalUpdates` unused (viewers; relay-only nodes).
+5. Keep presence out of `export`.
+6. Optional: let `subscribeLocalUpdates` payloads be tagged with an opaque `meta: Uint8Array` so marks can piggy-back `userId` without a parallel channel. If that is ugly, we keep `op_authors` on the server when the frame arrives — also fine.
+
+### Shipping order
+
+1. Durable tombstones + stop creating docs on unknown WS ids.
+2. Real `userId` (even a signed-in-dev user) and hash colours; collapse presence by user.
+3. Token on WS; roles viewer vs editor (commenter can wait one release).
+4. Share dialog: restricted vs link, rotate link.
+5. Sidecar `op_authors` + a read-only history panel (named snapshots, not true rewind).
+6. Weight anchors + comments table.
+7. Move snapshot blobs to object storage; then session-backend rooms.
+
+Steps 1–4 change whether this is a toy. Steps 5–7 are what people mean by Google Docs. ESBT v1 does not block 1–4. It blocks 6 if weights stay private to the crate.
 
 ---
 
