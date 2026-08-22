@@ -101,10 +101,10 @@ fn session_cookie_value(headers: &HeaderMap) -> Option<String> {
     let cookies = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
     for pair in cookies.split(';') {
         let pair = pair.trim();
-        if let Some(value) = pair.strip_prefix(SESSION_COOKIE_NAME) {
-            if let Some(value) = value.strip_prefix('=') {
-                return Some(format!("{SESSION_COOKIE_NAME}={value}"));
-            }
+        if let Some(value) = pair.strip_prefix(SESSION_COOKIE_NAME)
+            && let Some(value) = value.strip_prefix('=')
+        {
+            return Some(format!("{SESSION_COOKIE_NAME}={value}"));
         }
     }
     None
@@ -129,10 +129,9 @@ pub fn reject_foreign_origin(app: &App, headers: &HeaderMap) -> ApiResult<()> {
     if let Some(origin) = headers
         .get(axum::http::header::ORIGIN)
         .and_then(|value| value.to_str().ok())
+        && origin != app.config.origin
     {
-        if origin != app.config.origin {
-            return Err(ApiError::forbidden());
-        }
+        return Err(ApiError::forbidden());
     }
     Ok(())
 }

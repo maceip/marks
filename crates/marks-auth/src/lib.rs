@@ -77,8 +77,8 @@ pub use id::{
 pub use pairing::{
     AuthorizedBootstrap, AuthorizedFinalize, AuthorizedPairing, ControllerBootstrap,
     ControllerRecord, DeviceGrant, PairingError, PairingRecord, authorize_controller_bootstrap,
-    authorize_pairing, authorize_pairing_finalize, authorize_pairing_request,
-    mark_pairing_consumed, pairing_matches_pending, pairing_secret_hash,
+    authorize_pairing, authorize_pairing_finalize, authorize_pairing_inspect,
+    authorize_pairing_request, mark_pairing_consumed, pairing_matches_pending, pairing_secret_hash,
 };
 pub use pending::{
     PendingDeviceError, PendingDeviceRecord, bind_pending_device, require_live_pending_device,

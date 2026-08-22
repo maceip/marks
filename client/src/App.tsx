@@ -1,7 +1,7 @@
 import type { EditorView } from '@codemirror/view';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ensureServiceCaller, getActiveCaller, type ServiceCaller } from './auth/caller';
 import { createMarksDocumentAccess } from './auth/room-access';
-import { loadScratchCredential } from './auth/scratch';
 import { loadUser } from './collab/user';
 import type { AppDialog, ReviewSurface } from './components/overlays/AppOverlays';
 import { ContextMenu } from './components/overlays/ContextMenu';
@@ -74,15 +74,27 @@ export function App() {
   const phone = posture.phone;
   const overlayNavigation = posture.overlayNavigation;
   const user = useMemo(loadUser, []);
-  const documentAccess = useMemo(() => {
-    if (UI_DATA_MODE !== 'service') return null;
-    return createMarksDocumentAccess({
-      authority: () => {
-        const credential = loadScratchCredential(sessionStorage);
-        return credential ? { kind: 'scratch', credential } : { kind: 'session' };
-      },
-    });
+  const [serviceCaller, setServiceCaller] = useState<ServiceCaller | null>(null);
+  useEffect(() => {
+    if (UI_DATA_MODE !== 'service') return;
+    let cancelled = false;
+    void ensureServiceCaller()
+      .then((caller) => {
+        if (!cancelled) setServiceCaller(caller);
+      })
+      .catch(() => {
+        if (!cancelled) setServiceCaller(null);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
+  const documentAccess = useMemo(() => {
+    if (UI_DATA_MODE !== 'service' || !serviceCaller) return null;
+    return createMarksDocumentAccess({
+      authority: () => getActiveCaller() ?? serviceCaller,
+    });
+  }, [serviceCaller]);
 
   const [mode, setMode] = useState<ViewMode>(initialMode);
   const [sidebarOpen, setSidebarOpen] = useState(

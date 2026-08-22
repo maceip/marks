@@ -1,3 +1,15 @@
+# What this workflow is for:
+#   Fail a PR before merge when the workspace does not compile, format, typecheck,
+#   or pass the unit/integration suites that run without a browser or a running
+#   server. That is the set that caught main going red when marks-server drifted
+#   off marks-auth.
+#
+# What it is not:
+#   `npm run test:harness` is helper-unit tests (chrome discovery, budget parsers,
+#   wait-for-server). It is not `smoke` / `smoke:platforms`. Those need a running
+#   app and stay local until service-mode room bytes exist.
+#   Floating `stable` is forbidden here: local rust-version is 1.88; Actions
+#   `stable` was 1.98 and turned Clippy style into a false product failure.
 name: CI
 
 on:
@@ -7,6 +19,9 @@ on:
 
 permissions:
   contents: read
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
   test:
@@ -24,18 +39,38 @@ jobs:
             exit 1
           fi
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.88.0
         with:
-          components: clippy,rustfmt
+          components: clippy, rustfmt
+
+      - name: Refuse rustc drift from rust-version
+        run: |
+          rustc -vV
+          cargo -vV
+          pinned="$(sed -n 's/^rust-version = "\([^"]*\)"/\1/p' Cargo.toml)"
+          release="$(rustc -vV | awk '/^release:/{print $2}')"
+          echo "Cargo.toml rust-version=${pinned} rustc=${release}"
+          if [ -z "${pinned}" ]; then
+            echo "workspace rust-version is missing from Cargo.toml" >&2
+            exit 1
+          fi
+          case "${release}" in
+            "${pinned}"|"${pinned}".*) ;;
+            *)
+              echo "CI rustc ${release} does not match workspace rust-version ${pinned}." >&2
+              echo "Pin .github/workflows/ci.yml and rust-toolchain.toml together." >&2
+              exit 1
+              ;;
+          esac
 
       - name: Rust format
         run: cargo fmt --all --check
 
-      - name: Rust auth tests
+      - name: Rust workspace tests
         run: cargo test --workspace --locked
 
-      - name: Rust auth lint
+      - name: Rust workspace lint
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Setup Node.js v22
@@ -62,8 +97,11 @@ jobs:
       - name: Browser auth protocol tests
         run: npm run test:auth
 
-      - name: Harness unit tests
+      - name: Harness helper unit tests
         run: npm run test:harness
 
       - name: Production client build
         run: npm run build
+
+      - name: Production UI budgets
+        run: npm run check:ui-budgets

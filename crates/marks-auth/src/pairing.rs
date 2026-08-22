@@ -163,6 +163,25 @@ pub fn pairing_secret_hash(secret: &[u8]) -> [u8; 32] {
     bearer_secret_hash(secret)
 }
 
+/// Phone confirmation: the fragment secret proves the scanner holds the QR
+/// payload. A guessed pairing ID without the secret is indistinguishable.
+pub fn authorize_pairing_inspect(
+    pairing: &PairingRecord,
+    presented_secret: &[u8],
+    now_ms: u64,
+) -> Result<(), PairingError> {
+    if pairing.consumed_at_ms.is_some() {
+        return Err(PairingError::Consumed);
+    }
+    if now_ms >= pairing.expires_at_ms {
+        return Err(PairingError::Expired);
+    }
+    if !bearer_matches(presented_secret, PAIRING_SECRET_BYTES, &pairing.secret_hash) {
+        return Err(PairingError::InvalidSecret);
+    }
+    Ok(())
+}
+
 fn require_fresh_pairing_secret(
     pairing: &PairingRecord,
     presented_secret: &[u8],
@@ -694,6 +713,22 @@ mod tests {
                 11_000,
             ),
             Err(PairingError::GrantMismatch)
+        );
+    }
+
+    #[test]
+    fn pairing_inspect_requires_the_live_secret() {
+        let fixture = fixture();
+        authorize_pairing_inspect(&fixture.pairing, &fixture.secret, 11_000).unwrap();
+        assert_eq!(
+            authorize_pairing_inspect(&fixture.pairing, &[9_u8; 32], 11_000),
+            Err(PairingError::InvalidSecret)
+        );
+        let mut consumed = fixture.pairing.clone();
+        consumed.consumed_at_ms = Some(11_000);
+        assert_eq!(
+            authorize_pairing_inspect(&consumed, &fixture.secret, 11_000),
+            Err(PairingError::Consumed)
         );
     }
 }

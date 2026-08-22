@@ -3,7 +3,9 @@
 This is the ownership and integration contract for the Marks browser product.
 It deliberately stops at the service boundary: persistence, admission, sync,
 identity, and review services may change underneath the UI as long as their
-client-facing interfaces remain stable.
+client-facing interfaces remain stable. Those interfaces are written down in
+[`UI-SERVICE-CONTRACT.md`](UI-SERVICE-CONTRACT.md). Presentation work should
+not invent new HTTP, cookie, or room-admission rules.
 
 ## One canonical UI
 
@@ -88,9 +90,9 @@ service adapters use.
 
 | Contract | Local implementation now | Service implementation |
 | --- | --- | --- |
-| `DocumentRepository` | Local catalog, create, template, rename, duplicate, delete, and subscriptions | Existing HTTP catalog/document adapter |
-| `CollabSession` | `LocalSession`, persistent text, CodeMirror sync, undo, stats, and text subscriptions | ESBT collaboration session |
-| `ReviewRepository` | Local comments, resolve/reopen, named versions, preview, and restore | Future review/history service adapter |
+| `DocumentRepository` | Local catalog, create, template, rename, duplicate, delete, and subscriptions | `/v1/documents` via `client/src/lib/api.ts` — see [`UI-SERVICE-CONTRACT.md`](UI-SERVICE-CONTRACT.md) §6.5 |
+| `CollabSession` | `LocalSession`, persistent text, CodeMirror sync, undo, stats, and text subscriptions | Ticket + `/collab/esbt/{id}` after the Rust/Wasm binding; do not transcode |
+| `ReviewRepository` | Local comments, resolve/reopen, named versions, preview, and restore | No review HTTP service yet; keep the local adapter |
 
 Local mode is the default. Set `VITE_MARKS_DATA_MODE=service` at build time when
 the document service is ready. Components do not branch on transport details;

@@ -17,7 +17,7 @@ use marks_auth::{
     AuthenticatedSession, DocumentAction, DocumentId, DocumentOwner, DocumentRole, EsbtSiteId,
     LinkGrantRecord, PrincipalId, ScratchId, TicketId, authorize_document_action,
     authorize_link_grant_role, bearer_secret_hash, encode_bearer_secret, issue_document_ticket,
-    issue_scratch_document_ticket, redeem_link_grant, require_principal_document,
+    issue_scratch_document_ticket, owner_acl_row, redeem_link_grant, require_principal_document,
     require_scratch_document, resolve_document_role,
 };
 use rusqlite::{Connection, params};
@@ -33,13 +33,17 @@ pub enum Caller {
 }
 
 fn caller(app: &App, headers: &HeaderMap) -> ApiResult<Caller> {
+    // Protocol: session cookies are checked before any durable principal
+    // operation. A leftover MarksScratch header from the UI first-paint
+    // path must not hide a live rotating session.
+    if let Ok(cookie) = guard::cookie_session(app, headers) {
+        return Ok(Caller::Principal(cookie.session));
+    }
     if headers.contains_key(header::AUTHORIZATION) {
         let scratch = guard::scratch_caller(app, headers)?;
-        Ok(Caller::Scratch(scratch.authority.scratch_id))
-    } else {
-        let cookie = guard::cookie_session(app, headers)?;
-        Ok(Caller::Principal(cookie.session))
+        return Ok(Caller::Scratch(scratch.authority.scratch_id));
     }
+    Err(ApiError::unauthenticated())
 }
 
 #[derive(Serialize)]
@@ -168,6 +172,19 @@ pub async fn create(
             ],
         )?;
         let id = DocumentId::new(id.clone()).map_err(|_| ApiError::internal())?;
+        if let Caller::Principal(session) = &caller {
+            let acl = owner_acl_row(id.clone(), session.principal_id().clone());
+            conn.execute(
+                "INSERT INTO document_acl (document_id, principal_id, role, granted_by, created_at)
+                 VALUES (?1, ?2, ?3, ?2, ?4)",
+                params![
+                    acl.document_id.as_str(),
+                    acl.principal_id.as_str(),
+                    store::role_to_str(acl.role),
+                    store::ms(now),
+                ],
+            )?;
+        }
         load_live_document(conn, &id)
     })?;
     Ok((StatusCode::CREATED, Json(json!({ "document": meta(&row) }))).into_response())
@@ -299,6 +316,19 @@ pub async fn duplicate(
             ],
         )?;
         let id = DocumentId::new(new_document.clone()).map_err(|_| ApiError::internal())?;
+        if let Caller::Principal(session) = &caller {
+            let acl = owner_acl_row(id.clone(), session.principal_id().clone());
+            conn.execute(
+                "INSERT INTO document_acl (document_id, principal_id, role, granted_by, created_at)
+                 VALUES (?1, ?2, ?3, ?2, ?4)",
+                params![
+                    acl.document_id.as_str(),
+                    acl.principal_id.as_str(),
+                    store::role_to_str(acl.role),
+                    store::ms(now),
+                ],
+            )?;
+        }
         load_live_document(conn, &id)
     })?;
     Ok((StatusCode::CREATED, Json(json!({ "document": meta(&row) }))).into_response())
@@ -346,10 +376,10 @@ async fn document_text(app: &App, caller: &Caller, document_id: &DocumentId) -> 
     app.db.read(|conn| {
         let row = load_live_document(conn, document_id)?;
         let role = resolve_caller_role(conn, caller, &row)?;
-        if let Some(role) = role {
-            if !authorize_document_action(role, DocumentAction::Export) {
-                return Err(ApiError::forbidden());
-            }
+        if let Some(role) = role
+            && !authorize_document_action(role, DocumentAction::Export)
+        {
+            return Err(ApiError::forbidden());
         }
         Ok(())
     })?;
@@ -637,10 +667,10 @@ pub async fn share_put(
         if store::load_principal(conn, &grantee)?.is_none() {
             return Err(ApiError::not_found());
         }
-        if let DocumentOwner::Principal(owner) = &row.record.owner {
-            if owner == &grantee {
-                return Err(ApiError::conflict());
-            }
+        if let DocumentOwner::Principal(owner) = &row.record.owner
+            && owner == &grantee
+        {
+            return Err(ApiError::conflict());
         }
         let now = store::ms(now_ms());
         conn.execute(
@@ -838,10 +868,10 @@ pub async fn link_redeem(
             .find_map(|grant| redeem_link_grant(grant, &token, &document_id, now).ok())
             .ok_or_else(ApiError::unauthenticated)?;
         // The document owner already outranks any link role.
-        if let DocumentOwner::Principal(owner) = &row.record.owner {
-            if owner == cookie.session.principal_id() {
-                return Ok(DocumentRole::Owner);
-            }
+        if let DocumentOwner::Principal(owner) = &row.record.owner
+            && owner == cookie.session.principal_id()
+        {
+            return Ok(DocumentRole::Owner);
         }
         let existing = store::load_acl(conn, &document_id)?
             .into_iter()
