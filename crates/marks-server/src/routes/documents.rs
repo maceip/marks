@@ -1,0 +1,921 @@
+//! `/v1/documents` and `/v1/scratch/documents`: the product document surface.
+//! Every handler resolves authority through `marks-auth` validators first;
+//! unknown, deleted, and unauthorized documents are one indistinguishable 404.
+
+use crate::app::App;
+use crate::error::{ApiError, ApiResult};
+use crate::guard;
+use crate::ids::{new_id, new_secret, now_ms};
+use crate::room::Control;
+use crate::store;
+use axum::Json;
+use axum::extract::{Path, State};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use base64ct::{Base64UrlUnpadded, Encoding};
+use marks_auth::{
+    AuthenticatedSession, DocumentAction, DocumentId, DocumentOwner, DocumentRole, EsbtSiteId,
+    LinkGrantRecord, PrincipalId, ScratchId, TicketId, authorize_document_action,
+    authorize_link_grant_role, bearer_secret_hash, encode_bearer_secret, issue_document_ticket,
+    issue_scratch_document_ticket, redeem_link_grant, require_principal_document,
+    require_scratch_document, resolve_document_role,
+};
+use rusqlite::{Connection, params};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::sync::Arc;
+
+/// The caller's document authority: a rotating principal session or a live
+/// scratch capability. They are different kinds of authority, never merged.
+pub enum Caller {
+    Principal(AuthenticatedSession),
+    Scratch(ScratchId),
+}
+
+fn caller(app: &App, headers: &HeaderMap) -> ApiResult<Caller> {
+    if headers.contains_key(header::AUTHORIZATION) {
+        let scratch = guard::scratch_caller(app, headers)?;
+        Ok(Caller::Scratch(scratch.authority.scratch_id))
+    } else {
+        let cookie = guard::cookie_session(app, headers)?;
+        Ok(Caller::Principal(cookie.session))
+    }
+}
+
+#[derive(Serialize)]
+struct DocumentMeta {
+    id: String,
+    title: String,
+    engine: String,
+    chars: u64,
+    created_at: u64,
+    updated_at: u64,
+}
+
+fn meta(row: &store::DocumentMetaRow) -> DocumentMeta {
+    DocumentMeta {
+        id: row.record.id.as_str().to_owned(),
+        title: row.title.clone(),
+        engine: row.engine.clone(),
+        chars: row.chars,
+        created_at: row.created_at_ms,
+        updated_at: row.updated_at_ms,
+    }
+}
+
+/// Resolve the caller's role on a live document, failing closed to 404.
+fn resolve_caller_role(
+    conn: &Connection,
+    caller: &Caller,
+    row: &store::DocumentMetaRow,
+) -> ApiResult<Option<DocumentRole>> {
+    match caller {
+        Caller::Principal(session) => {
+            let acl = store::load_acl(conn, &row.record.id)?;
+            match resolve_document_role(&row.record, session.principal_id(), &acl) {
+                Ok(role) => Ok(Some(role)),
+                Err(_) => Err(ApiError::not_found()),
+            }
+        }
+        Caller::Scratch(scratch_id) => {
+            require_scratch_document(&row.record, scratch_id).map_err(|_| ApiError::not_found())?;
+            Ok(None)
+        }
+    }
+}
+
+fn load_live_document(
+    conn: &Connection,
+    document_id: &DocumentId,
+) -> ApiResult<store::DocumentMetaRow> {
+    let row = store::load_document(conn, document_id)?.ok_or_else(ApiError::not_found)?;
+    if row.record.deleted_at_ms.is_some() {
+        return Err(ApiError::not_found());
+    }
+    Ok(row)
+}
+
+pub async fn list(State(app): State<Arc<App>>, headers: HeaderMap) -> ApiResult<Response> {
+    let caller = caller(&app, &headers)?;
+    let documents = app.db.read(|conn| {
+        let mut statement = match &caller {
+            Caller::Scratch(_) => conn.prepare(
+                "SELECT id FROM documents
+                 WHERE scratch_id = ?1 AND deleted_at IS NULL ORDER BY updated_at DESC",
+            )?,
+            Caller::Principal(_) => conn.prepare(
+                "SELECT DISTINCT d.id FROM documents d
+                 LEFT JOIN document_acl a
+                    ON a.document_id = d.id AND a.revoked_at IS NULL
+                 WHERE d.deleted_at IS NULL
+                   AND (d.owner_principal_id = ?1 OR a.principal_id = ?1)
+                 ORDER BY d.updated_at DESC",
+            )?,
+        };
+        let key = match &caller {
+            Caller::Scratch(scratch) => scratch.as_str().to_owned(),
+            Caller::Principal(session) => session.principal_id().as_str().to_owned(),
+        };
+        let ids: Vec<String> = statement
+            .query_map(params![key], |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
+        let mut documents = Vec::new();
+        for id in ids {
+            let id = DocumentId::new(id).map_err(|_| ApiError::internal())?;
+            if let Some(row) = store::load_document(conn, &id)? {
+                documents.push(meta(&row));
+            }
+        }
+        Ok(documents)
+    })?;
+    Ok(Json(json!({ "documents": documents })).into_response())
+}
+
+#[derive(Deserialize, Default)]
+pub struct CreateBody {
+    pub title: Option<String>,
+}
+
+pub async fn create(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    body: Option<Json<CreateBody>>,
+) -> ApiResult<Response> {
+    let caller = caller(&app, &headers)?;
+    if matches!(caller, Caller::Principal(_)) {
+        guard::require_same_origin(&app, &headers)?;
+    }
+    let title = body.and_then(|Json(body)| body.title);
+    let now = now_ms();
+    let id = new_id("document");
+    let row = app.db.tx(|conn| {
+        let (scratch_id, owner_id) = match &caller {
+            Caller::Scratch(scratch) => (Some(scratch.as_str()), None),
+            Caller::Principal(session) => (None, Some(session.principal_id().as_str())),
+        };
+        conn.execute(
+            "INSERT INTO documents
+                (id, scratch_id, owner_principal_id, title, title_explicit, engine, chars,
+                 auth_epoch, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'esbt', 0, 1, ?6, ?6)",
+            params![
+                id,
+                scratch_id,
+                owner_id,
+                title.as_deref().unwrap_or("Untitled"),
+                i64::from(title.is_some()),
+                store::ms(now),
+            ],
+        )?;
+        let id = DocumentId::new(id.clone()).map_err(|_| ApiError::internal())?;
+        load_live_document(conn, &id)
+    })?;
+    Ok((StatusCode::CREATED, Json(json!({ "document": meta(&row) }))).into_response())
+}
+
+pub async fn get(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let caller = caller(&app, &headers)?;
+    let document_id = DocumentId::new(id).map_err(|_| ApiError::not_found())?;
+    let row = app.db.read(|conn| {
+        let row = load_live_document(conn, &document_id)?;
+        resolve_caller_role(conn, &caller, &row)?;
+        Ok(row)
+    })?;
+    let connections = app
+        .rooms
+        .read(&document_id)
+        .await
+        .map(|read| read.connections)
+        .unwrap_or(0);
+    Ok(Json(json!({ "document": meta(&row), "connections": connections })).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct RenameBody {
+    pub title: String,
+}
+
+pub async fn rename(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<RenameBody>,
+) -> ApiResult<Response> {
+    let caller = caller(&app, &headers)?;
+    if matches!(caller, Caller::Principal(_)) {
+        guard::require_same_origin(&app, &headers)?;
+    }
+    let document_id = DocumentId::new(id).map_err(|_| ApiError::not_found())?;
+    if body.title.trim().is_empty() || body.title.len() > 512 {
+        return Err(ApiError::bad_request("invalid title"));
+    }
+    let row = app.db.tx(|conn| {
+        let row = load_live_document(conn, &document_id)?;
+        require_owner(conn, &caller, &row)?;
+        conn.execute(
+            "UPDATE documents SET title = ?2, title_explicit = 1, updated_at = ?3 WHERE id = ?1",
+            params![document_id.as_str(), body.title.trim(), store::ms(now_ms())],
+        )?;
+        load_live_document(conn, &document_id)
+    })?;
+    Ok(Json(json!({ "document": meta(&row) })).into_response())
+}
+
+/// Rename, delete, share management: owner authority only. Scratch authority
+/// owns exactly its own private documents.
+fn require_owner(
+    conn: &Connection,
+    caller: &Caller,
+    row: &store::DocumentMetaRow,
+) -> ApiResult<()> {
+    match caller {
+        Caller::Principal(session) => {
+            let role = resolve_caller_role(conn, caller, row)?.ok_or_else(ApiError::not_found)?;
+            if role != DocumentRole::Owner {
+                return Err(ApiError::forbidden());
+            }
+            require_principal_document(&row.record, session.principal_id())
+                .map_err(|_| ApiError::not_found())
+        }
+        Caller::Scratch(scratch_id) => {
+            require_scratch_document(&row.record, scratch_id).map_err(|_| ApiError::not_found())
+        }
+    }
+}
+
+pub async fn duplicate(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let caller = caller(&app, &headers)?;
+    if matches!(caller, Caller::Principal(_)) {
+        guard::require_same_origin(&app, &headers)?;
+    }
+    let document_id = DocumentId::new(id).map_err(|_| ApiError::not_found())?;
+    let text = document_text(&app, &caller, &document_id).await?;
+
+    let mut seed = esbt::Document::new(
+        EsbtSiteId::SERVER.to_engine_site(),
+        esbt::ReplicaConfig::default(),
+        app.limits.clone(),
+    )
+    .map_err(|_| ApiError::internal())?;
+    if !text.is_empty() {
+        seed.insert(0, &text, None)
+            .map_err(|_| ApiError::internal())?;
+    }
+    let snapshot = seed
+        .export_full_snapshot()
+        .map_err(|_| ApiError::internal())?;
+
+    let now = now_ms();
+    let new_document = new_id("document");
+    let row = app.db.tx(|conn| {
+        let source = load_live_document(conn, &document_id)?;
+        resolve_caller_role(conn, &caller, &source)?;
+        let (scratch_id, owner_id) = match &caller {
+            Caller::Scratch(scratch) => (Some(scratch.as_str()), None),
+            Caller::Principal(session) => (None, Some(session.principal_id().as_str())),
+        };
+        conn.execute(
+            "INSERT INTO documents
+                (id, scratch_id, owner_principal_id, title, title_explicit, engine, chars,
+                 auth_epoch, snapshot, snapshot_revision, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'esbt', ?6, 1, ?7, 0, ?8, ?8)",
+            params![
+                new_document,
+                scratch_id,
+                owner_id,
+                format!("{} (copy)", source.title),
+                i64::from(source.title_explicit),
+                store::ms(text.encode_utf16().count() as u64),
+                snapshot,
+                store::ms(now),
+            ],
+        )?;
+        let id = DocumentId::new(new_document.clone()).map_err(|_| ApiError::internal())?;
+        load_live_document(conn, &id)
+    })?;
+    Ok((StatusCode::CREATED, Json(json!({ "document": meta(&row) }))).into_response())
+}
+
+pub async fn delete(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let caller = caller(&app, &headers)?;
+    if matches!(caller, Caller::Principal(_)) {
+        guard::require_same_origin(&app, &headers)?;
+    }
+    let document_id = DocumentId::new(id).map_err(|_| ApiError::not_found())?;
+    app.db.tx(|conn| {
+        let row = load_live_document(conn, &document_id)?;
+        require_owner(conn, &caller, &row)?;
+        let now = store::ms(now_ms());
+        // A durable tombstone plus an epoch bump: outstanding tickets fail
+        // closed and reconnecting replicas can never recreate the row.
+        conn.execute(
+            "UPDATE documents SET deleted_at = ?2, auth_epoch = auth_epoch + 1 WHERE id = ?1",
+            params![document_id.as_str(), now],
+        )?;
+        conn.execute(
+            "UPDATE document_tickets SET revoked_at = ?2
+             WHERE document_id = ?1 AND consumed_at IS NULL AND revoked_at IS NULL",
+            params![document_id.as_str(), now],
+        )?;
+        Ok(())
+    })?;
+    app.rooms
+        .control(Control::Deleted {
+            document_id: document_id.as_str().to_owned(),
+        })
+        .await;
+    Ok(Json(json!({ "deleted": true })).into_response())
+}
+
+/// The exact current text: from the live room when resident (the room
+/// journals before acknowledging, so this includes the freshest committed
+/// edits), otherwise from durable snapshot + journal replay.
+async fn document_text(app: &App, caller: &Caller, document_id: &DocumentId) -> ApiResult<String> {
+    app.db.read(|conn| {
+        let row = load_live_document(conn, document_id)?;
+        let role = resolve_caller_role(conn, caller, &row)?;
+        if let Some(role) = role {
+            if !authorize_document_action(role, DocumentAction::Export) {
+                return Err(ApiError::forbidden());
+            }
+        }
+        Ok(())
+    })?;
+    if let Some(read) = app.rooms.read(document_id).await {
+        return Ok(read.text);
+    }
+    app.db.read(|conn| {
+        let (document, _) = store::hydrate_document(conn, document_id, &app.limits)?;
+        Ok(document.text())
+    })
+}
+
+pub async fn export(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let caller = caller(&app, &headers)?;
+    let document_id = DocumentId::new(id).map_err(|_| ApiError::not_found())?;
+    let text = document_text(&app, &caller, &document_id).await?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"document.md\"",
+            ),
+        ],
+        text,
+    )
+        .into_response())
+}
+
+pub async fn snapshot(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let caller = caller(&app, &headers)?;
+    let document_id = DocumentId::new(id).map_err(|_| ApiError::not_found())?;
+    app.db.read(|conn| {
+        let row = load_live_document(conn, &document_id)?;
+        resolve_caller_role(conn, &caller, &row)?;
+        Ok(())
+    })?;
+    let shallow = query.get("shallow").is_some_and(|value| value == "1");
+
+    let bytes = if let Some(read) = app.rooms.read(&document_id).await {
+        if shallow {
+            // Compact snapshots carry no retained oplog; they are the shallow
+            // cold-open payload. A room with causal gaps falls back to full.
+            read.compact_snapshot.or(read.full_snapshot)
+        } else {
+            read.full_snapshot
+        }
+    } else {
+        app.db.read(|conn| {
+            let (document, _) = store::hydrate_document(conn, &document_id, &app.limits)?;
+            Ok(if shallow {
+                document
+                    .export_compact_snapshot()
+                    .or_else(|_| document.export_full_snapshot())
+                    .ok()
+            } else {
+                document.export_full_snapshot().ok()
+            })
+        })?
+    };
+    let bytes = bytes.ok_or_else(ApiError::internal)?;
+    Ok(([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response())
+}
+
+#[derive(Deserialize, Default)]
+pub struct SessionBody {
+    /// Site the replica was previously assigned on this document, if any.
+    /// Sites are room-allocated; unknown or foreign values allocate fresh.
+    #[serde(rename = "siteId")]
+    pub site_id: Option<serde_json::Value>,
+}
+
+fn requested_site(body: &SessionBody) -> Option<u32> {
+    match body.site_id.as_ref()? {
+        serde_json::Value::Number(number) => number.as_u64().and_then(|n| u32::try_from(n).ok()),
+        serde_json::Value::String(text) => text.parse::<u32>().ok(),
+        _ => None,
+    }
+}
+
+fn ticket_response(
+    document_id: &DocumentId,
+    ticket_id: &TicketId,
+    secret: &[u8; 32],
+    role: Option<DocumentRole>,
+    site: EsbtSiteId,
+) -> Response {
+    Json(json!({
+        "roomUrl": format!("/collab/esbt/{}", document_id.as_str()),
+        "ticketId": ticket_id.as_str(),
+        "ticketSecret": encode_bearer_secret(secret),
+        "role": role.map(store::role_to_str),
+        "siteId": site.as_u32().to_string(),
+    }))
+    .into_response()
+}
+
+/// `POST /v1/documents/{id}/session`: mint the 30-second one-use room ticket
+/// for a durable principal, bound to principal/session/device/document/site/
+/// role/epoch.
+pub async fn principal_room_session(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Option<Json<SessionBody>>,
+) -> ApiResult<Response> {
+    let cookie = guard::cookie_session(&app, &headers)?;
+    guard::require_same_origin(&app, &headers)?;
+    let document_id = DocumentId::new(id).map_err(|_| ApiError::not_found())?;
+    let requested = body.as_deref().and_then(requested_site);
+    let now = now_ms();
+    let secret = new_secret();
+    let ticket_id = TicketId::new(new_id("ticket")).map_err(|_| ApiError::internal())?;
+
+    let (site, role) = app.db.tx(|conn| {
+        let row = load_live_document(conn, &document_id)?;
+        let acl = store::load_acl(conn, &document_id)?;
+        let role = resolve_document_role(&row.record, cookie.session.principal_id(), &acl)
+            .map_err(|_| ApiError::not_found())?;
+        let site = store::allocate_site(
+            conn,
+            &document_id,
+            requested,
+            "principal",
+            None,
+            Some(cookie.session.principal_id()),
+            Some(cookie.session.device_id()),
+            now,
+        )?;
+        let ticket = issue_document_ticket(
+            ticket_id.clone(),
+            &secret,
+            &cookie.session,
+            &row.record,
+            role,
+            site,
+            now,
+        )
+        .map_err(|_| ApiError::unauthenticated())?;
+        insert_principal_ticket(conn, &ticket)?;
+        Ok((site, role))
+    })?;
+    Ok(ticket_response(
+        &document_id,
+        &ticket_id,
+        &secret,
+        Some(role),
+        site,
+    ))
+}
+
+/// `POST /v1/scratch/documents/{id}/session`: the scratch-authority analogue.
+pub async fn scratch_room_session(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Option<Json<SessionBody>>,
+) -> ApiResult<Response> {
+    let scratch = guard::scratch_caller(&app, &headers)?;
+    let document_id = DocumentId::new(id).map_err(|_| ApiError::not_found())?;
+    let requested = body.as_deref().and_then(requested_site);
+    let now = now_ms();
+    let secret = new_secret();
+    let ticket_id = TicketId::new(new_id("ticket")).map_err(|_| ApiError::internal())?;
+
+    let site = app.db.tx(|conn| {
+        let row = load_live_document(conn, &document_id)?;
+        let record = store::load_scratch(conn, &scratch.authority.scratch_id)?
+            .ok_or_else(ApiError::unauthenticated)?;
+        let site = store::allocate_site(
+            conn,
+            &document_id,
+            requested,
+            "scratch",
+            Some(&scratch.authority.scratch_id),
+            None,
+            None,
+            now,
+        )?;
+        let ticket = issue_scratch_document_ticket(
+            ticket_id.clone(),
+            &secret,
+            &record,
+            &row.record,
+            site,
+            now,
+        )
+        .map_err(|_| ApiError::not_found())?;
+        insert_scratch_ticket(conn, &ticket)?;
+        Ok(site)
+    })?;
+    Ok(ticket_response(
+        &document_id,
+        &ticket_id,
+        &secret,
+        None,
+        site,
+    ))
+}
+
+fn insert_principal_ticket(
+    conn: &Connection,
+    ticket: &marks_auth::DocumentTicketRecord,
+) -> ApiResult<()> {
+    conn.execute(
+        "INSERT INTO document_tickets
+            (id, secret_hash, authority_kind, principal_id, session_id, device_id, document_id,
+             site_id, role, auth_epoch, expires_at)
+         VALUES (?1, ?2, 'principal', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            ticket.id.as_str(),
+            ticket.secret_hash,
+            ticket.principal_id.as_str(),
+            ticket.session_id.as_str(),
+            ticket.device_id.as_str(),
+            ticket.document_id.as_str(),
+            i64::from(ticket.esbt_site.as_u32()),
+            store::role_to_str(ticket.role),
+            store::ms(ticket.authorization_epoch),
+            store::ms(ticket.expires_at_ms),
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_scratch_ticket(
+    conn: &Connection,
+    ticket: &marks_auth::ScratchDocumentTicketRecord,
+) -> ApiResult<()> {
+    conn.execute(
+        "INSERT INTO document_tickets
+            (id, secret_hash, authority_kind, scratch_id, document_id, site_id, auth_epoch,
+             expires_at)
+         VALUES (?1, ?2, 'scratch', ?3, ?4, ?5, ?6, ?7)",
+        params![
+            ticket.id.as_str(),
+            ticket.secret_hash,
+            ticket.scratch_id.as_str(),
+            ticket.document_id.as_str(),
+            i64::from(ticket.esbt_site.as_u32()),
+            store::ms(ticket.authorization_epoch),
+            store::ms(ticket.expires_at_ms),
+        ],
+    )?;
+    Ok(())
+}
+
+/* ------------------------------- sharing -------------------------------- */
+
+#[derive(Deserialize)]
+pub struct ShareBody {
+    pub role: String,
+}
+
+/// `PUT /v1/documents/{id}/shares/{principalId}`: grant or change a role.
+/// Every change bumps the authorization epoch; the live room re-resolves or
+/// closes affected sockets instead of waiting for ticket expiry.
+pub async fn share_put(
+    State(app): State<Arc<App>>,
+    Path((id, principal)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<ShareBody>,
+) -> ApiResult<Response> {
+    let cookie = guard::cookie_session(&app, &headers)?;
+    guard::require_same_origin(&app, &headers)?;
+    let document_id = DocumentId::new(id).map_err(|_| ApiError::not_found())?;
+    let grantee = PrincipalId::new(principal).map_err(|_| ApiError::bad_request("invalid id"))?;
+    let role =
+        store::role_from_str(&body.role).map_err(|_| ApiError::bad_request("invalid role"))?;
+    if role == DocumentRole::Owner {
+        return Err(ApiError::bad_request("shares cannot grant owner"));
+    }
+    let epoch = app.db.tx(|conn| {
+        let row = load_live_document(conn, &document_id)?;
+        require_owner(conn, &Caller::Principal(cookie.session.clone()), &row)?;
+        if store::load_principal(conn, &grantee)?.is_none() {
+            return Err(ApiError::not_found());
+        }
+        if let DocumentOwner::Principal(owner) = &row.record.owner {
+            if owner == &grantee {
+                return Err(ApiError::conflict());
+            }
+        }
+        let now = store::ms(now_ms());
+        conn.execute(
+            "INSERT INTO document_acl (document_id, principal_id, role, granted_by, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(document_id, principal_id)
+             DO UPDATE SET role = excluded.role, granted_by = excluded.granted_by,
+                           revoked_at = NULL",
+            params![
+                document_id.as_str(),
+                grantee.as_str(),
+                store::role_to_str(role),
+                cookie.session.principal_id().as_str(),
+                now,
+            ],
+        )?;
+        bump_epoch(conn, &document_id)
+    })?;
+    app.rooms
+        .control(Control::EpochChanged {
+            document_id: document_id.as_str().to_owned(),
+            epoch,
+        })
+        .await;
+    Ok(Json(json!({ "role": store::role_to_str(role) })).into_response())
+}
+
+pub async fn share_delete(
+    State(app): State<Arc<App>>,
+    Path((id, principal)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let cookie = guard::cookie_session(&app, &headers)?;
+    guard::require_same_origin(&app, &headers)?;
+    let document_id = DocumentId::new(id).map_err(|_| ApiError::not_found())?;
+    let grantee = PrincipalId::new(principal).map_err(|_| ApiError::bad_request("invalid id"))?;
+    let epoch = app.db.tx(|conn| {
+        let row = load_live_document(conn, &document_id)?;
+        require_owner(conn, &Caller::Principal(cookie.session.clone()), &row)?;
+        conn.execute(
+            "UPDATE document_acl SET revoked_at = ?3
+             WHERE document_id = ?1 AND principal_id = ?2 AND revoked_at IS NULL",
+            params![document_id.as_str(), grantee.as_str(), store::ms(now_ms())],
+        )?;
+        bump_epoch(conn, &document_id)
+    })?;
+    app.rooms
+        .control(Control::EpochChanged {
+            document_id: document_id.as_str().to_owned(),
+            epoch,
+        })
+        .await;
+    Ok(Json(json!({ "revoked": true })).into_response())
+}
+
+pub async fn shares_list(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let cookie = guard::cookie_session(&app, &headers)?;
+    let document_id = DocumentId::new(id).map_err(|_| ApiError::not_found())?;
+    let shares = app.db.read(|conn| {
+        let row = load_live_document(conn, &document_id)?;
+        require_owner(conn, &Caller::Principal(cookie.session.clone()), &row)?;
+        let acl = store::load_acl(conn, &document_id)?;
+        Ok(acl
+            .iter()
+            .filter(|grant| grant.revoked_at_ms.is_none())
+            .map(|grant| {
+                json!({
+                    "principalId": grant.principal_id.as_str(),
+                    "role": store::role_to_str(grant.role),
+                })
+            })
+            .collect::<Vec<_>>())
+    })?;
+    Ok(Json(json!({ "shares": shares })).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct LinkBody {
+    pub role: String,
+    #[serde(rename = "ttlMs")]
+    pub ttl_ms: Option<u64>,
+}
+
+/// `POST /v1/documents/{id}/link`: a rotatable share capability distinct from
+/// the document ID. Never grants owner. Creating a new link revokes previous
+/// ones (rotation).
+pub async fn link_create(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<LinkBody>,
+) -> ApiResult<Response> {
+    let cookie = guard::cookie_session(&app, &headers)?;
+    guard::require_same_origin(&app, &headers)?;
+    let document_id = DocumentId::new(id).map_err(|_| ApiError::not_found())?;
+    let role =
+        store::role_from_str(&body.role).map_err(|_| ApiError::bad_request("invalid role"))?;
+    authorize_link_grant_role(role).map_err(|_| ApiError::bad_request("invalid role"))?;
+    let token = new_secret();
+    let ttl = body
+        .ttl_ms
+        .unwrap_or(7 * 24 * 60 * 60 * 1000)
+        .min(90 * 24 * 60 * 60 * 1000);
+    let now = now_ms();
+    let epoch = app.db.tx(|conn| {
+        let row = load_live_document(conn, &document_id)?;
+        require_owner(conn, &Caller::Principal(cookie.session.clone()), &row)?;
+        conn.execute(
+            "UPDATE link_grants SET revoked_at = ?2
+             WHERE document_id = ?1 AND revoked_at IS NULL",
+            params![document_id.as_str(), store::ms(now)],
+        )?;
+        conn.execute(
+            "INSERT INTO link_grants (document_id, token_hash, role, created_at, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                document_id.as_str(),
+                bearer_secret_hash(&token),
+                store::role_to_str(role),
+                store::ms(now),
+                store::ms(now.saturating_add(ttl)),
+            ],
+        )?;
+        bump_epoch(conn, &document_id)
+    })?;
+    app.rooms
+        .control(Control::EpochChanged {
+            document_id: document_id.as_str().to_owned(),
+            epoch,
+        })
+        .await;
+    Ok(Json(json!({
+        "token": Base64UrlUnpadded::encode_string(&token),
+        "role": store::role_to_str(role),
+        "expiresAtMs": now.saturating_add(ttl),
+    }))
+    .into_response())
+}
+
+pub async fn link_revoke(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let cookie = guard::cookie_session(&app, &headers)?;
+    guard::require_same_origin(&app, &headers)?;
+    let document_id = DocumentId::new(id).map_err(|_| ApiError::not_found())?;
+    let epoch = app.db.tx(|conn| {
+        let row = load_live_document(conn, &document_id)?;
+        require_owner(conn, &Caller::Principal(cookie.session.clone()), &row)?;
+        conn.execute(
+            "UPDATE link_grants SET revoked_at = ?2
+             WHERE document_id = ?1 AND revoked_at IS NULL",
+            params![document_id.as_str(), store::ms(now_ms())],
+        )?;
+        bump_epoch(conn, &document_id)
+    })?;
+    app.rooms
+        .control(Control::EpochChanged {
+            document_id: document_id.as_str().to_owned(),
+            epoch,
+        })
+        .await;
+    Ok(Json(json!({ "revoked": true })).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct LinkRedeemBody {
+    pub token: String,
+}
+
+/// `POST /v1/documents/{id}/link/redeem`: an authenticated principal turns a
+/// live link capability into a durable ACL row for itself.
+pub async fn link_redeem(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<LinkRedeemBody>,
+) -> ApiResult<Response> {
+    let cookie = guard::cookie_session(&app, &headers)?;
+    guard::require_same_origin(&app, &headers)?;
+    let document_id = DocumentId::new(id).map_err(|_| ApiError::not_found())?;
+    let token =
+        Base64UrlUnpadded::decode_vec(&body.token).map_err(|_| ApiError::unauthenticated())?;
+    let now = now_ms();
+    let role = app.db.tx(|conn| {
+        let row = load_live_document(conn, &document_id)?;
+        let grants = load_link_grants(conn, &document_id)?;
+        let role = grants
+            .iter()
+            .find_map(|grant| redeem_link_grant(grant, &token, &document_id, now).ok())
+            .ok_or_else(ApiError::unauthenticated)?;
+        // The document owner already outranks any link role.
+        if let DocumentOwner::Principal(owner) = &row.record.owner {
+            if owner == cookie.session.principal_id() {
+                return Ok(DocumentRole::Owner);
+            }
+        }
+        let existing = store::load_acl(conn, &document_id)?
+            .into_iter()
+            .find(|grant| {
+                grant.principal_id == *cookie.session.principal_id()
+                    && grant.revoked_at_ms.is_none()
+            });
+        if let Some(existing) = existing {
+            return Ok(existing.role);
+        }
+        conn.execute(
+            "INSERT INTO document_acl (document_id, principal_id, role, granted_by, created_at)
+             VALUES (?1, ?2, ?3, ?2, ?4)
+             ON CONFLICT(document_id, principal_id)
+             DO UPDATE SET role = excluded.role, revoked_at = NULL",
+            params![
+                document_id.as_str(),
+                cookie.session.principal_id().as_str(),
+                store::role_to_str(role),
+                store::ms(now),
+            ],
+        )?;
+        Ok(role)
+    })?;
+    Ok(Json(json!({ "role": store::role_to_str(role) })).into_response())
+}
+
+fn load_link_grants(
+    conn: &Connection,
+    document_id: &DocumentId,
+) -> ApiResult<Vec<LinkGrantRecord>> {
+    let mut statement = conn.prepare(
+        "SELECT token_hash, role, expires_at, revoked_at
+         FROM link_grants WHERE document_id = ?1",
+    )?;
+    let rows = statement.query_map(params![document_id.as_str()], |row| {
+        Ok((
+            row.get::<_, Vec<u8>>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, Option<i64>>(3)?,
+        ))
+    })?;
+    let mut grants = Vec::new();
+    for row in rows {
+        let (token_hash, role, expires_at, revoked_at) = row?;
+        grants.push(LinkGrantRecord {
+            document_id: document_id.clone(),
+            token_hash: store::hash32(token_hash)?,
+            role: store::role_from_str(&role)?,
+            expires_at_ms: store::from_ms(expires_at),
+            revoked_at_ms: revoked_at.map(store::from_ms),
+        });
+    }
+    Ok(grants)
+}
+
+/// Increment and return the document's authorization epoch inside the
+/// caller's transaction.
+fn bump_epoch(conn: &Connection, document_id: &DocumentId) -> ApiResult<u64> {
+    conn.execute(
+        "UPDATE documents SET auth_epoch = auth_epoch + 1 WHERE id = ?1",
+        params![document_id.as_str()],
+    )?;
+    let epoch: i64 = conn.query_row(
+        "SELECT auth_epoch FROM documents WHERE id = ?1",
+        params![document_id.as_str()],
+        |row| row.get(0),
+    )?;
+    // Outstanding one-use tickets minted under the previous epoch fail closed.
+    conn.execute(
+        "UPDATE document_tickets SET revoked_at = ?2
+         WHERE document_id = ?1 AND consumed_at IS NULL AND revoked_at IS NULL",
+        params![document_id.as_str(), store::ms(now_ms())],
+    )?;
+    Ok(store::from_ms(epoch))
+}
