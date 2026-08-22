@@ -41,7 +41,7 @@ const leftoverScratch = {
   version: 1 as const,
   scratchId: 'scratch_leftover1',
   capability: encodeBase64Url(new Uint8Array(32).fill(7)),
-  expiresAtMs: 50_000,
+  expiresAtMs: Date.now() + 86_400_000,
 };
 
 afterEach(() => {
