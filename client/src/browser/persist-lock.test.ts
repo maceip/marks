@@ -50,36 +50,46 @@ test('a failed lock holder still releases the name', async () => {
   assert.equal(ran, true);
 });
 
-test('export happens after the previous writer finishes, not before the lock', async () => {
+test('export runs after the previous holder releases, not before the lock', async () => {
+  const order: string[] = [];
+  const first = withPersistLock('marks:persist:esbt:order', async () => {
+    order.push('first-hold');
+    await delay(30);
+    order.push('first-release');
+  });
+  const second = writeSnapshotUnderLock(
+    'marks:persist:esbt:order',
+    () => {
+      order.push('export');
+      return textBytes('x');
+    },
+    async () => {
+      order.push('write');
+    },
+  );
+  await Promise.all([first, second]);
+  assert.deepEqual(order, ['first-hold', 'first-release', 'export', 'write']);
+});
+
+test('a later exporter sees replica state that changed while the first writer held the lock', async () => {
   let memory = 'A';
   let disk = '';
-  const exports: string[] = [];
-
   const first = writeSnapshotUnderLock(
     'marks:persist:esbt:union',
-    () => {
-      exports.push(memory);
-      return textBytes(memory);
-    },
+    () => textBytes(memory),
     async (bytes) => {
-      await delay(40);
+      await delay(30);
       disk = fromBytes(bytes);
+      memory = 'AB';
     },
   );
-
-  memory = 'AB';
   const second = writeSnapshotUnderLock(
     'marks:persist:esbt:union',
-    () => {
-      exports.push(memory);
-      return textBytes(memory);
-    },
+    () => textBytes(memory),
     async (bytes) => {
       disk = fromBytes(bytes);
     },
   );
-
   await Promise.all([first, second]);
-  assert.deepEqual(exports, ['A', 'AB']);
   assert.equal(disk, 'AB');
 });
