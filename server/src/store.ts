@@ -4,7 +4,13 @@ import Database from 'better-sqlite3';
 import { nanoid } from 'nanoid';
 import { DATA_DIR, DB_PATH } from './config.js';
 
-export type Engine = 'loro' | 'yjs';
+/**
+ * The engine a document's stored bytes belong to. Every new document is
+ * `esbt`; `loro` and `yjs` remain only as read-only markers on rows created
+ * before those engines were removed (their sockets are refused and their
+ * exports are empty — there is no converter between the binary formats).
+ */
+export type Engine = 'esbt' | 'loro' | 'yjs';
 
 export interface DocumentRow {
   id: string;
@@ -25,7 +31,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS documents (
     id          TEXT PRIMARY KEY,
     title       TEXT    NOT NULL DEFAULT 'Untitled',
-    engine      TEXT    NOT NULL DEFAULT 'loro',
+    engine      TEXT    NOT NULL DEFAULT 'esbt',
     state       BLOB,
     chars       INTEGER NOT NULL DEFAULT 0,
     created_at  INTEGER NOT NULL,
@@ -85,7 +91,7 @@ export function createDocument(opts: {
   const row = {
     id: opts.id ?? nanoid(12),
     title: opts.title ?? 'Untitled',
-    engine: opts.engine ?? 'loro',
+    engine: opts.engine ?? 'esbt',
     state: null,
     chars: 0,
     created_at: now,

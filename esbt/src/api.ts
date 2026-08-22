@@ -13,6 +13,18 @@
  *
  * Implementation language: TypeScript, runs on the main thread in the browser
  * and in Node. No WASM. All mutating methods are synchronous.
+ *
+ * Additions over the original contract draft, discovered while replacing the
+ * loro/yjs engines (each is called out on its member):
+ *
+ *   - `EphemeralStore.keys()` — the server room gates its first presence
+ *     frame on it (`ephemeral.keys().length > 0`).
+ *   - `UndoManagerOptions.mergeIntervalMs` — both previous engines group a
+ *     burst of keystrokes into one undo step (Loro's UndoManager interval,
+ *     Yjs's captureTimeout). Without it, Mod-Z per keystroke.
+ *   - `EsbtDoc.indexToAnchor` / `anchorToIndex` — weight-stable text anchors,
+ *     requested by the integration document (§7) for comments and future
+ *     range presence.
  */
 
 /** Replica / site identifier. Opaque, comparable, stable for the life of a doc instance. */
@@ -36,6 +48,18 @@ export interface EsbtTextRange {
   from: number;
   /** Exclusive end, UTF-16 code units. */
   to: number;
+}
+
+/**
+ * A weight-stable position. Survives concurrent edits elsewhere in the
+ * document, which a UTF-16 index does not; the intended carrier for comments
+ * and long-lived range presence (integration document §7).
+ */
+export interface EsbtAnchor {
+  /** Canonical weight string of the anchored item (`EsbtItemId.weight`). */
+  weight: string;
+  /** Offset inside a multi-unit item; always 0 while items are single units. */
+  offset: number;
 }
 
 /**
@@ -197,10 +221,51 @@ export interface EsbtDoc {
    * that already holds a causal prefix of this one.
    */
   subscribeLocalUpdates(listener: (update: Uint8Array) => void): () => void;
+
+  /**
+   * Weight-stable anchor for the item at `index`; the END sentinel at or
+   * past the end. Contract addition for §7 (comments, range presence).
+   */
+  indexToAnchor(index: number): EsbtAnchor;
+  /**
+   * Current index of an anchor; a deleted anchor resolves to the index its
+   * item would occupy today, so ranges collapse instead of drifting.
+   */
+  anchorToIndex(anchor: EsbtAnchor): number;
+
+  /**
+   * Keyed last-writer-wins map riding the document — same oplog, snapshots,
+   * and version vectors as the text. Contract addition: marks stores comment
+   * records here (the way it used a Loro/Yjs map container), so they sync,
+   * work offline, and survive merges without polluting the markdown.
+   * Values are opaque strings; the highest (lamport, site) write per key
+   * wins on every replica. Deletes leave a mergeable tombstone.
+   */
+  mapSet(key: string, value: string): void;
+  mapDelete(key: string): void;
+  mapGet(key: string): string | undefined;
+  /** Live entries, sorted by key. */
+  mapEntries(): Array<[string, string]>;
 }
 
 export interface EsbtDocStatic {
   new (config?: EsbtConfig): EsbtDoc;
+}
+
+/** Options for `UndoManager`. Contract addition; both replaced engines had an equivalent. */
+export interface UndoManagerOptions {
+  /**
+   * Group local transacts that land within this window into one undo step —
+   * one Mod-Z per typing burst, not per keystroke. 0 (default) keeps the
+   * strict contract behaviour of one transact = one step. Marks passes 500.
+   */
+  mergeIntervalMs?: number;
+  /**
+   * Transacts whose origin starts with any of these prefixes never enter
+   * the undo stack (Loro's `excludeOriginPrefixes`). Marks excludes its
+   * comment writes so Mod-Z never deletes a comment.
+   */
+  excludeOriginPrefixes?: string[];
 }
 
 /**
@@ -208,9 +273,9 @@ export interface EsbtDocStatic {
  * are undoable. Undoing must generate *new* ops (a delete of our insert,
  * or a re-insert of a deleted item with a new `c`) so peers converge.
  *
- * One `transact` = one undo step. Redo is the inverse stack.
- * After a remote change, the undo stack stays valid (CRDT undo, not
- * CodeMirror history).
+ * One `transact` = one undo step (see `UndoManagerOptions.mergeIntervalMs`).
+ * Redo is the inverse stack. After a remote change, the undo stack stays
+ * valid (CRDT undo, not CodeMirror history).
  */
 export interface UndoManager {
   canUndo(): boolean;
@@ -221,7 +286,7 @@ export interface UndoManager {
 }
 
 export interface UndoManagerStatic {
-  new (doc: EsbtDoc): UndoManager;
+  new (doc: EsbtDoc, options?: UndoManagerOptions): UndoManager;
 }
 
 /**

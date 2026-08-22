@@ -1,7 +1,7 @@
 /**
  * Portable browser-surface checks that every driver can run.
  *
- * Deep collab / two-peer / Yjs / REST cases stay in scripts/smoke.mjs
+ * Deep collab / two-peer / REST cases stay in scripts/smoke.mjs
  * (Playwright). This suite covers the glass: create a doc, preview,
  * select-all, context menu, comments, voice affordance, theme, offline.
  */
@@ -11,7 +11,7 @@ const FIXTURE = `# Surface harness
 Hello from the portable suite.
 `;
 
-async function createLoroDocument(session) {
+async function createDocument(session) {
   await session.goto('/');
   try {
     await session.waitForSelector('.new-doc .button.primary', { timeout: 8_000 });
@@ -27,7 +27,7 @@ async function createLoroDocument(session) {
 }
 
 export async function runSurface(session, { check }) {
-  await createLoroDocument(session);
+  await createDocument(session);
   await session.waitForSelector('.cm-content', { timeout: 20_000 });
   await session.wait(2000);
 

@@ -194,14 +194,16 @@ a {
   text-transform: uppercase;
 }
 
-.engine-loro {
+.engine-esbt {
   background: var(--accent-soft);
   color: var(--accent);
 }
 
+/* Rows created by the retired engines: listed, but visibly inert. */
+.engine-loro,
 .engine-yjs {
-  background: var(--success-soft);
-  color: var(--success);
+  background: var(--surface-2, rgba(128, 128, 128, 0.14));
+  color: var(--text-muted);
 }
 
 .status {

@@ -23,7 +23,7 @@ export interface CommentRecord {
   to: number;
   /** Selected markdown at creation, used to re-find the range. */
   quote: string;
-  /** Engine-encoded start cursor (Loro Cursor / Yjs relative position). */
+  /** Engine-encoded start cursor (an ESBT weight anchor). */
   startCursor?: string;
   endCursor?: string;
 }

@@ -1,12 +1,9 @@
-import { EphemeralStore, LoroDoc, VersionVector } from 'loro-crdt';
+import { EphemeralStore, EsbtDoc, VersionVector } from '@marks/esbt';
 import type { WebSocket } from 'ws';
 import { PERSIST_DEBOUNCE_MS, PERSIST_MAX_WAIT_MS, ROOM_IDLE_TIMEOUT_MS } from './config.js';
 import { MSG_EPHEMERAL, MSG_SERVER_VV, MSG_SNAPSHOT, MSG_SYNCED, MSG_UPDATE, frame, unframe } from './protocol.js';
 import { createDocument, documentExists, getState, saveState } from './store.js';
 import { deriveTitle } from './title.js';
-
-/** Container id holding the markdown source. Must match the client. */
-export const TEXT_CONTAINER = 'markdown';
 
 /** Close code telling a client the document is gone, not that the link dropped. */
 export const CLOSE_DOCUMENT_DELETED = 4404;
@@ -15,16 +12,23 @@ export const CLOSE_DOCUMENT_DELETED = 4404;
 const EPHEMERAL_TIMEOUT_MS = 30_000;
 
 /**
- * One in-memory Loro replica per document, shared by every connected client.
+ * The server replica's site id for one document. Stable across restarts —
+ * a fresh random site per boot would bloat every client's version vector
+ * and the reconnect URL (integration contract §6).
+ */
+const serverSiteId = (documentId: string) => `marks-server:${documentId}`;
+
+/**
+ * One in-memory ESBT replica per document, shared by every connected client.
  *
  * The server is a full peer rather than a dumb relay: it imports updates so it
  * can answer cold opens with a single snapshot instead of a replay of history,
  * which is what keeps document open latency flat as history grows.
  */
-export class LoroRoom {
-  private static rooms = new Map<string, LoroRoom>();
+export class EsbtRoom {
+  private static rooms = new Map<string, EsbtRoom>();
 
-  readonly doc = new LoroDoc();
+  readonly doc: EsbtDoc;
   private readonly ephemeral = new EphemeralStore(EPHEMERAL_TIMEOUT_MS);
   private readonly sockets = new Set<WebSocket>();
 
@@ -35,30 +39,31 @@ export class LoroRoom {
   private evictTimer: NodeJS.Timeout | null = null;
 
   private constructor(readonly id: string) {
+    this.doc = new EsbtDoc({ siteId: serverSiteId(id) });
     const stored = getState(id);
     if (stored?.state && stored.state.length > 0) {
       try {
         this.doc.import(stored.state);
       } catch (error) {
-        console.error(`[loro] ${id}: stored snapshot could not be imported`, error);
+        console.error(`[esbt] ${id}: stored snapshot could not be imported`, error);
       }
     }
   }
 
-  static open(id: string): LoroRoom {
-    let room = LoroRoom.rooms.get(id);
+  static open(id: string): EsbtRoom {
+    let room = EsbtRoom.rooms.get(id);
     if (!room) {
-      if (!documentExists(id)) createDocument({ id, engine: 'loro' });
-      room = new LoroRoom(id);
-      LoroRoom.rooms.set(id, room);
+      if (!documentExists(id)) createDocument({ id, engine: 'esbt' });
+      room = new EsbtRoom(id);
+      EsbtRoom.rooms.set(id, room);
     }
     room.cancelEviction();
     return room;
   }
 
   /** The live replica if the room is resident, otherwise undefined. */
-  static resident(id: string): LoroRoom | undefined {
-    return LoroRoom.rooms.get(id);
+  static resident(id: string): EsbtRoom | undefined {
+    return EsbtRoom.rooms.get(id);
   }
 
   /**
@@ -68,7 +73,7 @@ export class LoroRoom {
    * is gone.
    */
   static discard(id: string): void {
-    const room = LoroRoom.rooms.get(id);
+    const room = EsbtRoom.rooms.get(id);
     if (!room) return;
 
     room.discarded = true;
@@ -80,11 +85,11 @@ export class LoroRoom {
     for (const socket of room.sockets) socket.close(CLOSE_DOCUMENT_DELETED, 'document deleted');
     room.sockets.clear();
     room.ephemeral.destroy();
-    LoroRoom.rooms.delete(id);
+    EsbtRoom.rooms.delete(id);
   }
 
   static async flushAll(): Promise<void> {
-    for (const room of LoroRoom.rooms.values()) room.persistNow();
+    for (const room of EsbtRoom.rooms.values()) room.persistNow();
   }
 
   get connections(): number {
@@ -92,7 +97,7 @@ export class LoroRoom {
   }
 
   text(): string {
-    return this.doc.getText(TEXT_CONTAINER).toString();
+    return this.doc.getText();
   }
 
   snapshot(): Uint8Array {
@@ -101,14 +106,10 @@ export class LoroRoom {
 
   /**
    * A history-trimmed snapshot: same document state, without the operations
-   * needed to reconstruct older versions. Cheaper to ship and to load.
+   * needed to serve version-vector deltas. Cheaper to ship and to load.
    */
   shallowSnapshot(): Uint8Array {
-    try {
-      return this.doc.export({ mode: 'shallow-snapshot', frontiers: this.doc.frontiers() });
-    } catch {
-      return this.snapshot();
-    }
+    return this.doc.export({ mode: 'shallow-snapshot' });
   }
 
   /**
@@ -131,7 +132,7 @@ export class LoroRoom {
         if (delta.length > 0) this.send(socket, MSG_UPDATE, delta);
         sentDelta = true;
       } catch (error) {
-        console.error(`[loro] ${this.id}: unusable client version vector`, error);
+        console.error(`[esbt] ${this.id}: unusable client version vector`, error);
       }
     }
     if (!sentDelta) this.send(socket, MSG_SNAPSHOT, this.snapshot());
@@ -162,7 +163,7 @@ export class LoroRoom {
         try {
           this.doc.import(payload);
         } catch (error) {
-          console.error(`[loro] ${this.id}: rejected update`, error);
+          console.error(`[esbt] ${this.id}: rejected update`, error);
           return;
         }
         this.broadcast(from, data);
@@ -185,7 +186,7 @@ export class LoroRoom {
           const missing = this.doc.export({ mode: 'update', from: vv });
           if (missing.length > 0) this.send(from, MSG_UPDATE, missing);
         } catch (error) {
-          console.error(`[loro] ${this.id}: bad version vector`, error);
+          console.error(`[esbt] ${this.id}: bad version vector`, error);
         }
         break;
       }
@@ -226,7 +227,7 @@ export class LoroRoom {
         this.discarded = true;
       }
     } catch (error) {
-      console.error(`[loro] ${this.id}: persist failed`, error);
+      console.error(`[esbt] ${this.id}: persist failed`, error);
       this.dirty = true;
     }
   }
@@ -244,7 +245,7 @@ export class LoroRoom {
       if (this.sockets.size > 0) return;
       this.persistNow();
       this.ephemeral.destroy();
-      LoroRoom.rooms.delete(this.id);
+      EsbtRoom.rooms.delete(this.id);
     }, ROOM_IDLE_TIMEOUT_MS);
   }
 

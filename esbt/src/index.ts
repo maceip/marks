@@ -1,13 +1,15 @@
 /**
- * Public surface of the ESBT engine that marks will bind to.
+ * Public surface of the ESBT engine.
  *
- * Types come from the editor contract. Runtime constructors come from the
- * implementation modules as they land (doc/weight/vector/undo/ephemeral).
- * Both are kept so neither the contract PR nor the in-progress impl is lost.
+ * The four runtime constructors marks binds to, the contract types they
+ * satisfy, and the algorithm primitives (weights, NEWSEQ, CREATE_WEIGHT)
+ * for anyone building on the layer below the editor API.
  */
+
 export type {
+  EsbtAnchor,
   EsbtConfig,
-  EsbtDoc,
+  EsbtDoc as EsbtDocType,
   EsbtDocStatic,
   EsbtEvent,
   EsbtExportOptions,
@@ -16,15 +18,27 @@ export type {
   EsbtPresenceState,
   EsbtTextRange,
   UndoManager as UndoManagerType,
+  UndoManagerOptions,
   UndoManagerStatic,
   VersionVector as VersionVectorType,
   VersionVectorStatic,
 } from './api.js';
 
-export type { EphemeralStore, EphemeralStoreStatic } from './ephemeral.js';
+export type {
+  EphemeralStore as EphemeralStoreType,
+  EphemeralStoreStatic,
+} from './ephemeral.js';
 
+export { EsbtDoc } from './doc.js';
 export { VersionVector } from './vector.js';
 export { UndoManager } from './undo.js';
-export { EsbtDoc } from './doc.js';
-export { cmpWeight, newseq, Allocator } from './weight.js';
-export type { SiteId, Weight } from './weight.js';
+export { EphemeralStore } from './ephemeral.js';
+
+export {
+  Allocator,
+  cmpWeight,
+  newseq,
+  parseWeightKey,
+  weightKey,
+} from './weight.js';
+export type { Fraction, SiteId, Weight } from './weight.js';

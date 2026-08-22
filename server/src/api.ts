@@ -1,19 +1,15 @@
 import { Router } from 'express';
-import { LoroDoc } from 'loro-crdt';
-import { LoroRoom, TEXT_CONTAINER } from './loro-room.js';
+import { EsbtDoc } from '@marks/esbt';
+import { EsbtRoom } from './esbt-room.js';
 import {
   createDocument,
   deleteDocument,
   getDocument,
   getState,
   listDocuments,
-  type Engine,
 } from './store.js';
-import { discardYjsDocument, yjsLiveText, yjsTextFromState } from './yjs-room.js';
 
 export const api = Router();
-
-const isEngine = (value: unknown): value is Engine => value === 'loro' || value === 'yjs';
 
 api.get('/health', (_req, res) => {
   res.json({ ok: true, uptime: process.uptime() });
@@ -24,9 +20,8 @@ api.get('/documents', (_req, res) => {
 });
 
 api.post('/documents', (req, res) => {
-  const engine = isEngine(req.body?.engine) ? req.body.engine : 'loro';
   const title = typeof req.body?.title === 'string' ? req.body.title : undefined;
-  res.status(201).json({ document: createDocument({ engine, title }) });
+  res.status(201).json({ document: createDocument({ engine: 'esbt', title }) });
 });
 
 api.get('/documents/:id', (req, res) => {
@@ -35,7 +30,7 @@ api.get('/documents/:id', (req, res) => {
     res.status(404).json({ error: 'not found' });
     return;
   }
-  const room = LoroRoom.resident(req.params.id);
+  const room = EsbtRoom.resident(req.params.id);
   res.json({ document: doc, connections: room?.connections ?? 0 });
 });
 
@@ -45,8 +40,7 @@ api.delete('/documents/:id', (req, res) => {
   // Remove the row first: any store still in flight for this document then
   // finds it missing and becomes a no-op, rather than racing the teardown.
   const deleted = deleteDocument(id);
-  LoroRoom.discard(id);
-  discardYjsDocument(id);
+  EsbtRoom.discard(id);
 
   res.json({ deleted });
 });
@@ -67,8 +61,8 @@ api.get('/documents/:id/snapshot', (req, res) => {
     return;
   }
 
-  const shallow = req.query.shallow === '1' && meta.engine === 'loro';
-  const room = LoroRoom.resident(id);
+  const shallow = req.query.shallow === '1' && meta.engine === 'esbt';
+  const room = EsbtRoom.resident(id);
   const bytes = room
     ? shallow
       ? room.shallowSnapshot()
@@ -107,29 +101,22 @@ api.get('/documents/:id/export', (req, res) => {
 });
 
 function readMarkdown(id: string): string {
-  // Prefer a resident replica: both engines persist on a debounce, so the
+  // Prefer a resident replica: the room persists on a debounce, so the
   // stored row can trail what the editor is showing by several seconds.
-  const room = LoroRoom.resident(id);
+  const room = EsbtRoom.resident(id);
   if (room) return room.text();
-
-  const live = yjsLiveText(id);
-  if (live !== undefined) return live;
 
   const stored = getState(id);
   if (!stored?.state || stored.state.length === 0) return '';
 
-  if (stored.engine === 'yjs') {
-    try {
-      return yjsTextFromState(stored.state);
-    } catch {
-      return '';
-    }
-  }
+  // Rows written by the retired Loro/Yjs engines are unreadable without
+  // their runtimes; they export as empty rather than as garbage.
+  if (stored.engine !== 'esbt') return '';
 
-  const doc = new LoroDoc();
+  const doc = new EsbtDoc();
   try {
     doc.import(stored.state);
-    return doc.getText(TEXT_CONTAINER).toString();
+    return doc.getText();
   } catch {
     return '';
   }

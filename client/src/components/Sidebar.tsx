@@ -1,6 +1,4 @@
 import { useState } from 'react';
-import { ENGINES } from '../collab';
-import type { EngineName } from '../collab/types';
 import type { DocumentMeta } from '../lib/api';
 import { formatCount, formatRelativeTime } from '../lib/format';
 import { Icon, icons } from './Icon';
@@ -11,7 +9,7 @@ interface SidebarProps {
   loading: boolean;
   stale?: boolean;
   onOpen: (id: string) => void;
-  onCreate: (engine: EngineName) => void;
+  onCreate: () => void;
   onDelete: (id: string) => void;
   onOpenBenchmark: () => void;
 }
@@ -27,7 +25,6 @@ export function Sidebar({
   onOpenBenchmark,
 }: SidebarProps) {
   const [query, setQuery] = useState('');
-  const [engineMenuOpen, setEngineMenuOpen] = useState(false);
 
   const filtered = query.trim()
     ? documents.filter((doc) => doc.title.toLowerCase().includes(query.trim().toLowerCase()))
@@ -42,39 +39,10 @@ export function Sidebar({
         </div>
 
         <div className="new-doc">
-          <button type="button" className="button primary" onClick={() => onCreate('loro')}>
+          <button type="button" className="button primary" onClick={onCreate}>
             <Icon path={icons.plus} />
             New
           </button>
-          <button
-            type="button"
-            className="button primary split-toggle"
-            aria-label="Choose CRDT engine"
-            aria-expanded={engineMenuOpen}
-            onClick={() => setEngineMenuOpen((open) => !open)}
-          >
-            ▾
-          </button>
-
-          {engineMenuOpen && (
-            <div className="menu" role="menu">
-              {ENGINES.map((engine) => (
-                <button
-                  key={engine.id}
-                  type="button"
-                  role="menuitem"
-                  className="menu-item"
-                  onClick={() => {
-                    setEngineMenuOpen(false);
-                    onCreate(engine.id);
-                  }}
-                >
-                  <strong>New {engine.label} document</strong>
-                  <span>{engine.blurb}</span>
-                </button>
-              ))}
-            </div>
-          )}
         </div>
       </div>
 
@@ -131,7 +99,7 @@ export function Sidebar({
 
       <button type="button" className="sidebar-foot" onClick={onOpenBenchmark}>
         <Icon path={icons.gauge} />
-        Benchmark engines
+        Benchmark the engine
       </button>
     </aside>
   );

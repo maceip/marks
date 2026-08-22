@@ -1,14 +1,13 @@
 import { Annotation, Prec, type Extension } from '@codemirror/state';
 import { ViewPlugin, keymap, type EditorView } from '@codemirror/view';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
-import { LoroEphemeralPlugin } from 'loro-codemirror';
-import { Cursor, EphemeralStore, LoroDoc, UndoManager, VersionVector } from 'loro-crdt';
+import { EphemeralStore, EsbtDoc, UndoManager, VersionVector, type EsbtAnchor } from '@marks/esbt';
 import {
   COMMENT_ORIGIN,
-  COMMENTS_MAP,
   createCommentId,
   decodeBytes,
   encodeBytes,
+  fetchWithTimeout,
   parseComment,
   persistLockName,
   readCommentMap,
@@ -19,11 +18,11 @@ import {
   TabChannel,
   tabChannelName,
   withPersistLock,
-  fetchWithTimeout,
   type CommentRecord,
 } from '../browser';
+import { HEARTBEAT_MS, esbtPresence } from './presence';
 import { MSG_EPHEMERAL, MSG_SERVER_VV, MSG_SNAPSHOT, MSG_SYNCED, MSG_UPDATE, frame, toBase64Url } from './protocol';
-import { TEXT_KEY, type CollabSession, type ConnectionStatus, type EngineStats, type Peer, type SessionOptions } from './types';
+import type { CollabSession, ConnectionStatus, EngineStats, Peer, SessionOptions } from './types';
 
 const EPHEMERAL_TIMEOUT_MS = 30_000;
 const LOCAL_SAVE_DEBOUNCE_MS = 800;
@@ -35,10 +34,10 @@ const CLOSE_DOCUMENT_DELETED = 4404;
 /** Version vectors above this size are not worth putting in a URL. */
 const MAX_VV_QUERY_BYTES = 4_096;
 
-const userKey = (peerId: string) => `${peerId}-cm-user`;
+/** A burst of keystrokes inside this window is one undo step. */
+const UNDO_MERGE_MS = 500;
 
-/** The single container every layer agrees on. */
-const getMarkdownText = (doc: LoroDoc) => doc.getText(TEXT_KEY);
+const userKey = (siteId: string) => `${siteId}-cm-user`;
 
 /** Marks an editor transaction as replaying the CRDT, not as a user edit. */
 const fromCrdt = Annotation.define<boolean>();
@@ -53,29 +52,39 @@ const fromCrdt = Annotation.define<boolean>();
 const EDITOR_ORIGIN = 'editor';
 
 /**
- * Loro engine: Fugue over an Eg-walker style event graph.
+ * The ESBT engine: the sequence CRDT of Mechaoui & Imine (arXiv:2607.28101),
+ * running as plain TypeScript on the main thread.
  *
- * Operations are stored as plain indices and the CRDT structure is only
- * materialised while merging, which is what keeps steady-state memory and
- * document load times flat as edit history grows.
+ * Every keystroke applies to the local replica synchronously — no WebAssembly
+ * boundary, no worker round-trip — and the update bytes it emits go to the
+ * room over one WebSocket per document (tag byte + payload, version-vector
+ * deltas on reconnect) and to sibling tabs over a BroadcastChannel. Comments
+ * ride the document in the engine's keyed LWW map with weight-stable anchors,
+ * so they sync, work offline, and survive merges.
  */
-export class LoroEngine implements CollabSession {
-  readonly engine = 'loro' as const;
+export class EsbtEngine implements CollabSession {
+  readonly engine = 'esbt' as const;
   readonly docId: string;
   readonly extension: Extension;
 
-  private readonly doc = new LoroDoc();
+  private readonly doc = new EsbtDoc();
   private readonly ephemeral = new EphemeralStore(EPHEMERAL_TIMEOUT_MS);
   private readonly undoManager: UndoManager;
   private readonly user: SessionOptions['user'];
+  private readonly tabs: TabChannel;
 
   private socket: WebSocket | null = null;
   private reconnectDelay = RECONNECT_MIN_MS;
   private reconnectTimer: number | null = null;
+  private presenceHeartbeat: number | null = null;
+  private snapshotReplyTimer: number | null = null;
+  private lastServerVV: Uint8Array | null = null;
   private destroyed = false;
+  private isHydrated = false;
 
   private currentStatus: ConnectionStatus = 'connecting';
   private cachedPeers: Peer[] = [];
+  private cachedComments: CommentRecord[] = [];
   private counters = { received: 0, sent: 0, snapshotBytes: 0 };
 
   private saveTimer: number | null = null;
@@ -85,17 +94,16 @@ export class LoroEngine implements CollabSession {
   private readonly peerListeners = new Set<(peers: Peer[]) => void>();
   private readonly commentListeners = new Set<(comments: CommentRecord[]) => void>();
   private readonly hydratedListeners = new Set<() => void>();
-  private cachedComments: CommentRecord[] = [];
-  private isHydrated = false;
-  private lastServerVV: Uint8Array | null = null;
-  private snapshotReplyTimer: number | null = null;
-  private readonly tabs: TabChannel;
 
   constructor({ docId, user }: SessionOptions) {
     this.docId = docId;
     this.user = user;
-    this.undoManager = new UndoManager(this.doc, { excludeOriginPrefixes: [COMMENT_ORIGIN] });
-    this.tabs = new TabChannel(tabChannelName('loro', docId), {
+    this.undoManager = new UndoManager(this.doc, {
+      mergeIntervalMs: UNDO_MERGE_MS,
+      // Mod-Z must never delete a comment.
+      excludeOriginPrefixes: [COMMENT_ORIGIN],
+    });
+    this.tabs = new TabChannel(tabChannelName('esbt', docId), {
       onHello: () => this.scheduleTabSnapshot(),
       onRequestSnapshot: () => this.scheduleTabSnapshot(),
       onUpdate: (bytes) => this.importFromTab(bytes, 'update'),
@@ -103,15 +111,10 @@ export class LoroEngine implements CollabSession {
     });
 
     this.extension = [
-      // The binding's cursor and selection layers, which are the parts of
-      // loro-codemirror we want. Document sync and undo are ours: see
-      // `syncExtension` and `undoExtensions` for why.
-      LoroEphemeralPlugin(
-        this.doc,
-        this.ephemeral,
-        { name: user.name, colorClassName: `marks-user${user.colorIndex}` },
-        getMarkdownText,
-      ),
+      // Remote carets and selections; the local selection is published from
+      // inside the editor, identity is published here (see below) so the
+      // presence bar works even when no editor pane is mounted.
+      esbtPresence(this.doc, this.ephemeral),
       this.syncExtension(),
       this.undoExtensions(),
     ];
@@ -130,12 +133,24 @@ export class LoroEngine implements CollabSession {
       this.ephemeral.subscribeLocalUpdates((bytes) => this.send(MSG_EPHEMERAL, bytes)),
     );
 
+    // Identity lives on the engine, not the editor extension: entries expire
+    // after 30 s, so it is re-published on the y-protocols heartbeat cadence.
+    this.publishUser();
+    this.presenceHeartbeat = window.setInterval(() => this.publishUser(), HEARTBEAT_MS);
+
     window.addEventListener('online', this.handleOnline);
     window.addEventListener('offline', this.handleOffline);
     document.addEventListener('visibilitychange', this.handleVisibility);
     window.addEventListener('pagehide', this.handlePageHide);
 
     void this.start();
+  }
+
+  private publishUser(): void {
+    this.ephemeral.set(userKey(this.doc.siteId), {
+      name: this.user.name,
+      colorClassName: `marks-user${this.user.colorIndex}`,
+    });
   }
 
   private redo(): boolean {
@@ -148,7 +163,7 @@ export class LoroEngine implements CollabSession {
    * it, so the cursor, scroll position and any selection survive.
    */
   private reconcile(view: EditorView): void {
-    const target = this.doc.getText(TEXT_KEY).toString();
+    const target = this.doc.getText();
     const current = view.state.doc.toString();
     if (current === target) return;
 
@@ -174,14 +189,10 @@ export class LoroEngine implements CollabSession {
   }
 
   /**
-   * Two-way document sync between CodeMirror and Loro.
-   *
-   * loro-codemirror ships its own sync plugin, but it ignores locally
-   * originated events — which is what an undo produces — and its annotation is
-   * module-private, so an undo applied from outside the binding is echoed
-   * straight back into the CRDT and corrupts it. Owning both directions here
-   * costs about forty lines and makes undo, remote updates and local typing
-   * follow the same, single path.
+   * Two-way document sync between CodeMirror and the replica. Local edits
+   * enter the CRDT under the "editor" origin; everything else — remote
+   * updates, undo, redo, preview writes — flows back into the editor through
+   * `reconcile`, so all mutations follow one path.
    */
   private syncExtension(): Extension {
     return ViewPlugin.define((view) => {
@@ -208,15 +219,15 @@ export class LoroEngine implements CollabSession {
           if (!update.docChanged) return;
           if (update.transactions.some((transaction) => transaction.annotation(fromCrdt))) return;
 
-          const text = this.doc.getText(TEXT_KEY);
-          let adjust = 0;
-          update.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
-            const insert = inserted.sliceString(0, inserted.length, '\n');
-            if (toA > fromA) text.delete(fromA + adjust, toA - fromA);
-            if (insert.length > 0) text.insert(fromA + adjust, insert);
-            adjust += insert.length - (toA - fromA);
-          });
-          this.doc.commit({ origin: EDITOR_ORIGIN });
+          this.doc.transact(() => {
+            let adjust = 0;
+            update.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+              const insert = inserted.sliceString(0, inserted.length, '\n');
+              if (toA > fromA) this.doc.delete(fromA + adjust, toA - fromA);
+              if (insert.length > 0) this.doc.insert(fromA + adjust, insert);
+              adjust += insert.length - (toA - fromA);
+            });
+          }, EDITOR_ORIGIN);
         },
         destroy: () => {
           disposed = true;
@@ -227,8 +238,8 @@ export class LoroEngine implements CollabSession {
   }
 
   /**
-   * Undo/redo driven straight from Loro's UndoManager, which scopes each step
-   * to this peer's own edits rather than the shared document's history.
+   * Undo/redo driven by the CRDT's per-peer UndoManager, which scopes each
+   * step to this replica's own edits rather than the shared history.
    */
   private undoExtensions(): Extension {
     return Prec.high(
@@ -251,23 +262,15 @@ export class LoroEngine implements CollabSession {
   /* ---------------------------------------------------------------- reads */
 
   getText(): string {
-    return this.doc.getText(TEXT_KEY).toString();
+    return this.doc.getText();
   }
 
   setText(markdown: string): void {
-    const text = this.doc.getText(TEXT_KEY);
-    const length = text.length;
-    if (length > 0) text.delete(0, length);
-    text.insert(0, markdown);
-    this.doc.commit();
+    this.doc.setText(markdown);
   }
 
   replaceRange(from: number, to: number, insert: string): void {
-    const text = this.doc.getText(TEXT_KEY);
-    const end = Math.min(to, text.length);
-    if (end > from) text.delete(from, end - from);
-    if (insert) text.insert(from, insert);
-    this.doc.commit();
+    this.doc.replaceRange(from, to, insert);
   }
 
   status(): ConnectionStatus {
@@ -297,22 +300,24 @@ export class LoroEngine implements CollabSession {
     return () => this.peerListeners.delete(listener);
   }
 
+  /* ------------------------------------------------------------- comments */
+
   comments(): CommentRecord[] {
     return this.cachedComments;
   }
 
   addComment(input: { from: number; to: number; quote: string; body: string }): string {
     const id = createCommentId();
-    const text = this.doc.getText(TEXT_KEY);
+    // Weight-stable anchors: the ESBT equivalent of a Loro Cursor. They
+    // survive concurrent edits anywhere else in the document; quote+offset
+    // remain as the fallback the shared resolver understands.
     let startCursor: string | undefined;
     let endCursor: string | undefined;
     try {
-      const start = text.getCursor(input.from);
-      const end = text.getCursor(input.to);
-      if (start) startCursor = encodeBytes(start.encode());
-      if (end) endCursor = encodeBytes(end.encode());
+      startCursor = encodeAnchor(this.doc.indexToAnchor(input.from));
+      endCursor = encodeAnchor(this.doc.indexToAnchor(input.to));
     } catch {
-      // Cursors are an optimisation; quote+offset still work.
+      // Anchors are an optimisation; quote+offset still work.
     }
 
     const record: CommentRecord = {
@@ -328,21 +333,21 @@ export class LoroEngine implements CollabSession {
       startCursor,
       endCursor,
     };
-    this.doc.getMap(COMMENTS_MAP).set(id, serializeComment(record));
-    this.doc.commit({ origin: COMMENT_ORIGIN });
+    this.doc.transact(() => this.doc.mapSet(id, serializeComment(record)), COMMENT_ORIGIN);
     return id;
   }
 
   resolveComment(id: string): void {
-    const existing = this.commentById(id);
+    const existing = parseComment(this.doc.mapGet(id));
     if (!existing || existing.resolved) return;
-    this.doc.getMap(COMMENTS_MAP).set(id, serializeComment({ ...existing, resolved: true }));
-    this.doc.commit({ origin: COMMENT_ORIGIN });
+    this.doc.transact(
+      () => this.doc.mapSet(id, serializeComment({ ...existing, resolved: true })),
+      COMMENT_ORIGIN,
+    );
   }
 
   deleteComment(id: string): void {
-    this.doc.getMap(COMMENTS_MAP).delete(id);
-    this.doc.commit({ origin: COMMENT_ORIGIN });
+    this.doc.transact(() => this.doc.mapDelete(id), COMMENT_ORIGIN);
   }
 
   onCommentsChange(listener: (comments: CommentRecord[]) => void): () => void {
@@ -419,7 +424,7 @@ export class LoroEngine implements CollabSession {
     if (this.destroyed) return;
 
     const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-    const url = new URL(`${protocol}://${location.host}/collab/loro/${this.docId}`);
+    const url = new URL(`${protocol}://${location.host}/collab/esbt/${this.docId}`);
 
     // Tell the server what we already have so it can reply with a delta
     // instead of a full snapshot.
@@ -440,7 +445,6 @@ export class LoroEngine implements CollabSession {
     socket.addEventListener('message', (event) => this.onMessage(event.data as ArrayBuffer));
     socket.addEventListener('open', () => {
       this.reconnectDelay = RECONNECT_MIN_MS;
-      // Push anything the server is missing (edits made while offline).
       this.send(MSG_EPHEMERAL, this.ephemeral.encodeAll());
     });
     socket.addEventListener('close', (event) => this.onDisconnect(socket, event.code));
@@ -597,7 +601,7 @@ export class LoroEngine implements CollabSession {
   /* ------------------------------------------------------------ persistence */
 
   private get cacheKey(): string {
-    return `marks:loro:${this.docId}`;
+    return `marks:esbt:${this.docId}`;
   }
 
   private scheduleLocalSave(): void {
@@ -619,7 +623,7 @@ export class LoroEngine implements CollabSession {
       return;
     }
     try {
-      await withPersistLock(persistLockName('loro', this.docId), async () => {
+      await withPersistLock(persistLockName('esbt', this.docId), async () => {
         await idbSet(this.cacheKey, snapshot);
       });
     } catch {
@@ -641,9 +645,45 @@ export class LoroEngine implements CollabSession {
     for (const listener of this.statusListeners) listener(status);
   }
 
+  private markHydrated(): void {
+    if (this.isHydrated) return;
+    this.isHydrated = true;
+    this.emitComments();
+    for (const listener of this.hydratedListeners) listener();
+  }
+
+  private emitComments(): void {
+    this.cachedComments = this.readComments();
+    for (const listener of this.commentListeners) listener(this.cachedComments);
+  }
+
+  private readComments(): CommentRecord[] {
+    const raw = readCommentMap(this.doc.mapEntries());
+    const text = this.getText();
+    return raw.map((comment) => {
+      const fromAnchors = this.rangeFromAnchors(comment);
+      const resolved = fromAnchors ?? resolveCommentRange(comment, text);
+      return resolved ? { ...comment, from: resolved.from, to: resolved.to } : comment;
+    });
+  }
+
+  private rangeFromAnchors(comment: CommentRecord): { from: number; to: number } | null {
+    if (!comment.startCursor || !comment.endCursor) return null;
+    try {
+      const start = decodeAnchor(comment.startCursor);
+      const end = decodeAnchor(comment.endCursor);
+      if (!start || !end) return null;
+      const from = this.doc.anchorToIndex(start);
+      const to = this.doc.anchorToIndex(end);
+      return { from: Math.min(from, to), to: Math.max(from, to) };
+    } catch {
+      return null;
+    }
+  }
+
   private refreshPeers(): void {
-    const states = this.ephemeral.getAllStates() as Record<string, unknown>;
-    const selfKey = userKey(this.doc.peerIdStr);
+    const states = this.ephemeral.getAllStates();
+    const selfKey = userKey(this.doc.siteId);
     const peers: Peer[] = [];
 
     for (const [key, value] of Object.entries(states)) {
@@ -661,7 +701,7 @@ export class LoroEngine implements CollabSession {
 
     if (!peers.some((peer) => peer.self)) {
       peers.unshift({
-        id: this.doc.peerIdStr,
+        id: this.doc.siteId,
         name: this.user.name,
         colorIndex: this.user.colorIndex,
         self: true,
@@ -674,9 +714,9 @@ export class LoroEngine implements CollabSession {
   }
 
   destroy(): void {
-    // Flush before the destroyed flag goes up: `saveLocalSnapshot` bails on it,
-    // so edits still sitting inside the save debounce — everything typed in the
-    // last 800 ms, which offline is the only copy of — would be lost.
+    // Flush before the destroyed flag goes up: edits still sitting inside the
+    // save debounce — everything typed in the last 800 ms, which offline is
+    // the only copy of — would be lost.
     this.flushLocalSave();
 
     this.destroyed = true;
@@ -686,10 +726,12 @@ export class LoroEngine implements CollabSession {
     window.removeEventListener('pagehide', this.handlePageHide);
     if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
     if (this.snapshotReplyTimer !== null) clearTimeout(this.snapshotReplyTimer);
+    if (this.presenceHeartbeat !== null) clearInterval(this.presenceHeartbeat);
     for (const unsubscribe of this.unsubscribers) unsubscribe();
     this.tabs.destroy();
     this.socket?.close();
     this.socket = null;
+    this.undoManager.destroy();
     this.ephemeral.destroy();
     this.textListeners.clear();
     this.statusListeners.clear();
@@ -697,50 +739,20 @@ export class LoroEngine implements CollabSession {
     this.commentListeners.clear();
     this.hydratedListeners.clear();
   }
+}
 
-  private markHydrated(): void {
-    if (this.isHydrated) return;
-    this.isHydrated = true;
-    this.emitComments();
-    for (const listener of this.hydratedListeners) listener();
-  }
+const anchorEncoder = new TextEncoder();
+const anchorDecoder = new TextDecoder();
 
-  private emitComments(): void {
-    this.cachedComments = this.readComments();
-    for (const listener of this.commentListeners) listener(this.cachedComments);
-  }
+/** Anchors travel inside comment records as opaque base64url strings. */
+function encodeAnchor(anchor: EsbtAnchor): string {
+  return encodeBytes(anchorEncoder.encode(JSON.stringify(anchor)));
+}
 
-  private commentById(id: string): CommentRecord | null {
-    const json = this.doc.getMap(COMMENTS_MAP).toJSON() as Record<string, unknown>;
-    return parseComment(json[id]);
-  }
-
-  private readComments(): CommentRecord[] {
-    const map = this.doc.getMap(COMMENTS_MAP);
-    const raw = readCommentMap(map.entries());
-    const text = this.getText();
-    return raw.map((comment) => {
-      const fromCursors = this.rangeFromCursors(comment);
-      const resolved = fromCursors ?? resolveCommentRange(comment, text);
-      return resolved ? { ...comment, from: resolved.from, to: resolved.to } : comment;
-    });
-  }
-
-  private rangeFromCursors(comment: CommentRecord): { from: number; to: number } | null {
-    if (!comment.startCursor || !comment.endCursor) return null;
-    try {
-      const startBytes = decodeBytes(comment.startCursor);
-      const endBytes = decodeBytes(comment.endCursor);
-      if (!startBytes || !endBytes) return null;
-      const start = this.doc.getCursorPos(Cursor.decode(startBytes));
-      const end = this.doc.getCursorPos(Cursor.decode(endBytes));
-      if (!start || !end) return null;
-      return {
-        from: Math.min(start.offset, end.offset),
-        to: Math.max(start.offset, end.offset),
-      };
-    } catch {
-      return null;
-    }
-  }
+function decodeAnchor(value: string): EsbtAnchor | null {
+  const bytes = decodeBytes(value);
+  if (!bytes) return null;
+  const parsed = JSON.parse(anchorDecoder.decode(bytes)) as Partial<EsbtAnchor>;
+  if (typeof parsed.weight !== 'string' || typeof parsed.offset !== 'number') return null;
+  return { weight: parsed.weight, offset: parsed.offset };
 }

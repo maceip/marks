@@ -22,12 +22,10 @@ import { editorTheme, markdownHighlighting } from './theme';
 /**
  * Positions that briefly outrun the local document.
  *
- * The collaborative bindings resolve remote cursors and undo selections
- * against the CRDT, which can be a step ahead of the editor while a change is
- * still being applied — loro-codemirror restores an undo selection in the same
- * transaction that rewrites the document, for instance. CodeMirror routes the
- * failure here and recovers on the next update, so these are noise. Anything
- * else deserves to be seen.
+ * The presence layer resolves remote cursors against the CRDT, which can be a
+ * step ahead of the editor while a change is still being applied. CodeMirror
+ * routes the failure here and recovers on the next update, so these are
+ * noise. Anything else deserves to be seen.
  */
 const TRANSIENT_BINDING_ERROR =
   /Invalid position \d+ in document|No tile at position|property 'tile' of/;

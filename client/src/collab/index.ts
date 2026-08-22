@@ -1,23 +1,16 @@
-import { LoroEngine } from './loro-engine';
-import type { CollabSession, EngineName, SessionOptions } from './types';
-import { YjsEngine } from './yjs-engine';
+import { EsbtEngine } from './esbt-engine';
+import type { CollabSession, SessionOptions } from './types';
 
 export * from './types';
 export { loadUser, saveUser, colorVar, initials, PALETTE_SIZE } from './user';
 
-export const ENGINES: Array<{ id: EngineName; label: string; blurb: string }> = [
-  {
-    id: 'loro',
-    label: 'Loro',
-    blurb: 'Fugue over an Eg-walker event graph. Fastest merges, smallest snapshots.',
-  },
-  {
-    id: 'yjs',
-    label: 'Yjs',
-    blurb: 'YATA via Hocuspocus. The widest ecosystem of bindings and backends.',
-  },
-];
+export const ENGINE = {
+  id: 'esbt' as const,
+  label: 'ESBT',
+  blurb:
+    'Weighted-identifier sequence CRDT (Mechaoui & Imine). Pure TypeScript, tombstone-free deletes, delta reconnect.',
+};
 
 export function createSession(options: SessionOptions): CollabSession {
-  return options.engine === 'yjs' ? new YjsEngine(options) : new LoroEngine(options);
+  return new EsbtEngine(options);
 }

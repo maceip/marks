@@ -1,8 +1,53 @@
 # ESBT integration contract
 
-Marks is replacing Loro and Yjs with ESBT (Mechaoui & Imine, [arXiv:2607.28101](https://arxiv.org/abs/2607.28101); [maceip/ESBT-web](https://github.com/maceip/ESBT-web)).
+Marks replaced Loro and Yjs with ESBT (Mechaoui & Imine, [arXiv:2607.28101](https://arxiv.org/abs/2607.28101); [maceip/ESBT-web](https://github.com/maceip/ESBT-web)).
 
 This document is the API the ESBT implementation must satisfy so the existing markdown editor can keep CodeMirror sync, preview writes, offline delta reconnect, per-peer undo, and presence — without changing the algorithm later.
+
+## Status: implemented
+
+The contract below is implemented by the [`@marks/esbt`](../esbt) workspace
+(canonical sources in [maceip/ESBT-web `ts/`](https://github.com/maceip/ESBT-web)),
+and marks now runs on it exclusively: the client engine is
+`client/src/collab/esbt-engine.ts`, the server room is
+`server/src/esbt-room.ts`, and `loro-crdt`, `loro-codemirror`, `yjs`,
+`y-codemirror.next`, `y-indexeddb`, and both Hocuspocus packages are gone from
+the dependency tree. Every invariant in [What marks will test](#what-marks-will-test)
+is a passing test in `esbt/src/contract.test.ts`.
+
+Auditing the exact Loro/Yjs surface marks called (the audit lives next to the
+engine as `ts/COVERAGE.md` in ESBT-web) forced four additions to this
+contract, all shipped:
+
+1. **`EphemeralStore.keys(): string[]`** — the server room gates its first
+   presence frame on `keys().length > 0`; `getAllStates()` alone forced an
+   allocation per join.
+2. **`UndoManagerOptions.mergeIntervalMs` and `excludeOriginPrefixes`** —
+   `new UndoManager(doc, { mergeIntervalMs: 500, excludeOriginPrefixes: ['comments'] })`.
+   Both replaced engines group a burst of keystrokes into one undo step
+   (Loro's merge interval, Yjs's `captureTimeout`), and Loro's origin
+   exclusion is what keeps Mod-Z from deleting a comment. The defaults keep
+   the strict contract behaviour.
+3. **`EsbtDoc.indexToAnchor(i)` / `anchorToIndex(a)`** — the weight-stable
+   anchors §7 asks for, available now rather than "when comments exist".
+   `EsbtAnchor { weight, offset }`; a deleted anchor resolves to the index its
+   item would occupy today, so ranges collapse instead of drifting. Comment
+   records carry them as their engine-encoded cursors.
+4. **`EsbtDoc.mapSet` / `mapDelete` / `mapGet` / `mapEntries`** — a keyed
+   last-writer-wins register map riding the same oplog, snapshots (both
+   flavours), version vectors, and deltas as the text. The browser-surface
+   feature stores comment records in a CRDT map container the way it did with
+   `doc.getMap(...)` on Loro / `Y.Map` on Yjs; this is the ESBT equivalent.
+   Values are opaque strings; the highest (lamport, site) write per key wins;
+   deletes leave mergeable tombstones.
+
+Two behaviours this document required are worth naming as delivered exactly:
+snapshots restore a stable server site's generators (§6 — a restarted room
+resumes `seq` and `c` from the snapshot instead of minting a fresh site id),
+and remote cursor decorations were rebuilt marks-side
+(`client/src/collab/presence.ts`, publishing the `${siteId}-cm-user` /
+`${siteId}-cm-sel` keys named below on a 15 s heartbeat), since the crate
+deliberately does not speak CodeMirror.
 
 **Contents:** crate API (constructors, `EsbtDoc`, version vectors, undo, presence) · [§6 one-process server](#6-the-server-is-one-process) · [§7 identity / Docs-shaped product](#7-identity-and-the-docs-shaped-product)
 

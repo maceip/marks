@@ -6,10 +6,9 @@ import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { api } from './api.js';
 import { CLIENT_DIST, HOST, PORT } from './config.js';
-import { LoroRoom } from './loro-room.js';
+import { EsbtRoom } from './esbt-room.js';
 import { seedIfEmpty } from './seed.js';
 import { databaseFile, getDocument, isRecentlyDeleted } from './store.js';
-import { handleYjsConnection, hocuspocus } from './yjs-room.js';
 
 const app = express();
 app.use(compression());
@@ -50,11 +49,11 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 /**
- * `/collab/loro/<documentId>` — one socket per document.
- * `/collab/yjs` — Hocuspocus multiplexes every document over one socket and
- * carries the document name in the sync protocol, so no id appears in the path.
+ * `/collab/esbt/<documentId>` — one socket per document. Anything else —
+ * including the retired `/collab/loro` and `/collab/yjs` paths — is refused,
+ * so a stale client cannot hand an ESBT document an incompatible replica.
  */
-const COLLAB_PATH = /^\/collab\/(loro|yjs)(?:\/([\w-]{1,64}))?$/;
+const COLLAB_PATH = /^\/collab\/esbt\/([\w-]{1,64})$/;
 
 server.on('upgrade', (request, socket, head) => {
   const url = new URL(request.url ?? '/', 'http://localhost');
@@ -65,28 +64,23 @@ server.on('upgrade', (request, socket, head) => {
     return;
   }
 
-  const [, engine, documentId] = match;
-  if (engine === 'loro' && !documentId) {
+  const [, documentId] = match;
+
+  // Documents created by the retired engines have incompatible binary
+  // formats. Connecting this protocol to one would hand it an empty replica,
+  // and the first edit would overwrite the stored state with an unreadable
+  // one. Unknown ids are still allowed through, so a URL can create a
+  // document.
+  const existing = getDocument(documentId);
+  if (existing && existing.engine !== 'esbt') {
     socket.destroy();
     return;
   }
-
-  // The two CRDTs have incompatible binary formats. Connecting the wrong
-  // protocol to an existing document would hand it an empty replica, and the
-  // first edit would overwrite the stored state with an unreadable one.
-  // Unknown ids are still allowed through, so a URL can create a document.
-  if (documentId) {
-    const existing = getDocument(documentId);
-    if (existing && existing.engine !== engine) {
-      socket.destroy();
-      return;
-    }
-    // A client that was connected when the document was deleted will try to
-    // reconnect; letting it through would recreate what was just deleted.
-    if (!existing && isRecentlyDeleted(documentId)) {
-      socket.destroy();
-      return;
-    }
+  // A client that was connected when the document was deleted will try to
+  // reconnect; letting it through would recreate what was just deleted.
+  if (!existing && isRecentlyDeleted(documentId)) {
+    socket.destroy();
+    return;
   }
 
   // Clients that already hold state announce it, so we can answer with a delta.
@@ -94,11 +88,7 @@ server.on('upgrade', (request, socket, head) => {
   const vv = have ? safeBase64(have) : undefined;
 
   wss.handleUpgrade(request, socket, head, (ws) => {
-    if (engine === 'loro') {
-      LoroRoom.open(documentId).join(ws, vv);
-    } else {
-      handleYjsConnection(ws, request);
-    }
+    EsbtRoom.open(documentId).join(ws, vv);
   });
 });
 
@@ -117,9 +107,7 @@ async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[marks] ${signal} received, flushing documents`);
-  await LoroRoom.flushAll();
-  hocuspocus.flushPendingStores();
-  hocuspocus.closeConnections();
+  await EsbtRoom.flushAll();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 3_000).unref();
 }

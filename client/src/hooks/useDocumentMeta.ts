@@ -1,20 +1,23 @@
 import { useEffect, useState } from 'react';
 import { readDocumentMeta, writeDocumentMeta } from '../browser/catalog-cache';
-import type { EngineName } from '../collab/types';
 import { getDocument, type DocumentMeta } from '../lib/api';
 
 export interface DocumentMetaState {
   meta: DocumentMeta | null;
-  engine: EngineName;
+  /** The engine tag to display; `esbt` for anything this client can open. */
+  engine: string;
+  /** False for rows created by the retired Loro/Yjs engines. */
+  supported: boolean;
   resolved: boolean;
 }
 
 /**
- * Resolve a document's engine before opening a session.
+ * Resolve a document's metadata before opening a session.
  *
- * The two CRDTs have incompatible binary formats, so a document is opened with
- * the engine it was created with. Unknown ids default to Loro and are created
- * on first connect.
+ * Unknown ids are created as ESBT documents on first connect. Rows created
+ * by the retired engines are refused rather than opened: their stored bytes
+ * are in a binary format marks no longer ships a runtime for, and connecting
+ * an ESBT replica to them would overwrite good state with an empty document.
  */
 export function useDocumentMeta(docId: string | null): DocumentMetaState {
   const [meta, setMeta] = useState<DocumentMeta | null>(null);
@@ -43,10 +46,8 @@ export function useDocumentMeta(docId: string | null): DocumentMetaState {
         void writeDocumentMeta(document);
       })
       .catch(() => {
-        // Keep a cached engine so an offline Yjs document is not opened as Loro.
-        if (active) {
-          /* meta already set from cache, or stays null for a true unknown id */
-        }
+        // Keep a cached engine so an offline legacy document is not opened
+        // as ESBT; meta stays null only for a truly unknown id.
       })
       .finally(() => {
         if (active) setResolved(true);
@@ -57,5 +58,10 @@ export function useDocumentMeta(docId: string | null): DocumentMetaState {
     };
   }, [docId]);
 
-  return { meta, engine: meta?.engine ?? 'loro', resolved };
+  return {
+    meta,
+    engine: meta?.engine ?? 'esbt',
+    supported: !meta || meta.engine === 'esbt',
+    resolved,
+  };
 }

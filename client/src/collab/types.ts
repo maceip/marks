@@ -1,7 +1,12 @@
 import type { Extension } from '@codemirror/state';
 import type { CommentRecord } from '../browser/comments';
 
-export type EngineName = 'loro' | 'yjs';
+/**
+ * The CRDT engine documents are stored in. ESBT is the only engine; the
+ * server may still report `loro` or `yjs` on rows created before those
+ * engines were removed, which the client refuses to open (see `lib/api.ts`).
+ */
+export type EngineName = 'esbt';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'offline';
 
@@ -73,9 +78,5 @@ export interface CollabSession {
 
 export interface SessionOptions {
   docId: string;
-  engine: EngineName;
   user: LocalUser;
 }
-
-/** Shared container/type name for the markdown source. Must match the server. */
-export const TEXT_KEY = 'markdown';

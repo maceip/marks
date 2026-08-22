@@ -62,7 +62,7 @@ fi
 
 # --- 3. create a fresh shared document --------------------------------------
 log "creating a fresh shared marks document"
-resp="$(curl -s -X POST "http://localhost:$PORT/api/documents" -H 'content-type: application/json' -d '{"engine":"loro"}')"
+resp="$(curl -s -X POST "http://localhost:$PORT/api/documents" -H 'content-type: application/json' -d '{}')"
 id="$(printf '%s' "$resp" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)"
 [ -n "$id" ] || { echo "run-marks-tests: failed to create document: $resp" >&2; exit 1; }
 docpath="/d/$id"

@@ -102,6 +102,7 @@ export function Benchmark({ onBack }: BenchmarkProps) {
   };
 
   const best = (metric: (typeof METRICS)[number]): number | null => {
+    // Highlighting a "winner" needs at least two columns to compare.
     if (rows.length < 2) return null;
     return Math.min(...rows.map((row) => Number(row[metric.key])));
   };
@@ -115,9 +116,11 @@ export function Benchmark({ onBack }: BenchmarkProps) {
 
         <h2>Engine benchmark</h2>
         <p className="benchmark-lede">
-          Both engines get the same generated editing trace, in a worker, in this browser. Loro
-          implements Fugue on top of an Eg-walker style event graph; Yjs implements YATA. Numbers
-          are one run on your machine — not a claim about your production workload.
+          The ESBT engine gets a generated editing trace, in a worker, in this browser. ESBT
+          (Mechaoui &amp; Imine) orders characters by weighted identifiers — Stern–Brocot
+          fractions with an integer ladder and a sequence path behind them — so deletes leave no
+          tombstones. Numbers are one run on your machine — not a claim about your production
+          workload.
         </p>
 
         <div className="benchmark-controls">
@@ -202,16 +205,16 @@ export function Benchmark({ onBack }: BenchmarkProps) {
             ))}
           </ul>
           <p>
-            Expect the two engines to trade places. Yjs is pure JavaScript, so it applies a long
-            trace of single-character edits with less per-operation overhead than a WebAssembly
-            replica that crosses the JS boundary on every keystroke. Loro's advantage is in what it
-            stores and ships: a smaller encoded document and a faster cold open, which is what
-            actually decides how quickly a document appears when you click it.
+            The engine is pure TypeScript on the main thread — no WebAssembly boundary on the
+            keystroke path — and applies each edit in microseconds, far below what typing can
+            notice. Its encoded documents are larger than mature engines' columnar formats
+            (identifiers are stored explicitly; compact encodings are the paper's stated future
+            work), which is what the snapshot row measures honestly.
           </p>
           <p>
-            Both merge diverged branches without a server. Operational transform, by contrast, has
-            to transform each concurrent operation against every other, which is why long-running
-            offline branches are where it struggles.
+            Branches merge without a server. Operational transform, by contrast, has to transform
+            each concurrent operation against every other, which is why long-running offline
+            branches are where it struggles.
           </p>
         </section>
       </div>

@@ -1,8 +1,6 @@
-import type { EngineName } from '../collab/types';
-
 /** Everything the performance panel and status bar display, sampled together. */
 export interface HudSnapshot {
-  engine: EngineName;
+  engine: string;
   /** Preview latency, in milliseconds. */
   p50: number;
   p95: number;
@@ -25,7 +23,7 @@ export interface HudSnapshot {
 }
 
 export const EMPTY_SNAPSHOT: HudSnapshot = {
-  engine: 'loro',
+  engine: 'esbt',
   p50: 0,
   p95: 0,
   max: 0,
