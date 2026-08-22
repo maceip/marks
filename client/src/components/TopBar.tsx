@@ -1,6 +1,7 @@
 import type { EditorView } from '@codemirror/view';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import type { ConnectionStatus, Peer } from '../collab/types';
+import type { Posture } from '../lib/posture';
 import type { UiActionId } from '../lib/ui-actions';
 import { Icon, icons } from './Icon';
 import { MarksMark } from './MarksMark';
@@ -9,10 +10,12 @@ import { SurfaceMaterial } from './SurfaceMaterial';
 
 export type ViewMode = 'edit' | 'split' | 'preview';
 export type SurfaceRoute = 'home' | 'document' | 'benchmark';
-type RibbonTab = 'file' | 'home' | 'insert' | 'review' | 'view';
 
-const RibbonToolbar = lazy(() =>
-  import('./Toolbar').then((module) => ({ default: module.Toolbar })),
+const DocumentChrome = lazy(() =>
+  import('./chrome/DocumentChrome').then((module) => ({ default: module.DocumentChrome })),
+);
+const QuickAccess = lazy(() =>
+  import('./chrome/DocumentChrome').then((module) => ({ default: module.QuickAccess })),
 );
 
 interface TopBarProps {
@@ -21,7 +24,8 @@ interface TopBarProps {
   route: SurfaceRoute;
   documentReady: boolean;
   documentAvailable: boolean;
-  phone: boolean;
+  posture: Posture;
+  selected?: number;
   getView: () => EditorView | null;
   status: ConnectionStatus;
   peers: Peer[];
@@ -41,9 +45,11 @@ interface TopBarProps {
   onToggleOutline: () => void;
   onToggleRibbon: () => void;
   onAction: (action: UiActionId) => void;
+  onOpenAi?: () => void;
   onVoice?: () => void;
   voiceActive?: boolean;
   voiceSupported?: boolean;
+  onNotify?: (title: string, detail?: string, tone?: 'neutral' | 'success' | 'danger') => void;
 }
 
 const STATUS_LABEL: Record<ConnectionStatus, string> = {
@@ -52,26 +58,9 @@ const STATUS_LABEL: Record<ConnectionStatus, string> = {
   offline: 'Offline',
 };
 
-const MODES: Array<{ id: ViewMode; label: string; icon: keyof typeof icons }> = [
-  { id: 'edit', label: 'Editor', icon: 'pencil' },
-  { id: 'split', label: 'Split', icon: 'split' },
-  { id: 'preview', label: 'Preview', icon: 'eye' },
-];
-
-const TABS: Array<{ id: RibbonTab; label: string }> = [
-  { id: 'file', label: 'File' },
-  { id: 'home', label: 'Home' },
-  { id: 'insert', label: 'Insert' },
-  { id: 'review', label: 'Review' },
-  { id: 'view', label: 'View' },
-];
-
 export function TopBar(props: TopBarProps) {
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
-  const [activeTab, setActiveTab] = useState<RibbonTab>(() =>
-    props.mode === 'preview' ? 'view' : 'home',
-  );
 
   useEffect(() => {
     if (!moreOpen) return;
@@ -90,13 +79,17 @@ export function TopBar(props: TopBarProps) {
   }, [moreOpen]);
 
   const documentRoute = props.route === 'document';
-  const visibleModes = props.phone ? MODES.filter((mode) => mode.id !== 'split') : MODES;
 
   return (
     <header className={`app-ribbon ribbon-${props.route} surface-material-host`}>
       <SurfaceMaterial variant="chrome" intensity={0.96} />
       <div className="titlebar">
         <div className="topbar-left">
+          {documentRoute && !props.posture.phone && (
+            <Suspense fallback={null}>
+              <QuickAccess disabled={!props.documentReady} getView={props.getView} />
+            </Suspense>
+          )}
           <button
             type="button"
             className="icon-button"
@@ -182,7 +175,7 @@ export function TopBar(props: TopBarProps) {
             <Icon path={props.theme === 'dark' ? icons.sun : icons.moon} />
           </button>
 
-          {documentRoute && !props.phone && !props.focusMode && (
+          {documentRoute && !props.posture.phone && !props.focusMode && (
             <button
               type="button"
               className={`icon-button ribbon-collapse${props.ribbonCollapsed ? ' collapsed' : ''}`}
@@ -211,169 +204,31 @@ export function TopBar(props: TopBarProps) {
       </div>
 
       {documentRoute && (
-        <div className="ribbon-body">
-          <nav className="ribbon-tabs" aria-label="Command ribbon" onDoubleClick={props.onToggleRibbon}>
-            {TABS.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                className={`ribbon-tab${activeTab === tab.id ? ' active' : ''}`}
-                aria-pressed={activeTab === tab.id}
-                onClick={() => setActiveTab(tab.id)}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </nav>
-
-          <div className="ribbon-deck">
-            {activeTab === 'file' && (
-              <div className="ribbon-toolbar ribbon-deck-enter" role="toolbar" aria-label="File commands">
-                <div className="ribbon-command-group">
-                  <div className="ribbon-command-row">
-                    <button type="button" className="ribbon-command" onClick={() => props.onAction('new')}><Icon path={icons.plus} /><span className="ribbon-command-label">New</span></button>
-                    <button type="button" className="ribbon-command" onClick={() => props.onAction('templates')}><Icon path={icons.template} /><span className="ribbon-command-label">Template</span></button>
-                  </div>
-                  <span className="ribbon-group-label">Create</span>
-                </div>
-                <div className="ribbon-command-group">
-                  <div className="ribbon-command-row">
-                    <button type="button" className="ribbon-command" disabled={!props.documentReady} onClick={() => props.onAction('rename')}><Icon path={icons.pencil} /><span className="ribbon-command-label">Rename</span></button>
-                    <button type="button" className="ribbon-command" disabled={!props.documentReady} onClick={() => props.onAction('duplicate')}><Icon path={icons.duplicate} /><span className="ribbon-command-label">Duplicate</span></button>
-                  </div>
-                  <span className="ribbon-group-label">Document</span>
-                </div>
-                <div className="ribbon-command-group">
-                  <div className="ribbon-command-row">
-                    <button type="button" className="ribbon-command" disabled={!props.documentReady} onClick={() => props.onAction('download')}><Icon path={icons.download} /><span className="ribbon-command-label">Markdown</span></button>
-                    <button type="button" className="ribbon-command" disabled={!props.documentReady} onClick={() => props.onAction('print')}><Icon path={icons.print} /><span className="ribbon-command-label">Print</span></button>
-                    <button type="button" className="ribbon-command danger-command" disabled={!props.documentReady} onClick={() => props.onAction('delete')}><Icon path={icons.trash} /><span className="ribbon-command-label">Delete</span></button>
-                  </div>
-                  <span className="ribbon-group-label">Export</span>
-                </div>
-              </div>
-            )}
-
-            {(activeTab === 'home' || activeTab === 'insert') && (
-              <Suspense fallback={<div className="ribbon-loading">Loading commands…</div>}>
-                <RibbonToolbar
-                  getView={props.getView}
-                  section={activeTab}
-                  disabled={!props.documentReady}
-                  onVoice={props.onVoice}
-                  voiceActive={props.voiceActive}
-                  voiceSupported={props.voiceSupported}
-                />
-              </Suspense>
-            )}
-
-            {activeTab === 'review' && (
-              <div className="ribbon-toolbar ribbon-deck-enter" role="toolbar" aria-label="Review commands">
-                <div className="ribbon-command-group">
-                  <div className="ribbon-command-row">
-                    <button
-                      type="button"
-                      className={`ribbon-command${props.reviewOpen === 'comments' ? ' active' : ''}`}
-                      aria-pressed={props.reviewOpen === 'comments'}
-                      onClick={() => props.onAction('comments')}
-                    >
-                      <Icon path={icons.comment} />
-                      <span className="ribbon-command-label">Comments</span>
-                    </button>
-                    <button
-                      type="button"
-                      className={`ribbon-command${props.reviewOpen === 'history' ? ' active' : ''}`}
-                      aria-pressed={props.reviewOpen === 'history'}
-                      onClick={() => props.onAction('history')}
-                    >
-                      <Icon path={icons.history} />
-                      <span className="ribbon-command-label">History</span>
-                    </button>
-                  </div>
-                  <span className="ribbon-group-label">Review</span>
-                </div>
-                <div className="ribbon-command-group">
-                  <div className="ribbon-command-row">
-                    <button
-                      type="button"
-                      className={`ribbon-command${props.hudOpen ? ' active' : ''}`}
-                      aria-pressed={props.hudOpen}
-                      onClick={props.onToggleHud}
-                    >
-                      <Icon path={icons.gauge} />
-                      <span className="ribbon-command-label">Performance</span>
-                    </button>
-                  </div>
-                  <span className="ribbon-group-label">Inspect</span>
-                </div>
-              </div>
-            )}
-
-            {activeTab === 'view' && (
-              <div className="ribbon-toolbar ribbon-deck-enter" role="toolbar" aria-label="View commands">
-                <div className="ribbon-command-group">
-                  <div className="ribbon-command-row mode-command-row">
-                    {visibleModes.map((mode) => (
-                      <button
-                        key={mode.id}
-                        type="button"
-                        className={`ribbon-command${props.mode === mode.id ? ' active' : ''}`}
-                        aria-pressed={props.mode === mode.id}
-                        onClick={() => props.onModeChange(mode.id)}
-                      >
-                        <Icon path={icons[mode.icon]} />
-                        <span className="ribbon-command-label">{mode.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                  <span className="ribbon-group-label">Layout</span>
-                </div>
-                <div className="ribbon-command-group">
-                  <div className="ribbon-command-row">
-                    <button
-                      type="button"
-                      className={`ribbon-command${props.outlineOpen ? ' active' : ''}`}
-                      aria-pressed={props.outlineOpen}
-                      onClick={props.onToggleOutline}
-                    >
-                      <Icon path={icons.outline} />
-                      <span className="ribbon-command-label">Outline</span>
-                    </button>
-                    <button
-                      type="button"
-                      className={`ribbon-command${props.focusMode ? ' active' : ''}`}
-                      aria-pressed={props.focusMode}
-                      onClick={() => props.onAction('focus')}
-                    >
-                      <Icon path={icons.focus} />
-                      <span className="ribbon-command-label">Focus</span>
-                    </button>
-                    <button type="button" className="ribbon-command" onClick={() => props.onAction('preferences')}>
-                      <Icon path={icons.settings} />
-                      <span className="ribbon-command-label">Appearance</span>
-                    </button>
-                    <button type="button" className="ribbon-command" onClick={props.onToggleTheme}>
-                      <Icon path={props.theme === 'dark' ? icons.sun : icons.moon} />
-                      <span className="ribbon-command-label">
-                        {props.theme === 'dark' ? 'Light' : 'Dark'}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      className={`ribbon-command${props.hudOpen ? ' active' : ''}`}
-                      aria-pressed={props.hudOpen}
-                      onClick={props.onToggleHud}
-                    >
-                      <Icon path={icons.gauge} />
-                      <span className="ribbon-command-label">Performance</span>
-                    </button>
-                  </div>
-                  <span className="ribbon-group-label">Workspace</span>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+        <Suspense fallback={props.posture.phone ? null : <div className="ribbon-loading">Loading commands…</div>}>
+          <DocumentChrome
+            posture={props.posture}
+            documentReady={props.documentReady}
+            documentTitle={props.title}
+            mode={props.mode}
+            theme={props.theme}
+            hudOpen={props.hudOpen}
+            outlineOpen={props.outlineOpen}
+            reviewOpen={props.reviewOpen}
+            focusMode={props.focusMode}
+            selected={props.selected ?? 0}
+            getView={props.getView}
+            onModeChange={props.onModeChange}
+            onToggleHud={props.onToggleHud}
+            onToggleOutline={props.onToggleOutline}
+            onAction={props.onAction}
+            onOpenAi={() => props.onOpenAi?.()}
+            onToggleTheme={props.onToggleTheme}
+            onVoice={props.onVoice}
+            voiceActive={props.voiceActive}
+            voiceSupported={props.voiceSupported}
+            onNotify={props.onNotify}
+          />
+        </Suspense>
       )}
     </header>
   );

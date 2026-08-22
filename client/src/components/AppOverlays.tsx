@@ -52,6 +52,8 @@ const DOCUMENT_ACTIONS = new Set<UiActionId>([
   'comments',
   'history',
   'focus',
+  'find',
+  'ai-compose',
 ]);
 
 function TemplatesDialog({

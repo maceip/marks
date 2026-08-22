@@ -96,21 +96,40 @@ Local data is intentionally useful:
 
 ## Adaptive application ribbon
 
-The ribbon is route-aware and intentionally borrows the command hierarchy of a
-mature desktop document editor:
+The ribbon is route-aware and borrows the command hierarchy of a mature
+desktop document editor, especially the Word mechanics that remain valuable
+in a Markdown workspace:
 
-- **File** — new, templates, rename, duplicate, Markdown export, print, delete.
-- **Home** — headings, inline styles, lists, tasks, quotes, and Dictate.
-- **Insert** — link, image, table, code block, and divider.
-- **Review** — comments, history, and the live performance inspector.
-- **View** — Edit/Split/Preview posture, outline, focus mode, appearance,
-  theme, and performance.
+- **Quick Access** — undo and redo stay on the titlebar, independent of the
+  active tab.
+- **File** — new, templates, rename, duplicate, Markdown export, print, share,
+  delete.
+- **Home** — clipboard (paste, cut, copy, format painter), a heading-style
+  gallery, font marks (bold, italic, insert, strike, highlight, code, clear),
+  grow/shrink heading, lists, indent/outdent, find, and Dictate.
+- **Insert** — pictures (URL or local file), shapes, tables with row/column
+  tools, links, footnotes, comments, code fences, math, Mermaid, callouts,
+  breaks, and a contents marker.
+- **Draw** — rectangle, ellipse, diamond, arrow, and bubble figures plus
+  callout tones.
+- **AI** — compose, rewrite, shorten, expand, summarize, outline, and
+  continue. These are on-device composition helpers with honest copy until a
+  model is wired behind the same insert path.
+- **Review** — comments, history, find, and the live performance inspector.
+- **View** — Edit/Split/Preview, outline, focus, appearance, theme, and
+  performance.
+- **Contextual tabs** — Picture, Table, and Shape appear only when the caret
+  is in those objects, the same way Word reveals Picture Tools.
 
-The full desktop and foldable ribbon is 148px in comfortable density and 132px
-in compact density. It collapses to the 48px titlebar with its titlebar control,
-double-click on the tab rail, or `Control+F1`; the preference persists locally.
-Phone posture uses the fixed bottom command ribbon and does not expose an
-inapplicable collapsed state or Split mode.
+Commands use custom 3D folded-glass glyphs. Tilt is CSS-variable driven from
+pointer position so hover and touch respond without a private animation loop.
+Reduced motion and the foundation glass tier keep the glyphs flat.
+
+The full desktop and studio ribbon is 148px in comfortable density and 132px
+in compact density. It collapses to the 48px titlebar with its titlebar
+control or `Control+F1`; the preference persists locally. Phone posture is a
+separate composer (write / preview / insert / AI / more) and does not expose
+an inapplicable collapsed state or Split mode.
 
 Dictate remains visible as part of the command model. On browsers without the
 speech API it is disabled with an honest explanation; no interaction silently
@@ -155,21 +174,31 @@ Editor-specific shortcuts remain in the CodeMirror keymap.
 
 ## Responsive postures
 
-Shared breakpoint values live in `client/src/lib/product.ts` and must stay
-aligned with `client/src/styles/layout.css`.
+Shells are chosen by `client/src/lib/posture.ts` from viewport segments, the
+Device Posture API, pointer type, and the visual viewport. Width is only a
+fallback when those signals are absent. Shared fallback widths live in
+`client/src/lib/product.ts`.
 
-- `0–720px`: phone posture, 44px targets, safe-area bottom ribbon, one document
-  pane, and bottom-sheet dialogs.
-- Short coarse-pointer landscape (`height <= 560px`): phone posture even when
-  CSS width is wider than 720px.
-- `721–1099px`: tablet and portrait-foldable posture, full top ribbon and modal
-  document drawer.
-- `1100px+`: desktop posture with persistent document rail.
+- **phone** — a distinct composer: swipe between Write and Preview, chip
+  formatting, and bottom-sheet Insert / AI / More grids. Not a squeezed
+  desktop ribbon. Virtual-keyboard inset parks chrome above the keyboard and
+  pauses liquid-glass shaders.
+- **studio** — tablet mid-width: compact top ribbon, modal document drawer.
+- **desktop** — persistent document rail, full ribbon, selection mini-toolbar,
+  and the floating liquid dock.
+- **fold-book** — two horizontal viewport segments: editor on the left,
+  companion stage (Preview / Outline / AI / Review) on the right, hinge gap
+  from segment geometry.
+- **fold-laptop** — stacked segments: editor above, preview below, hinge as
+  the splitter.
+
+`?marks-posture=fold-book` (or `fold-laptop`) forces a shell for walkthroughs
+when hardware segments are unavailable.
 
 The overlay document rail is a modal dialog: scrim dismissal, visible close
 action, Escape dismissal, initial focus, focus containment, and focus
-restoration are component requirements. No breakpoint may make the root
-document horizontally scroll.
+restoration are component requirements. No shell may make the root document
+horizontally scroll.
 
 ## Motion and material
 
@@ -253,7 +282,9 @@ Before a UI handoff, verify at minimum:
 - marketing and workspace home at `1440x900` and `390x844`;
 - document ribbon at `1440x900`, `390x844`, `853x1280`, and `1280x853`;
 - persistent desktop rail and modal tablet/phone drawer behavior;
-- File, Home, Insert, Review, and View ribbon decks;
+- File, Home, Insert, Draw, AI, Review, and View ribbon decks plus contextual
+  Picture / Table / Shape tools;
+- phone composer and fold-book companion (including `?marks-posture=`);
 - ribbon collapse/expand and focus-mode escape path;
 - template creation, rename, duplicate, formatting, comments, history, share
   staging, preferences, command palette, outline, performance, and custom

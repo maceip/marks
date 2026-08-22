@@ -1,10 +1,14 @@
 import type { EditorView } from '@codemirror/view';
 import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type { CollabSession } from '../collab/types';
+import type { Posture } from '../lib/posture';
+import type { UiActionId } from '../lib/ui-actions';
 import type { ScrollSync } from '../lib/scroll-sync';
 import type { PreviewStats } from '../markdown/preview';
 import type { Heading } from '../markdown/types';
 import '../styles/document.css';
+import '../styles/chrome.css';
+import { Outline } from './Outline';
 import type { CursorInfo } from './EditorPane';
 import type { ViewMode } from './TopBar';
 
@@ -14,10 +18,18 @@ const EditorPane = lazy(() =>
 const PreviewPane = lazy(() =>
   import('./PreviewPane').then((module) => ({ default: module.PreviewPane })),
 );
+const AiSheet = lazy(() =>
+  import('./chrome/AiSheet').then((module) => ({ default: module.AiSheet })),
+);
 
 interface WorkspaceProps {
   session: CollabSession;
   mode: ViewMode;
+  posture: Posture;
+  getView: () => EditorView | null;
+  documentTitle?: string;
+  onModeChange?: (mode: ViewMode) => void;
+  onAction?: (action: UiActionId) => void;
   scrollSync: ScrollSync;
   onStats: (stats: PreviewStats) => void;
   onHeadings: (headings: Heading[]) => void;
@@ -39,6 +51,11 @@ function loadSplit(): number {
 function WorkspaceView({
   session,
   mode,
+  posture,
+  getView,
+  documentTitle,
+  onModeChange,
+  onAction,
   scrollSync,
   onStats,
   onHeadings,
@@ -51,12 +68,40 @@ function WorkspaceView({
   const [split, setSplit] = useState(loadSplit);
   const [dragging, setDragging] = useState(false);
   const [previewWarm, setPreviewWarm] = useState(
-    () => mode !== 'edit' || Boolean(previewRequested),
+    () => mode !== 'edit' || Boolean(previewRequested) || posture.foldable,
   );
+  const [companion, setCompanion] = useState<'preview' | 'outline' | 'ai'>('preview');
+  const [localHeadings, setLocalHeadings] = useState<Heading[]>([]);
+  const foldBook = posture.shell === 'fold-book';
+  const showEditor = mode !== 'preview' || foldBook;
 
   useEffect(() => {
-    if (mode !== 'edit' || previewRequested) setPreviewWarm(true);
-  }, [mode, previewRequested]);
+    if (mode !== 'edit' || previewRequested || posture.foldable) setPreviewWarm(true);
+  }, [mode, posture.foldable, previewRequested]);
+
+  useEffect(() => {
+    if (posture.shell !== 'phone' || !onModeChange) return;
+    const root = rootRef.current;
+    if (!root) return;
+    let startX = 0;
+    let startY = 0;
+    const onDown = (event: PointerEvent) => {
+      startX = event.clientX;
+      startY = event.clientY;
+    };
+    const onUp = (event: PointerEvent) => {
+      const dx = event.clientX - startX;
+      const dy = event.clientY - startY;
+      if (Math.abs(dx) < 72 || Math.abs(dx) < Math.abs(dy)) return;
+      onModeChange(dx < 0 ? 'preview' : 'edit');
+    };
+    root.addEventListener('pointerdown', onDown);
+    root.addEventListener('pointerup', onUp);
+    return () => {
+      root.removeEventListener('pointerdown', onDown);
+      root.removeEventListener('pointerup', onUp);
+    };
+  }, [onModeChange, posture.shell]);
 
   const handleView = useCallback(
     (view: EditorView | null) => {
@@ -76,8 +121,8 @@ function WorkspaceView({
 
   // Only sync scrolling when both panes are actually on screen.
   useEffect(() => {
-    scrollSync.setEnabled(mode === 'split');
-  }, [mode, scrollSync]);
+    scrollSync.setEnabled(mode === 'split' || foldBook);
+  }, [foldBook, mode, scrollSync]);
 
   useEffect(() => {
     if (!dragging) return;
@@ -113,7 +158,7 @@ function WorkspaceView({
         CodeMirror instance inside a `display: none` subtree cannot measure
         itself, and the collaborative cursor layers throw when they try.
       */}
-      {mode !== 'preview' && (
+      {showEditor && (
         <Suspense
           fallback={
             <section className="pane editor-pane editor-loading" aria-label="Markdown source">
@@ -155,13 +200,52 @@ function WorkspaceView({
             </section>
           }
         >
-          <PreviewPane
-            session={session}
-            onContainer={handleContainer}
-            onStats={onStats}
-            onHeadings={onHeadings}
-            onScroll={() => scrollSync.fromPreview()}
-          />
+          {foldBook ? (
+            <section className="fold-companion" aria-label="Folded companion">
+              <nav className="fold-companion-tabs" aria-label="Companion pane">
+                <button type="button" className={companion === 'preview' ? 'active' : undefined} onClick={() => setCompanion('preview')}>Preview</button>
+                <button type="button" className={companion === 'outline' ? 'active' : undefined} onClick={() => setCompanion('outline')}>Outline</button>
+                <button type="button" className={companion === 'ai' ? 'active' : undefined} onClick={() => setCompanion('ai')}>AI</button>
+                <button type="button" onClick={() => onAction?.('comments')}>Review</button>
+              </nav>
+              <div className="fold-companion-body">
+                <div hidden={companion !== 'preview'}>
+                  <PreviewPane
+                    session={session}
+                    onContainer={handleContainer}
+                    onStats={onStats}
+                    onHeadings={(items) => {
+                      setLocalHeadings(items);
+                      onHeadings(items);
+                    }}
+                    onScroll={() => scrollSync.fromPreview()}
+                  />
+                </div>
+                {companion === 'outline' && (
+                  <Outline headings={localHeadings} onSelect={(line) => scrollSync.scrollToLine(line)} />
+                )}
+                {companion === 'ai' && (
+                  <Suspense fallback={null}>
+                    <AiSheet
+                      open
+                      embedded
+                      documentTitle={documentTitle}
+                      getView={getView}
+                      onClose={() => setCompanion('preview')}
+                    />
+                  </Suspense>
+                )}
+              </div>
+            </section>
+          ) : (
+            <PreviewPane
+              session={session}
+              onContainer={handleContainer}
+              onStats={onStats}
+              onHeadings={onHeadings}
+              onScroll={() => scrollSync.fromPreview()}
+            />
+          )}
         </Suspense>
       )}
     </div>

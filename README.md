@@ -74,8 +74,10 @@ people to expect:
 - **Synchronised scrolling** mapped by source line, not by percentage
 - **Formatting toolbar** and shortcuts — bold, italic, strikethrough, highlight,
   headings, links, lists, task lists, quotes, tables, code blocks
-- **Adaptive command ribbon** — File, Home, Insert, Review, and View decks;
-  collapsible on desktop/foldables and fixed to the safe-area bottom on phones
+- **Adaptive command ribbon** — File, Home, Insert, Draw, AI, Review, and View
+  decks plus contextual Picture / Table / Shape tools; 3D folded-glass glyphs;
+  a phone composer and a hinge-aware foldable companion instead of squeezed
+  breakpoints
 - **Local comments and version history** — complete interaction scaffolding
   behind replaceable review/session adapters
 - **Live outline** built from the document's headings (`Ctrl`/`Cmd` + `Shift` + `O`)

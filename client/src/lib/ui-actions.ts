@@ -13,7 +13,9 @@ export type UiActionId =
   | 'preferences'
   | 'focus'
   | 'benchmark'
-  | 'about';
+  | 'about'
+  | 'find'
+  | 'ai-compose';
 
 export interface UiActionDescriptor {
   id: UiActionId;
@@ -39,4 +41,6 @@ export const UI_ACTIONS: UiActionDescriptor[] = [
   { id: 'command-palette', label: 'Command palette', description: 'Search every Marks command', group: 'Workspace', shortcut: '⌘⇧P' },
   { id: 'benchmark', label: 'Open performance receipt', description: 'Run the in-browser engine benchmark', group: 'Navigate' },
   { id: 'about', label: 'About Marks', description: 'Open the product and performance story', group: 'Navigate' },
+  { id: 'find', label: 'Find in document', description: 'Open the editor search panel', group: 'Workspace', shortcut: '⌘F' },
+  { id: 'ai-compose', label: 'AI compose', description: 'Rewrite, outline, or continue this page locally', group: 'Workspace' },
 ];

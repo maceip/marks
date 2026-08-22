@@ -21,7 +21,7 @@ import type { LocalDocumentDraft, TemplateId } from './demo/workspace';
 import { useBrowserSurface } from './hooks/useBrowserSurface';
 import { useDocumentMeta } from './hooks/useDocumentMeta';
 import { useDocuments } from './hooks/useDocuments';
-import { useMediaQuery } from './hooks/useMediaQuery';
+import { useDevicePosture } from './hooks/useDevicePosture';
 import { useRoute } from './hooks/useRoute';
 import { useSession } from './hooks/useSession';
 import { useTheme } from './hooks/useTheme';
@@ -44,6 +44,9 @@ const Workspace = lazy(() =>
 const AppOverlays = lazy(() =>
   import('./components/AppOverlays').then((module) => ({ default: module.AppOverlays })),
 );
+const AiSheet = lazy(() =>
+  import('./components/chrome/AiSheet').then((module) => ({ default: module.AiSheet })),
+);
 
 /** How often the HUD and word counts refresh. Editing never waits on this. */
 const SAMPLE_INTERVAL_MS = 400;
@@ -60,8 +63,9 @@ export function App() {
   const [route, navigate] = useRoute();
   const [theme, toggleTheme, setTheme] = useTheme();
   const [preferences, setPreferences] = useUiPreferences();
-  const phone = useMediaQuery(UI_MEDIA.phone);
-  const overlayNavigation = useMediaQuery(UI_MEDIA.overlayNavigation);
+  const posture = useDevicePosture();
+  const phone = posture.phone;
+  const overlayNavigation = posture.overlayNavigation;
   const user = useMemo(loadUser, []);
   const documentAccess = useMemo(() => {
     if (UI_DATA_MODE !== 'service') return null;
@@ -85,6 +89,7 @@ export function App() {
     () => localStorage.getItem('marks:ribbon-collapsed') === 'true',
   );
   const [dialog, setDialog] = useState<AppDialog | null>(null);
+  const [aiOpen, setAiOpen] = useState(false);
   const [reviewSurface, setReviewSurface] = useState<ReviewSurface | null>(null);
   const [overlaysMounted, setOverlaysMounted] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -370,6 +375,14 @@ export function App() {
         case 'about':
           location.assign('/welcome/');
           break;
+        case 'find': {
+          const view = viewRef.current;
+          if (view) void import('./editor/actions').then(({ openFind }) => openFind(view));
+          break;
+        }
+        case 'ai-compose':
+          setAiOpen(true);
+          break;
       }
     },
     [
@@ -455,10 +468,11 @@ export function App() {
     setFocusMode(false);
     setReviewSurface(null);
     setOutlineOpen(false);
+    setAiOpen(false);
   }, [route.name]);
 
   return (
-    <div className={`app route-${route.name}${sidebarOpen && !focusMode ? ' with-sidebar' : ''}${focusMode ? ' focus-mode' : ''}${ribbonCollapsed ? ' ribbon-collapsed' : ''}`}>
+    <div className={`app route-${route.name}${sidebarOpen && !focusMode ? ' with-sidebar' : ''}${focusMode ? ' focus-mode' : ''}${ribbonCollapsed ? ' ribbon-collapsed' : ''}`} data-shell={posture.shell}>
       {sidebarOpen && !focusMode && (
         <Sidebar
           documents={documents.documents}
@@ -485,7 +499,8 @@ export function App() {
           route={route.name}
           documentReady={Boolean(session && hydrated)}
           documentAvailable={!resolved || supported}
-          phone={phone}
+          posture={posture}
+          selected={cursor.selected}
           getView={getView}
           status={status}
           peers={peers}
@@ -505,6 +520,8 @@ export function App() {
           onToggleOutline={() => setOutlineOpen((open) => !open)}
           onToggleRibbon={() => setRibbonCollapsed((collapsed) => !collapsed)}
           onAction={runAction}
+          onOpenAi={() => setAiOpen(true)}
+          onNotify={notify}
           onVoice={session ? surface.toggleVoice : undefined}
           voiceActive={surface.voiceStatus === 'listening'}
           voiceSupported={surface.voiceSupported}
@@ -545,6 +562,11 @@ export function App() {
               <Workspace
                 session={session}
                 mode={mode}
+                posture={posture}
+                getView={getView}
+                documentTitle={title}
+                onModeChange={setMode}
+                onAction={runAction}
                 scrollSync={scrollSync}
                 onStats={handleStats}
                 onHeadings={setHeadings}
@@ -624,7 +646,21 @@ export function App() {
         />
       )}
 
-      {route.name === 'document' && session && !phone && !focusMode && (
+      {aiOpen && route.name === 'document' && !phone && (
+        <Suspense fallback={null}>
+          <aside className="ai-float" aria-label="AI composition">
+            <AiSheet
+              open
+              documentTitle={title}
+              getView={getView}
+              onClose={() => setAiOpen(false)}
+              onNotify={notify}
+            />
+          </aside>
+        </Suspense>
+      )}
+
+      {route.name === 'document' && session && !phone && !focusMode && !posture.foldable && (
         <LiquidDock
           onCommands={() => runAction('command-palette')}
           onComments={() => runAction('comments')}

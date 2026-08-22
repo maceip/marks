@@ -379,6 +379,53 @@ h4:hover .marks-anchor {
   font-size: 12px;
 }
 
+.marks-figure {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+}
+
+.marks-figure[data-align='left'] { margin-right: auto; }
+.marks-figure[data-align='center'] { margin-inline: auto; }
+.marks-figure[data-align='right'] { margin-left: auto; }
+
+.marks-shape {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  width: min(100%, 280px);
+  margin: 1.2em auto;
+  padding: 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface));
+}
+
+.marks-shape svg {
+  width: 100%;
+  height: auto;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 3;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.marks-shape[data-shape='rect'] svg,
+.marks-shape[data-shape='ellipse'] svg,
+.marks-shape[data-shape='diamond'] svg,
+.marks-shape[data-shape='bubble'] svg {
+  fill: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.marks-shape figcaption {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 620;
+}
+
 @media (max-width: 900px) {
   .marks-preview {
     padding: 1.25rem 1.15rem 45vh;

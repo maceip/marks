@@ -140,6 +140,8 @@ The visual model is **cold glass, hot core**:
 
 - [x] Switch between Edit, Split, and Preview
 - [ ] Format this line from the Home ribbon
+- [ ] Insert a shape from the Draw tab
+- [ ] Open the AI ribbon and outline this page
 - [ ] Open History from Review
 - [ ] Press **⌘⇧P** to open the command palette
 

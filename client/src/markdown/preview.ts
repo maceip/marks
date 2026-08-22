@@ -24,7 +24,7 @@ export interface PreviewStats extends RenderStats {
 
 const SANITIZE_CONFIG = {
   USE_PROFILES: { html: true, svg: true, mathMl: true },
-  ADD_ATTR: ['target', 'rel', 'align', 'colspan', 'rowspan', 'checked', 'disabled', 'hidden'],
+  ADD_ATTR: ['target', 'rel', 'align', 'colspan', 'rowspan', 'checked', 'disabled', 'hidden', 'data-align', 'data-shape', 'data-fill'],
 } satisfies Config;
 
 function sanitize(html: string): string {

@@ -29,4 +29,6 @@ export const UI_BREAKPOINTS = {
 export const UI_MEDIA = {
   phone: `(max-width: ${UI_BREAKPOINTS.phone}px), (max-height: 560px) and (pointer: coarse)`,
   overlayNavigation: `(max-width: ${UI_BREAKPOINTS.overlayNavigation}px)`,
+  foldBook: '(horizontal-viewport-segments: 2), (spanning: single-fold-vertical)',
+  foldLaptop: '(vertical-viewport-segments: 2), (spanning: single-fold-horizontal)',
 } as const;
