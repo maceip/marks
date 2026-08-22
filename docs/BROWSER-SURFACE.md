@@ -3,7 +3,7 @@
 This is a review of how marks talks to the browser — not the visual design of
 the chrome, the *platform* work that decides whether the editor feels like a
 document or like a web page. The implementation lives in `client/src/browser/`
-and is wired through the CRDT engines, CodeMirror, and the preview.
+and is wired through the ESBT engine, CodeMirror, and the preview.
 
 ## Google Docs feature map
 
@@ -109,7 +109,8 @@ Each comment stores:
 - the author's identity
 - the body
 - the source offsets and the quoted text
-- Loro cursors or Yjs relative positions, when the engine can encode them
+- an ESBT weight-stable anchor (`indexToAnchor` / `anchorToIndex`), when
+  the engine can encode the range
 
 Offsets are re-resolved on read: trust the cursor, then the quote, then
 clamp. Resolving or deleting a comment is a CRDT write, not a REST call.
@@ -125,7 +126,8 @@ Yes. The rules:
 2. **Local cache paints first.** The HTTP snapshot is a refinement with a
    budget that shrinks when we already have a copy or the network is slow.
 3. **Document list + per-id engine** live in IndexedDB so an offline open of
-   a Yjs document does not fall back to Loro (the encodings are incompatible).
+   a retired `loro` / `yjs` row is refused instead of being opened as ESBT
+   (the encodings are incompatible).
 4. **The service worker is an app shell**, production only, never under
    WebDriver. First install may claim clients. Later updates wait for the
    next navigation. There is no "refresh to update" toast.
@@ -144,9 +146,10 @@ Yes.
   updates between tabs so they converge without the server (including
   offline). The tab that is still on the socket forwards those updates so
   an online sibling can publish an offline sibling's edits.
-- IndexedDB writes for Loro take `navigator.locks` around export+write so
-  two tabs cannot last-write-wins a snapshot. Yjs applies tab updates onto
-  the shared `Y.Doc` that `y-indexeddb` already persists.
+- IndexedDB writes take `navigator.locks` around the ESBT snapshot export
+  **and** the write so two tabs cannot last-write-wins a stale capture over
+  a newer one. Tab updates land on the in-memory replica first, so the
+  second writer exports a union.
 
 Each tab keeps its own peer id. Seeing yourself twice in presence is
 correct: there are two replicas.
@@ -189,13 +192,13 @@ The bar we used:
   (`npm run test:browser`).
 - No new dependencies. No prompt-to-refresh. No stealing iOS callouts.
 
-The CRDT engines still own merge; this layer owns the glass.
+ESBT still owns merge; this layer owns the glass.
 
 ### Does it work on a slow connection or offline?
 
 - Offline is a first-class status. Edits apply to the local replica,
-  persist to IndexedDB, and sync on reconnect (version-vector delta for
-  Loro; Hocuspocus for Yjs). Sibling tabs keep merging via BroadcastChannel
+  persist to IndexedDB, and sync on reconnect as a version-vector delta on
+  `/collab/esbt`. Sibling tabs keep merging via BroadcastChannel
   while the socket is down.
 - Slow (`saveData`, `2g`, `slow-2g`, or a tiny downlink) shortens the
   snapshot fetch and is shown in the status bar. The editor does not wait.

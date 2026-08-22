@@ -45,17 +45,20 @@ doc.import(payload);
 
 ## Building and testing
 
-The package compiles to `dist/` (plain ESM plus declarations) so both Vite and
-the Node server consume it without loaders:
+The package compiles to `dist/` (plain ESM) so both Vite and the Node server
+consume it without loaders. TypeScript reads the `src/` surface directly —
+`npm run typecheck` does not need `dist/`, and a missing `doc.ts` / `weight.ts`
+fails the same way a consumer would.
 
 ```bash
 npm run build --workspace=@marks/esbt
-npm test    --workspace=@marks/esbt   # 36 contract tests, node --test
+npm test    --workspace=@marks/esbt   # contract tests + export-surface guard
+npm run typecheck                     # no esbt build required
 ```
 
-The root `npm run dev` / `npm run build` build this workspace first. After
-editing engine sources during `npm run dev`, rebuild this workspace to pick
-the changes up.
+The root `npm run dev` / `npm run build` still build this workspace first so
+runtime imports resolve to `dist/`. After editing engine sources during
+`npm run dev`, rebuild this workspace to pick the changes up.
 
 ## File split
 

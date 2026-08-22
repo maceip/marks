@@ -613,17 +613,15 @@ export class EsbtEngine implements CollabSession {
   }
 
   private async saveLocalSnapshot(): Promise<void> {
-    // Export first, synchronously, so a destroy() that flips `destroyed`
-    // while we wait for the persist lock still writes the bytes we hold.
-    let snapshot: Uint8Array;
-    try {
-      snapshot = this.doc.export({ mode: 'snapshot' });
-      this.counters.snapshotBytes = snapshot.byteLength;
-    } catch {
-      return;
-    }
+    if (this.destroyed) return;
+    // Export + write stay inside the lock so a second tab cannot clobber a
+    // newer snapshot with a stale capture (see persist-lock.ts). The in-memory
+    // EsbtDoc outlives `destroyed`, so a flush started from destroy() still
+    // writes after the flag flips while we wait for the lock.
     try {
       await withPersistLock(persistLockName('esbt', this.docId), async () => {
+        const snapshot = this.doc.export({ mode: 'snapshot' });
+        this.counters.snapshotBytes = snapshot.byteLength;
         await idbSet(this.cacheKey, snapshot);
       });
     } catch {

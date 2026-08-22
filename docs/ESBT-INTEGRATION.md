@@ -379,7 +379,7 @@ Sources used while writing this: Google’s Jupiter/Wave-style Docs architecture
 
 ### What we actually have
 
-`LoroRoom.rooms` / the future ESBT room map is an in-memory `Map` on one PID. Persistence is `better-sqlite3` on a local file (`MARKS_DB`). Delete tombstones are a `Map` that lives 5 minutes and dies on restart. The HTTP upgrade path creates a document if the id is unknown — the URL *is* the capability. Presence is relayed only to sockets on **this** process.
+`EsbtRoom.rooms` is an in-memory `Map` on one PID. Persistence is `better-sqlite3` on a local file (`MARKS_DB`). Delete tombstones are a `Map` that lives 5 minutes and dies on restart. The HTTP upgrade path creates a document if the id is unknown — the URL *is* the capability. Presence is relayed only to sockets on **this** process.
 
 That is a correct prototype. It is not a Docs backend.
 
@@ -634,7 +634,7 @@ Browser                    App server                 Room process
                             |                    reject UPDATE if role < editor
 ```
 
-No token on the current `/collab/loro/:id` path is why “anyone with the URL is an owner.” Fix that before the second process, or every scaled replica is a public writable replica.
+No token on the current `/collab/esbt/:id` path is why “anyone with the URL is an owner.” Fix that before the second process, or every scaled replica is a public writable replica.
 
 Rate limits belong here too: Docs-scale writeups budget ~100 concurrent *editors* per document and treat presence as cheaper. Cap `MSG_UPDATE` per actor; do not cap heartbeat.
 

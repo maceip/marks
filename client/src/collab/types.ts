@@ -35,8 +35,8 @@ export interface EngineStats {
 /**
  * A live editing session for one document.
  *
- * Both CRDT engines expose exactly this surface, so the UI never branches on
- * which one is in use. Everything above this interface is engine-agnostic.
+ * The ESBT engine exposes this surface so the UI never branches on storage
+ * details. Everything above this interface is engine-agnostic.
  */
 export interface CollabSession {
   readonly engine: EngineName;
