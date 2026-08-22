@@ -134,10 +134,10 @@ impl Peer {
                         // Reply only when this replica actually holds ops the
                         // server lacks. Read-only sockets never send updates;
                         // the room closes writers it has not authorized.
-                        if !version.covers(&self.doc.version()) {
-                            if let Ok(missing) = self.doc.export_update(&version) {
-                                self.send(MSG_UPDATE, &missing).await;
-                            }
+                        if !version.covers(&self.doc.version())
+                            && let Ok(missing) = self.doc.export_update(&version)
+                        {
+                            self.send(MSG_UPDATE, &missing).await;
                         }
                         PeerEvent::Other
                     }
