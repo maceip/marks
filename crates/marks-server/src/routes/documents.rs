@@ -376,10 +376,10 @@ async fn document_text(app: &App, caller: &Caller, document_id: &DocumentId) -> 
     app.db.read(|conn| {
         let row = load_live_document(conn, document_id)?;
         let role = resolve_caller_role(conn, caller, &row)?;
-        if let Some(role) = role {
-            if !authorize_document_action(role, DocumentAction::Export) {
-                return Err(ApiError::forbidden());
-            }
+        if let Some(role) = role
+            && !authorize_document_action(role, DocumentAction::Export)
+        {
+            return Err(ApiError::forbidden());
         }
         Ok(())
     })?;
@@ -667,10 +667,10 @@ pub async fn share_put(
         if store::load_principal(conn, &grantee)?.is_none() {
             return Err(ApiError::not_found());
         }
-        if let DocumentOwner::Principal(owner) = &row.record.owner {
-            if owner == &grantee {
-                return Err(ApiError::conflict());
-            }
+        if let DocumentOwner::Principal(owner) = &row.record.owner
+            && owner == &grantee
+        {
+            return Err(ApiError::conflict());
         }
         let now = store::ms(now_ms());
         conn.execute(
@@ -868,10 +868,10 @@ pub async fn link_redeem(
             .find_map(|grant| redeem_link_grant(grant, &token, &document_id, now).ok())
             .ok_or_else(ApiError::unauthenticated)?;
         // The document owner already outranks any link role.
-        if let DocumentOwner::Principal(owner) = &row.record.owner {
-            if owner == cookie.session.principal_id() {
-                return Ok(DocumentRole::Owner);
-            }
+        if let DocumentOwner::Principal(owner) = &row.record.owner
+            && owner == cookie.session.principal_id()
+        {
+            return Ok(DocumentRole::Owner);
         }
         let existing = store::load_acl(conn, &document_id)?
             .into_iter()
