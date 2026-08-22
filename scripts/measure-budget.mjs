@@ -23,8 +23,8 @@ Options:
 Examples:
   node scripts/measure.mjs
   node scripts/measure.mjs 400
-  node scripts/measure.mjs --budget-p50 400 --budget-p95 900 --budget-first-ms 45000
-  MARKS_URL=http://127.0.0.1:3000 npm run measure -- --budget-p50 400
+  node scripts/measure.mjs --budget-p50 150 --budget-p95 300 --budget-first-ms 20000
+  MARKS_URL=http://127.0.0.1:3000 npm run measure -- --budget-p50 150
 `;
 
 const FLAG_ALIASES = {

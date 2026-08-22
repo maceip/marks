@@ -9,7 +9,7 @@
  *   npm run build && npm start &
  *   node scripts/measure.mjs
  *   node scripts/measure.mjs 400
- *   node scripts/measure.mjs --budget-p50 400 --budget-p95 900 --budget-first-ms 45000
+ *   node scripts/measure.mjs --budget-p50 150 --budget-p95 300 --budget-first-ms 20000
  */
 import { chromium } from 'playwright';
 import { CHROME_LAUNCH_ARGS, launchEnv } from './harness/env.mjs';

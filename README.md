@@ -179,7 +179,7 @@ parse and render time, bytes on the wire, and the encoded size of the document.
 ```bash
 npm run test:esbt        # 40 CRDT engine contract tests, including fuzzed convergence
 npm run test:browser     # clipboard, comments, context-menu, select-all, tab isolation
-npm run test:harness     # chrome discovery for the three platforms
+npm run test:harness     # chrome discovery, measure budgets, wait-for-server
 npm run harness:probe    # print Playwright / Puppeteer / agent-browser + Chrome paths
 npm run smoke            # Playwright two-peer / REST smoke
 npm run smoke:platforms  # portable glass checks on Playwright, Puppeteer, agent-browser

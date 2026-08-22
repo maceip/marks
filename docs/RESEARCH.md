@@ -16,12 +16,16 @@ all. Eg-walker stores plain operations and materialises CRDT state only while
 merging. That idea shipped in Loro during the survey window; marks later
 replaced Loro/Yjs with a first-party ESBT engine.
 
-| Adopted | For |
+| Current | For |
 | --- | --- |
-| [Loro](https://github.com/loro-dev/loro) `loro-crdt@1.14.1` | Default document engine |
+| [`@marks/esbt`](../esbt) | Only document engine, presence, undo, and comments map |
+
+| Survey-era (removed in PR #6) | Was used for |
+| --- | --- |
+| [Loro](https://github.com/loro-dev/loro) `loro-crdt@1.14.1` | Then-default document engine |
 | [loro-codemirror](https://github.com/loro-dev/loro-codemirror) `0.3.3` | Remote cursor and selection layers |
 | [Yjs](https://github.com/yjs/yjs) `13.6.32` + [y-codemirror.next](https://github.com/yjs/y-codemirror.next) | Alternate engine |
-| [Hocuspocus](https://github.com/ueberdosis/hocuspocus) `4.6.0` | Yjs sync server, embedded in ours |
+| [Hocuspocus](https://github.com/ueberdosis/hocuspocus) `4.6.0` | Yjs sync server |
 
 ## Papers
 
@@ -66,18 +70,18 @@ long, highly concurrent sessions. Reported: 86–93% lower execution time and
 50–75% less identifier memory than the best-performing baseline sequence CRDTs
 on beginning and random insertion patterns.
 
-**Not adopted.** We could not find a released implementation, and the
-comparison baselines are position-identifier CRDTs — the family Eg-walker and
-YATA already outperform for this workload. Worth revisiting if an
-implementation appears.
+**Adopted.** The survey originally parked this paper because no implementation
+existed. marks now ships that implementation as `@marks/esbt` — the only
+engine on the tree.
 
 ### The Art of the Fugue: Minimising Interleaving in Collaborative Text Editing
 
 Matthew Weidner, Martin Kleppmann. Pre-dates this window but is what Loro's
-list algorithm implements, so it is why the default engine is what it is: Fugue
-provably achieves *maximal non-interleaving*, ruling out a class of anomaly
-where two people typing in the same place get their words shuffled together.
-YATA and RGA can both produce it in edge cases.
+list algorithm implemented, which is why Loro was the survey-era default:
+Fugue provably achieves *maximal non-interleaving*, ruling out a class of
+anomaly where two people typing in the same place get their words shuffled
+together. YATA and RGA can both produce it in edge cases. ESBT is the current
+engine; this paper is why Loro was chosen first.
 
 ### Peritext: A CRDT for Collaborative Rich Text Editing
 
@@ -93,10 +97,11 @@ overlapping annotations, and Peritext's problem does not arise.
 
 | Project | Version checked | Verdict |
 | --- | --- | --- |
-| [loro-crdt](https://github.com/loro-dev/loro) | 1.14.1, published 2026-08-10 | **Adopted as default.** Fugue over an Eg-walker style event graph. Actively developed, shallow snapshots, ephemeral presence store, cursor API. |
-| [loro-codemirror](https://github.com/loro-dev/loro-codemirror) | 0.3.3 | **Adopted, partially.** Its cursor and selection layers are good. We replaced its sync and undo plugins — see below. |
-| [Yjs](https://github.com/yjs/yjs) | 13.6.32 | **Adopted as the alternate engine.** The deepest ecosystem; still the fastest at applying a long trace of small edits. |
-| [Hocuspocus](https://github.com/ueberdosis/hocuspocus) | 4.6.0, MIT | **Adopted.** Embedded via `handleConnection`, sharing our HTTP server. Multiplexes documents over one socket. |
+| [`@marks/esbt`](../esbt) | 0.1.0 | **Current engine.** First-party TypeScript ESBT. Replaced Loro and Yjs in PR #6. |
+| [loro-crdt](https://github.com/loro-dev/loro) | 1.14.1, published 2026-08-10 | **Survey default, then removed.** Fugue over an Eg-walker style event graph. |
+| [loro-codemirror](https://github.com/loro-dev/loro-codemirror) | 0.3.3 | **Survey, then removed.** Cursor layers were kept until the ESBT presence layer replaced them. |
+| [Yjs](https://github.com/yjs/yjs) | 13.6.32 | **Survey alternate, then removed.** |
+| [Hocuspocus](https://github.com/ueberdosis/hocuspocus) | 4.6.0, MIT | **Survey Yjs server, then removed.** |
 | [Automerge](https://github.com/automerge/automerge) | 3.0, released August 2025 | **Not adopted.** Automerge 3.0 reports >10× lower memory than 2.0 (a Moby-Dick-sized document dropping from ~700 MB to ~1.3 MB) and correspondingly faster loads. Excellent for JSON-shaped local-first apps, but for a single text field the CodeMirror integration story is thinner than Loro's or Yjs's. |
 | [diamond-types](https://github.com/josephg/diamond-types) | `diamond-types-web` | **Not adopted.** The reference Eg-walker implementation, plain text only, API explicitly unstable. |
 | [Y-Sweet](https://github.com/jamsocket/y-sweet) | MIT | **Not adopted, worth knowing about.** Rust Yjs server persisting to S3-compatible storage with document-level access tokens. The right answer if this needed to scale horizontally instead of running from one SQLite file. |
@@ -105,7 +110,9 @@ overlapping annotations, and Peritext's problem does not arise.
 ## Where we departed from the libraries
 
 Two bugs in `loro-codemirror@0.3.3` made its sync and undo plugins unusable
-here. Both are worked around in `client/src/collab/loro-engine.ts`:
+here. The workarounds lived in `client/src/collab/loro-engine.ts` until that
+file was deleted with Loro. `client/src/collab/esbt-engine.ts` now owns both
+directions:
 
 1. **Its sync plugin ignores locally originated events** and its annotation is
    module-private. An undo, or any local write that does not come from the

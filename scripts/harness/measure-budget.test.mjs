@@ -50,7 +50,7 @@ test('evaluateBudgets fails when a budgeted reading is missing', () => {
 test('evaluateBudgets passes when every set budget holds', () => {
   const result = evaluateBudgets(
     { firstRenderMs: 8_000, p50: 55, p95: 114, dirty: 1, domOps: 3 },
-    { budgetFirstMs: 45_000, budgetP50: 400, budgetP95: 900, budgetDirty: 2, budgetDom: 8 },
+    { budgetFirstMs: 20_000, budgetP50: 150, budgetP95: 300, budgetDirty: 2, budgetDom: 8 },
   );
   assert.equal(result.ok, true);
   assert.deepEqual(result.failures, []);
