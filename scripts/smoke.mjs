@@ -361,18 +361,30 @@ try {
   // The retired engines' paths must be refused: connecting one to an
   // existing document would hand it an empty replica and let the first edit
   // overwrite the stored state.
-  const mismatch = await d.page.evaluate(
-    (url) =>
-      new Promise((resolve) => {
-        const socket = new WebSocket(url);
-        socket.onopen = () => resolve('accepted');
-        socket.onerror = () => resolve('rejected');
-        socket.onclose = () => resolve('rejected');
-        setTimeout(() => resolve('timeout'), 4000);
-      }),
-    `${BASE.replace(/^http/, 'ws')}/collab/loro/${docId}`,
+  const retired = await d.page.evaluate(
+    (urls) =>
+      Promise.all(
+        urls.map(
+          (url) =>
+            new Promise((resolve) => {
+              const socket = new WebSocket(url);
+              socket.onopen = () => resolve(`${url} accepted`);
+              socket.onerror = () => resolve('rejected');
+              socket.onclose = () => resolve('rejected');
+              setTimeout(() => resolve(`${url} timeout`), 4000);
+            }),
+        ),
+      ),
+    [
+      `${BASE.replace(/^http/, 'ws')}/collab/loro/${docId}`,
+      `${BASE.replace(/^http/, 'ws')}/collab/yjs/${docId}`,
+    ],
   );
-  check('a retired engine path is refused at the socket', mismatch === 'rejected', String(mismatch));
+  check(
+    'retired engine paths are refused at the socket',
+    retired.every((result) => result === 'rejected'),
+    retired.join(' | '),
+  );
 
   /* ---------------------------------------------------- errors ---------- */
   // The offline section deliberately cuts the network, so its failed requests
