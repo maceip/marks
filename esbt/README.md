@@ -45,20 +45,23 @@ doc.import(payload);
 
 ## Building and testing
 
-The package compiles to `dist/` (plain ESM) so both Vite and the Node server
-consume it without loaders. TypeScript reads the `src/` surface directly —
-`npm run typecheck` does not need `dist/`, and a missing `doc.ts` / `weight.ts`
-fails the same way a consumer would.
+The package compiles to `dist/` (plain ESM plus `.d.ts`). Vite, the Node
+server, and dependent typechecks all consume that emit — `types` and
+`exports.types` point at `dist/index.d.ts`, not at `src/`. A missing
+`doc.ts` / `weight.ts` fails `tsc --noEmit` on this package, and a missing
+`dist/doc.d.ts` / `dist/weight.d.ts` fails a consumer typecheck.
+
+Root `npm run typecheck` builds this workspace first (`pretypecheck`) so the
+declarations exist. That is the real surface, not a source-path workaround.
 
 ```bash
 npm run build --workspace=@marks/esbt
 npm test    --workspace=@marks/esbt   # contract tests + export-surface guard
-npm run typecheck                     # no esbt build required
+npm run typecheck                     # builds @marks/esbt, then tsc
 ```
 
-The root `npm run dev` / `npm run build` still build this workspace first so
-runtime imports resolve to `dist/`. After editing engine sources during
-`npm run dev`, rebuild this workspace to pick the changes up.
+After editing engine sources during `npm run dev`, rebuild this workspace
+so both runtime and types pick the changes up.
 
 ## File split
 

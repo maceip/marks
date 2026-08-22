@@ -19,6 +19,7 @@
     "dev:client": "npm run dev --workspace=client",
     "build": "npm run build --workspace=@marks/esbt && npm run build --workspace=client && npm run build --workspace=server",
     "start": "npm run start --workspace=server",
+    "pretypecheck": "npm run build --workspace=@marks/esbt",
     "typecheck": "npm run typecheck --workspace=@marks/esbt && npm run typecheck --workspace=client && npm run typecheck --workspace=server",
     "clean": "rm -rf client/dist server/dist esbt/dist node_modules/.vite",
     "test:esbt": "npm test --workspace=@marks/esbt",
