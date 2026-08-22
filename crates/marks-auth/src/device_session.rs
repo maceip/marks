@@ -1,10 +1,8 @@
+use crate::crypto::bearer_matches;
 use crate::wire::{put_bytes, put_text, put_u8, put_u64};
-use crate::{
-    ChallengeId, DeviceCapabilities, DeviceId, DeviceRecord, PrincipalId, bearer_secret_hash,
-};
+use crate::{ChallengeId, DeviceCapabilities, DeviceId, DeviceRecord, PrincipalId};
 use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
 use serde::{Deserialize, Serialize};
-use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 const DEVICE_SESSION_DOMAIN: &[u8] = b"marks-device-session-v1\0";
@@ -15,6 +13,7 @@ const MAX_CLOCK_SKEW_MS: u64 = 60_000;
 pub struct DeviceChallengeRecord {
     pub id: ChallengeId,
     pub device_id: DeviceId,
+    pub key_epoch: u64,
     pub challenge_hash: [u8; 32],
     pub audience: String,
     pub expires_at_ms: u64,
@@ -106,19 +105,14 @@ pub fn authorize_device_session(
     if proof.expires_at_ms > challenge.expires_at_ms {
         return Err(DeviceSessionError::ProofOutlivesChallenge);
     }
-    if proof.challenge.len() != CHALLENGE_BYTES
-        || challenge
-            .challenge_hash
-            .ct_eq(&bearer_secret_hash(&proof.challenge))
-            .unwrap_u8()
-            != 1
-    {
+    if !bearer_matches(&proof.challenge, CHALLENGE_BYTES, &challenge.challenge_hash) {
         return Err(DeviceSessionError::InvalidChallenge);
     }
     if proof.challenge_id != challenge.id
         || proof.device_id != challenge.device_id
         || proof.device_id != device.id
         || proof.device_key_epoch != device.key_epoch
+        || proof.device_key_epoch != challenge.key_epoch
         || proof.audience != challenge.audience
     {
         return Err(DeviceSessionError::ChallengeMismatch);
@@ -145,6 +139,7 @@ pub fn authorize_device_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bearer_secret_hash;
     use p256::ecdsa::{SigningKey, signature::Signer};
     use rand_core::OsRng;
 
@@ -162,6 +157,7 @@ mod tests {
         let challenge = DeviceChallengeRecord {
             id: ChallengeId::new("challenge_12345").unwrap(),
             device_id: device_id.clone(),
+            key_epoch: 3,
             challenge_hash: bearer_secret_hash(&challenge_bytes),
             audience: "https://marks.example".into(),
             expires_at_ms: 20_000,

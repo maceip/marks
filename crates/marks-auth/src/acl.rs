@@ -1,8 +1,7 @@
+use crate::crypto::bearer_matches;
 use crate::{
-    DocumentId, DocumentOwner, DocumentRecord, DocumentRole, PrincipalId, bearer_secret_hash,
-    require_live_document,
+    DocumentId, DocumentOwner, DocumentRecord, DocumentRole, PrincipalId, require_live_document,
 };
-use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -96,13 +95,7 @@ pub fn redeem_link_grant(
     now_ms: u64,
 ) -> Result<DocumentRole, AclError> {
     authorize_link_grant_role(grant.role)?;
-    if presented_token.len() != 32
-        || grant
-            .token_hash
-            .ct_eq(&bearer_secret_hash(presented_token))
-            .unwrap_u8()
-            != 1
-    {
+    if !bearer_matches(presented_token, 32, &grant.token_hash) {
         return Err(AclError::InvalidToken);
     }
     if grant.revoked_at_ms.is_some() {
@@ -120,7 +113,7 @@ pub fn redeem_link_grant(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DocumentOwner;
+    use crate::{DocumentOwner, bearer_secret_hash};
 
     fn document(owner: PrincipalId) -> DocumentRecord {
         DocumentRecord {

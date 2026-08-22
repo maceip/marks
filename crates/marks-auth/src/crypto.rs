@@ -1,4 +1,5 @@
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 
 const BEARER_HASH_DOMAIN: &[u8] = b"marks-bearer-secret-v1\0";
 const PUBLIC_KEY_HASH_DOMAIN: &[u8] = b"marks-public-key-v1\0";
@@ -16,6 +17,18 @@ fn domain_hash(domain: &[u8], value: &[u8]) -> [u8; 32] {
 /// random bits, and the protocol uses 256 bits for new secrets.
 pub fn bearer_secret_hash(secret: &[u8]) -> [u8; 32] {
     domain_hash(BEARER_HASH_DOMAIN, secret)
+}
+
+pub(crate) fn bearer_matches(
+    presented: &[u8],
+    expected_len: usize,
+    stored_hash: &[u8; 32],
+) -> bool {
+    presented.len() == expected_len
+        && stored_hash
+            .ct_eq(&bearer_secret_hash(presented))
+            .unwrap_u8()
+            == 1
 }
 
 /// Stable digest of the canonical SEC1-encoded P-256 public key used in grants.

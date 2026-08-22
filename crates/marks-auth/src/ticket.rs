@@ -1,9 +1,9 @@
+use crate::crypto::bearer_matches;
 use crate::{
     Actor, AuthenticatedSession, DeviceId, DocumentId, DocumentOwner, DocumentRecord, DocumentRole,
     EsbtSiteId, PrincipalId, ScratchActor, ScratchId, ScratchRecord, SessionId, TicketId,
     bearer_secret_hash, require_live_document, require_scratch_document,
 };
-use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 const TICKET_SECRET_BYTES: usize = 32;
@@ -66,52 +66,72 @@ pub enum DocumentTicketError {
     ScratchInactive,
 }
 
-/// Redeem a one-use room ticket for a still-unclaimed scratch workspace. The
-/// caller first used the scratch capability to mint this ticket; upgrade only
-/// needs the ticket, current scratch row, document ownership, and epoch.
-pub fn redeem_scratch_document_ticket(
-    ticket: &ScratchDocumentTicketRecord,
+fn require_live_presented_ticket(
+    secret_hash: &[u8; 32],
     presented_secret: &[u8],
-    scratch: &ScratchRecord,
-    expected_document_id: &DocumentId,
-    expected_esbt_site: &EsbtSiteId,
-    expected_authorization_epoch: u64,
+    consumed_at_ms: Option<u64>,
+    revoked_at_ms: Option<u64>,
+    expires_at_ms: u64,
     now_ms: u64,
-) -> Result<ScratchActor, DocumentTicketError> {
-    if presented_secret.len() != TICKET_SECRET_BYTES
-        || ticket
-            .secret_hash
-            .ct_eq(&ticket_secret_hash(presented_secret))
-            .unwrap_u8()
-            != 1
-    {
+) -> Result<(), DocumentTicketError> {
+    if !bearer_matches(presented_secret, TICKET_SECRET_BYTES, secret_hash) {
         return Err(DocumentTicketError::InvalidSecret);
     }
-    if ticket.consumed_at_ms.is_some() {
+    if consumed_at_ms.is_some() {
         return Err(DocumentTicketError::Consumed);
     }
-    if ticket.revoked_at_ms.is_some() {
+    if revoked_at_ms.is_some() {
         return Err(DocumentTicketError::Revoked);
     }
-    if now_ms >= ticket.expires_at_ms {
+    if now_ms >= expires_at_ms {
         return Err(DocumentTicketError::Expired);
     }
-    if ticket.scratch_id != scratch.id {
-        return Err(DocumentTicketError::ScratchMismatch);
-    }
+    Ok(())
+}
+
+fn require_live_scratch(scratch: &ScratchRecord, now_ms: u64) -> Result<(), DocumentTicketError> {
     if scratch.revoked_at_ms.is_some()
         || scratch.claimed_by.is_some()
         || now_ms >= scratch.expires_at_ms
     {
-        return Err(DocumentTicketError::ScratchInactive);
+        Err(DocumentTicketError::ScratchInactive)
+    } else {
+        Ok(())
     }
-    if &ticket.document_id != expected_document_id {
+}
+
+/// Redeem a one-use room ticket for a still-unclaimed scratch workspace. The
+/// caller first used the scratch capability to mint this ticket; upgrade
+/// rechecks the live scratch row, current document ownership, and epoch.
+pub fn redeem_scratch_document_ticket(
+    ticket: &ScratchDocumentTicketRecord,
+    presented_secret: &[u8],
+    scratch: &ScratchRecord,
+    document: &DocumentRecord,
+    expected_esbt_site: &EsbtSiteId,
+    now_ms: u64,
+) -> Result<ScratchActor, DocumentTicketError> {
+    require_live_presented_ticket(
+        &ticket.secret_hash,
+        presented_secret,
+        ticket.consumed_at_ms,
+        ticket.revoked_at_ms,
+        ticket.expires_at_ms,
+        now_ms,
+    )?;
+    if ticket.scratch_id != scratch.id {
+        return Err(DocumentTicketError::ScratchMismatch);
+    }
+    require_live_scratch(scratch, now_ms)?;
+    require_scratch_document(document, &scratch.id)
+        .map_err(|_| DocumentTicketError::DocumentInactive)?;
+    if ticket.document_id != document.id {
         return Err(DocumentTicketError::DocumentMismatch);
     }
     if &ticket.esbt_site != expected_esbt_site {
         return Err(DocumentTicketError::SiteMismatch);
     }
-    if ticket.authorization_epoch != expected_authorization_epoch {
+    if ticket.authorization_epoch != document.authorization_epoch {
         return Err(DocumentTicketError::AuthorizationStale);
     }
 
@@ -186,12 +206,7 @@ pub fn issue_scratch_document_ticket(
 ) -> Result<ScratchDocumentTicketRecord, DocumentTicketError> {
     require_scratch_document(document, &scratch.id)
         .map_err(|_| DocumentTicketError::DocumentInactive)?;
-    if scratch.revoked_at_ms.is_some()
-        || scratch.claimed_by.is_some()
-        || now_ms >= scratch.expires_at_ms
-    {
-        return Err(DocumentTicketError::ScratchInactive);
-    }
+    require_live_scratch(scratch, now_ms)?;
     Ok(ScratchDocumentTicketRecord {
         id,
         secret_hash: require_ticket_secret(secret)?,
@@ -212,28 +227,21 @@ pub fn redeem_document_ticket(
     ticket: &DocumentTicketRecord,
     presented_secret: &[u8],
     session: &AuthenticatedSession,
-    expected_document_id: &DocumentId,
+    document: &DocumentRecord,
     expected_esbt_site: &EsbtSiteId,
-    expected_authorization_epoch: u64,
     now_ms: u64,
 ) -> Result<Actor, DocumentTicketError> {
-    if presented_secret.len() != TICKET_SECRET_BYTES
-        || ticket
-            .secret_hash
-            .ct_eq(&ticket_secret_hash(presented_secret))
-            .unwrap_u8()
-            != 1
-    {
-        return Err(DocumentTicketError::InvalidSecret);
-    }
-    if ticket.consumed_at_ms.is_some() {
-        return Err(DocumentTicketError::Consumed);
-    }
-    if ticket.revoked_at_ms.is_some() {
-        return Err(DocumentTicketError::Revoked);
-    }
-    if now_ms >= ticket.expires_at_ms {
-        return Err(DocumentTicketError::Expired);
+    require_live_presented_ticket(
+        &ticket.secret_hash,
+        presented_secret,
+        ticket.consumed_at_ms,
+        ticket.revoked_at_ms,
+        ticket.expires_at_ms,
+        now_ms,
+    )?;
+    require_live_document(document).map_err(|_| DocumentTicketError::DocumentInactive)?;
+    if matches!(document.owner, DocumentOwner::Scratch(_)) {
+        return Err(DocumentTicketError::DocumentInactive);
     }
     if now_ms >= session.expires_at_ms() {
         return Err(DocumentTicketError::SessionInactive);
@@ -244,13 +252,13 @@ pub fn redeem_document_ticket(
     {
         return Err(DocumentTicketError::SessionMismatch);
     }
-    if &ticket.document_id != expected_document_id {
+    if ticket.document_id != document.id {
         return Err(DocumentTicketError::DocumentMismatch);
     }
     if &ticket.esbt_site != expected_esbt_site {
         return Err(DocumentTicketError::SiteMismatch);
     }
-    if ticket.authorization_epoch != expected_authorization_epoch {
+    if ticket.authorization_epoch != document.authorization_epoch {
         return Err(DocumentTicketError::AuthorizationStale);
     }
 
@@ -322,6 +330,27 @@ mod tests {
         validate_session(&session, &session_secret, &device, 1_000).unwrap()
     }
 
+    fn principal_document(ticket: &DocumentTicketRecord) -> DocumentRecord {
+        DocumentRecord {
+            id: ticket.document_id.clone(),
+            owner: DocumentOwner::Principal(ticket.principal_id.clone()),
+            authorization_epoch: ticket.authorization_epoch,
+            deleted_at_ms: None,
+        }
+    }
+
+    fn scratch_document(
+        ticket: &ScratchDocumentTicketRecord,
+        scratch_id: ScratchId,
+    ) -> DocumentRecord {
+        DocumentRecord {
+            id: ticket.document_id.clone(),
+            owner: DocumentOwner::Scratch(scratch_id),
+            authorization_epoch: ticket.authorization_epoch,
+            deleted_at_ms: None,
+        }
+    }
+
     #[test]
     fn ticket_redeems_to_an_exact_socket_actor() {
         let (ticket, session, secret) = ticket();
@@ -329,9 +358,8 @@ mod tests {
             &ticket,
             &secret,
             &session,
-            &ticket.document_id,
+            &principal_document(&ticket),
             &ticket.esbt_site,
-            ticket.authorization_epoch,
             9_000,
         )
         .unwrap();
@@ -351,23 +379,23 @@ mod tests {
                 &replayed_ticket,
                 &secret,
                 &session,
-                &replayed_ticket.document_id,
+                &principal_document(&replayed_ticket),
                 &replayed_ticket.esbt_site,
-                replayed_ticket.authorization_epoch,
                 9_000,
             ),
             Err(DocumentTicketError::Consumed)
         );
 
         let (ticket, session, secret) = ticket();
+        let mut other_document = principal_document(&ticket);
+        other_document.id = DocumentId::new("document_other1").unwrap();
         assert_eq!(
             redeem_document_ticket(
                 &ticket,
                 &secret,
                 &session,
-                &DocumentId::new("document_other1").unwrap(),
+                &other_document,
                 &ticket.esbt_site,
-                ticket.authorization_epoch,
                 9_000,
             ),
             Err(DocumentTicketError::DocumentMismatch)
@@ -377,9 +405,8 @@ mod tests {
                 &ticket,
                 &secret,
                 &session,
-                &ticket.document_id,
+                &principal_document(&ticket),
                 &EsbtSiteId::new(9).unwrap(),
-                ticket.authorization_epoch,
                 9_000,
             ),
             Err(DocumentTicketError::SiteMismatch)
@@ -399,9 +426,8 @@ mod tests {
                 &ticket,
                 &secret,
                 &other_session,
-                &ticket.document_id,
+                &principal_document(&ticket),
                 &ticket.esbt_site,
-                ticket.authorization_epoch,
                 9_000,
             ),
             Err(DocumentTicketError::SessionMismatch)
@@ -411,14 +437,15 @@ mod tests {
     #[test]
     fn acl_epoch_change_invalidates_an_unconsumed_ticket() {
         let (ticket, session, secret) = ticket();
+        let mut document = principal_document(&ticket);
+        document.authorization_epoch += 1;
         assert_eq!(
             redeem_document_ticket(
                 &ticket,
                 &secret,
                 &session,
-                &ticket.document_id,
+                &document,
                 &ticket.esbt_site,
-                ticket.authorization_epoch + 1,
                 9_000,
             ),
             Err(DocumentTicketError::AuthorizationStale)
@@ -453,9 +480,8 @@ mod tests {
             &ticket,
             &secret,
             &scratch,
-            &ticket.document_id,
+            &scratch_document(&ticket, scratch.id.clone()),
             &ticket.esbt_site,
-            ticket.authorization_epoch,
             9_000,
         )
         .unwrap();
@@ -478,7 +504,7 @@ mod tests {
         let ticket = ScratchDocumentTicketRecord {
             id: TicketId::new("ticket_scratch1").unwrap(),
             secret_hash: ticket_secret_hash(&secret),
-            scratch_id,
+            scratch_id: scratch_id.clone(),
             document_id: DocumentId::new("document_12345").unwrap(),
             esbt_site: EsbtSiteId::new(2).unwrap(),
             authorization_epoch: 2,
@@ -492,9 +518,8 @@ mod tests {
                 &ticket,
                 &secret,
                 &scratch,
-                &ticket.document_id,
+                &scratch_document(&ticket, scratch_id.clone()),
                 &ticket.esbt_site,
-                ticket.authorization_epoch,
                 9_000,
             ),
             Err(DocumentTicketError::ScratchInactive)
@@ -524,9 +549,8 @@ mod tests {
             &issued,
             &secret,
             &session,
-            &issued.document_id,
+            &document,
             &issued.esbt_site,
-            issued.authorization_epoch,
             9_500,
         )
         .unwrap();
