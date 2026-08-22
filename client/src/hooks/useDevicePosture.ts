@@ -18,6 +18,10 @@ interface DevicePostureRoot {
 function readOverride(): Posture['shell'] | null {
   try {
     const query = new URLSearchParams(location.search).get('marks-posture');
+    if (query === 'off' || query === 'auto') {
+      sessionStorage.removeItem('marks:posture-override');
+      return null;
+    }
     if (isShell(query)) {
       sessionStorage.setItem('marks:posture-override', query);
       return query;
