@@ -63,16 +63,15 @@ export function App() {
   const phone = useMediaQuery(UI_MEDIA.phone);
   const overlayNavigation = useMediaQuery(UI_MEDIA.overlayNavigation);
   const user = useMemo(loadUser, []);
-  const documentAccess = useMemo(
-    () =>
-      createMarksDocumentAccess({
-        authority: () => {
-          const credential = loadScratchCredential(sessionStorage);
-          return credential ? { kind: 'scratch', credential } : { kind: 'session' };
-        },
-      }),
-    [],
-  );
+  const documentAccess = useMemo(() => {
+    if (UI_DATA_MODE !== 'service') return null;
+    return createMarksDocumentAccess({
+      authority: () => {
+        const credential = loadScratchCredential(sessionStorage);
+        return credential ? { kind: 'scratch', credential } : { kind: 'session' };
+      },
+    });
+  }, []);
 
   const [mode, setMode] = useState<ViewMode>(initialMode);
   const [sidebarOpen, setSidebarOpen] = useState(

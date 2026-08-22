@@ -1,8 +1,7 @@
 import type { DocumentAccessProvider, RoomTicket } from '../collab/types';
-import { decodeBase64Url } from './protocol.ts';
+import { decodeBase64Url, OPAQUE_ID_PATTERN } from './protocol.ts';
 import type { ScratchCredential } from './scratch.ts';
 
-const ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/u;
 const ROOM_PATH_PREFIX = '/collab/';
 
 export type RoomAuthority =
@@ -41,19 +40,23 @@ export function createMarksDocumentAccess(
 
   return {
     fetchSnapshot(documentId, signal) {
-      return fetchImpl(`/v1/documents/${encodeURIComponent(documentId)}/snapshot?shallow=1`, {
-        credentials: 'same-origin',
-        headers: {
-          Accept: 'application/octet-stream',
-          ...authorityHeaders(options.authority()),
+      const authority = options.authority();
+      return fetchImpl(
+        `${documentPrefix(authority)}/${encodeURIComponent(documentId)}/snapshot?shallow=1`,
+        {
+          credentials: 'same-origin',
+          headers: {
+            Accept: 'application/octet-stream',
+            ...authorityHeaders(authority),
+          },
+          signal,
         },
-        signal,
-      });
+      );
     },
 
     async admit(documentId, siteId, signal) {
       const authority = options.authority();
-      const prefix = authority.kind === 'scratch' ? '/v1/scratch/documents' : '/v1/documents';
+      const prefix = documentPrefix(authority);
       let response: Response;
       try {
         response = await fetchImpl(`${prefix}/${encodeURIComponent(documentId)}/session`, {
@@ -91,8 +94,12 @@ export function createMarksDocumentAccess(
   };
 }
 
+function documentPrefix(authority: RoomAuthority): string {
+  return authority.kind === 'scratch' ? '/v1/scratch/documents' : '/v1/documents';
+}
+
 export function roomTicketProtocols(ticket: RoomTicket): [string, string] {
-  if (!ID_PATTERN.test(ticket.ticketId)) throw new RoomAccessError('invalid room ticket ID', false);
+  if (!OPAQUE_ID_PATTERN.test(ticket.ticketId)) throw new RoomAccessError('invalid room ticket ID', false);
   assertTicketSecret(ticket.ticketSecret);
   return ['marks.esbt.v1', `marks.ticket.v1.${ticket.ticketId}.${ticket.ticketSecret}`];
 }
@@ -111,7 +118,7 @@ function validateTicketResponse(value: unknown, origin: string): RoomTicket {
   if (typeof roomUrl !== 'string' || typeof ticketId !== 'string' || typeof ticketSecret !== 'string') {
     throw new RoomAccessError('invalid room admission response', false);
   }
-  if (!ID_PATTERN.test(ticketId)) throw new RoomAccessError('invalid room ticket ID', false);
+  if (!OPAQUE_ID_PATTERN.test(ticketId)) throw new RoomAccessError('invalid room ticket ID', false);
   assertTicketSecret(ticketSecret);
 
   let expected: URL;

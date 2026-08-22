@@ -1,5 +1,5 @@
 const textEncoder = new TextEncoder();
-const ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
+export const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 
 const DEVICE_GRANT_DOMAIN = textEncoder.encode('marks-device-grant-v1\0');
 const CONTROLLER_BOOTSTRAP_DOMAIN = textEncoder.encode('marks-controller-bootstrap-v1\0');
@@ -106,7 +106,7 @@ class CanonicalWriter {
 }
 
 function assertId(value: string, name: string): void {
-  if (!ID_PATTERN.test(value)) throw new TypeError(`${name} is not a bounded base64url identifier`);
+  if (!OPAQUE_ID_PATTERN.test(value)) throw new TypeError(`${name} is not a bounded base64url identifier`);
 }
 
 function assertBytes(value: Uint8Array, length: number, name: string): void {
