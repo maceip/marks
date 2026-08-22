@@ -13,7 +13,13 @@
  *   5. Same integrated op set ⇒ identical getText(), any delivery order.
  */
 
-import type { EsbtAnchor, EsbtConfig, EsbtEvent, EsbtExportOptions } from './api.js';
+import type {
+  EsbtAnchor,
+  EsbtConfig,
+  EsbtDoc as EsbtDocContract,
+  EsbtEvent,
+  EsbtExportOptions,
+} from './api.js';
 import { decodePayload, encodeSnapshot, encodeUpdate, type SnapshotPayload } from './encode.js';
 import { DeleteLog, PendingQueue, type Op, type SeqOp } from './ops.js';
 import { DocSeq, type Item } from './tree.js';
@@ -47,7 +53,7 @@ function randomSiteId(): SiteId {
 
 type UndoHook = (ops: Op[], origin?: string) => void;
 
-export class EsbtDoc {
+export class EsbtDoc implements EsbtDocContract {
   readonly siteId: SiteId;
 
   private readonly alloc: Allocator;

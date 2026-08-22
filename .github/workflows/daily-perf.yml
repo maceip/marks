@@ -5,9 +5,18 @@ on:
     - cron: '0 0 * * *'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HOST: 127.0.0.1
+      PORT: 3000
+      MARKS_URL: http://127.0.0.1:3000
+      MARKS_DATA_DIR: /tmp/marks-daily-perf
 
     steps:
       - name: Checkout code
@@ -28,19 +37,35 @@ jobs:
       - name: Build application
         run: npm run build
 
-      - name: Start server in background
-        run: npm start &
-
-      - name: Wait for server to start
+      - name: Start server
         run: |
-          echo "Waiting for server..."
-          while ! curl -s http://127.0.0.1:3000 > /dev/null; do
-            sleep 1
-          done
-          echo "Server is ready."
+          mkdir -p "$MARKS_DATA_DIR"
+          npm start > "$RUNNER_TEMP/marks-server.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/marks-server.pid"
+
+      - name: Wait for server
+        run: |
+          bash scripts/wait-for-server.sh \
+            "$MARKS_URL" \
+            "$(cat "$RUNNER_TEMP/marks-server.pid")" \
+            60 \
+            "$RUNNER_TEMP/marks-server.log"
 
       - name: Run performance measure test (pushing CRDT)
-        run: npm run measure
+        run: >
+          npm run measure --
+          --budget-first-ms 45000
+          --budget-p50 400
+          --budget-p95 900
+          --budget-dirty 2
+          --budget-dom 8
 
       - name: Run smoke tests (offline resync and peers)
         run: npm run smoke
+
+      - name: Server log on failure
+        if: failure()
+        run: |
+          if [ -f "$RUNNER_TEMP/marks-server.log" ]; then
+            cat "$RUNNER_TEMP/marks-server.log"
+          fi
