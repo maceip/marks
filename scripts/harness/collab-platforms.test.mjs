@@ -110,16 +110,54 @@ describe('three-platform collisions and edits', { timeout: 180_000 }, () => {
     }
 
     await Promise.all(Object.values(sessions).map((session) => session.wait(1_500)));
-    await Promise.all(Object.values(sessions).map((session) => session.click('.cm-content')));
+
+    // Seed three labeled lines from one peer so the others have distinct
+    // insertion points. Same-caret concurrent typing interleaves UTF-16
+    // units; different lines still collide (three concurrent inserts) and
+    // stay checkable as whole markers.
+    await sessions.playwright.click('.cm-content');
+    await sessions.playwright.insertText(
+      '# Three-platform collision\n\nPlaywright slot:\n\nPuppeteer slot:\n\nAgent-browser slot:\n',
+    );
+    await untilPreviewsContain(sessions, ['Playwright slot:', 'Puppeteer slot:', 'Agent-browser slot:']);
+
+    const slots = {
+      playwright: 'Playwright slot:',
+      puppeteer: 'Puppeteer slot:',
+      'agent-browser': 'Agent-browser slot:',
+    };
     await Promise.all(
-      DRIVER_NAMES.map((name) => sessions[name].insertText(`\n${MARKERS[name]}\n`)),
+      DRIVER_NAMES.map(async (name) => {
+        await sessions[name].click('.cm-content');
+        await sessions[name].evaluate((label) => {
+          const lines = [...document.querySelectorAll('.cm-content .cm-line')];
+          const line = lines.find((el) => (el.textContent ?? '').includes(label));
+          if (!line) throw new Error(`missing editor line for ${label}`);
+          const range = document.createRange();
+          range.selectNodeContents(line);
+          range.collapse(false);
+          const selection = window.getSelection();
+          selection?.removeAllRanges();
+          selection?.addRange(range);
+        }, slots[name]);
+        await sessions[name].insertText(` ${MARKERS[name]}`);
+      }),
     );
 
     await untilPreviewsContain(sessions, ALL_MARKERS);
   });
 
   after(async () => {
-    for (const session of Object.values(sessions)) {
+    const dir = shotDir();
+    mkdirSync(dir, { recursive: true });
+    for (const name of DRIVER_NAMES) {
+      const session = sessions[name];
+      if (!session) continue;
+      try {
+        await session.screenshot(join(dir, `collab_${name.replace(/[^a-z0-9-]/gi, '_')}.png`));
+      } catch {
+        // shot is best-effort if the page already died
+      }
       try {
         await session.close();
       } catch {
