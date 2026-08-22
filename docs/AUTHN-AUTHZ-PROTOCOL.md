@@ -1,6 +1,6 @@
 # Marks authentication and authorization protocol
 
-**Status:** normative Marks protocol and core implementation; HTTP/runtime integration incomplete
+**Status:** normative Marks protocol; validators in `crates/marks-auth`, HTTP/database/room integration in `crates/marks-server`; real-browser runtime gates still open
 **Owner:** Marks
 **Protocol version:** `marks-auth-v1`
 **Last updated:** 2026-08-22
@@ -663,10 +663,12 @@ The implemented browser boundary is `client/src/auth`. It currently provides:
 - ticket transport only in `Sec-WebSocket-Protocol`, never in a URL; and
 - no direct, unauthenticated WebSocket fallback.
 
-The next Rust server layer must supply randomness, HTTP parsing, origin/CSRF
-checks, rate limiting, migrations, row locks/transactions, cookie rotation,
-EVT token parsing, live-socket revocation, and durable document rooms. It must
-not duplicate or weaken the core validators.
+The Rust server layer is `crates/marks-server`. It supplies randomness, HTTP
+parsing, origin/CSRF checks, rate limiting, migrations, transactions, cookie
+rotation, live-socket revocation, and durable document rooms without
+duplicating or weakening the core validators. The Chrome EVT token parser
+remains a narrow adapter seam behind its server flag; the server refuses
+redemption when no trusted adapter is configured.
 
 The identity gate is complete only when integration tests prove:
 

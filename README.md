@@ -40,12 +40,14 @@ main thread, the markdown parser is not.
 npm install
 npm run dev          # browser client on :5173
 cargo test --workspace
+cargo run -p marks-server   # Rust API/room server on :3000
 ```
 
 The complete UI runs in local workspace mode by default: documents, templates,
 editing, preview, comments, history, dialogs, preferences, and exports work
-without a server. The Vite client still proxies `/v1` and `/collab` to
-`MARKS_SERVER` for the future service adapter. The browser artifact builds with:
+without a server. The Vite client proxies `/v1` and `/collab` to
+`MARKS_SERVER`, where `marks-server` now serves the identity, document, and
+room APIs. The browser artifact builds with:
 
 ```bash
 npm run build
@@ -58,6 +60,10 @@ npm run preview      # static preview only; no API or collaboration backend
 | --- | --- | --- |
 | `MARKS_SERVER` | `http://localhost:3000` | Rust API/WebSocket target used by the Vite development proxy |
 | `VITE_MARKS_DATA_MODE` | `local` | Set to `service` when building against a runnable document service |
+
+`marks-server` reads its own environment (`MARKS_LISTEN`, `MARKS_DB`,
+`MARKS_ORIGIN`, `MARKS_STATIC_DIR`, `MARKS_EVT_ENABLED`); see
+[crates/marks-server/README.md](crates/marks-server/README.md).
 
 ## Editing
 
@@ -102,12 +108,16 @@ client/                     Vite + React + TypeScript
   components/ pages/        UI
 esbt/                       temporary TypeScript ESBT browser adapter
 crates/marks-auth/          identity/authorization validators
-crates/marks-server/        the only HTTP/WebSocket process (not landed yet)
+crates/marks-server/        the only HTTP/WebSocket process
 ```
 
-The next backend artifact is one Rust `marks-server` process owning HTTP,
-sessions, ACLs, durable document rooms, and the native ESBT replica. There is
-intentionally no Node server or compatibility layer.
+`marks-server` is one Rust process owning HTTP, sessions, ACLs, durable
+document rooms, and the native ESBT replica (the pinned
+[maceip/ESBT-web](https://github.com/maceip/ESBT-web) core). There is
+intentionally no Node server or compatibility layer: room payloads are the
+Rust core's canonical `ESBM`/`ESBS`/`ESBF` encodings, which the temporary
+TypeScript browser engine does not speak. Browser collaboration against the
+server therefore lands together with the Rust/Wasm client binding.
 
 ### The rendering path
 
@@ -165,16 +175,21 @@ touching the contract.
 
 ### Sync protocol
 
-The current client still contains the prototype tag-byte room protocol. It is
-not the production trust boundary. The Rust server/client binding will use a
-versioned, bounded, authenticated envelope with a retry-safe message ID and an
-exact principal/session/document/site/role binding. A room applies a valid
-update to staged in-memory state, commits the exact envelope and revision to
-the durable journal, and only then publishes the staged state, broadcasts it,
-and returns one `committed` acknowledgement. Retry IDs make a crash between
-commit and acknowledgement idempotent. Snapshots are asynchronous compaction.
-That server is not present yet, so this paragraph is a target contract rather
-than a runtime claim.
+The room transport is the tag-byte framing in `client/src/collab/protocol.ts`
+(`MSG_UPDATE`, `MSG_EPHEMERAL`, `MSG_SERVER_VV`, `MSG_SNAPSHOT`, `MSG_SYNCED`)
+carrying the Rust core's canonical, versioned, bounded encodings. Admission is
+a one-use ticket in `Sec-WebSocket-Protocol` that binds an exact
+principal/session/device/document/site/role (or scratch/document/site) actor.
+The room validates role policy before decoding CRDT bytes, applies a valid
+update to the staged in-memory replica, commits the exact canonical bytes and
+revision to the durable journal in one transaction, and only then broadcasts.
+Retry safety rides the engine's `(origin, seq)` operation identities: a
+replayed update commits nothing and re-broadcasts nothing, and a crash between
+commit and broadcast is recovered by journal replay plus the version-vector
+reconnect exchange. Snapshots are asynchronous compaction and never define
+whether an edit is saved. This is implemented and integration-tested in
+`crates/marks-server`; real-browser runtime proof still waits on the Rust/Wasm
+client binding.
 
 ## Performance panel
 
@@ -228,12 +243,13 @@ MARKS_URL=http://127.0.0.1:3000 npm run smoke
 - Encoded documents are larger than the retired engines' columnar formats —
   identifiers are stored explicitly, one item per UTF-16 unit. Compact
   encoding is the paper's stated future work and fits behind `export`/`import`.
-- The production Rust HTTP/room server is not implemented yet. The old Node
-  prototype was deliberately deleted rather than becoming an accidental
-  compatibility target. The browser now refuses to open a collaboration socket
-  without a one-use room ticket. No runtime claim is made until the Rust server
-  consumes the identity system's narrow admission result and proves a validated
-  principal/session/document/site/role binding end to end.
+- `crates/marks-server` now implements the identity surface, document API, and
+  durable ESBT rooms, consuming `marks-auth` admission results end to end, and
+  its integration tests prove convergence, offline deltas, role enforcement,
+  live revocation, and restart recovery with native ESBT replicas over real
+  WebSockets. The browser still runs the temporary TypeScript engine, whose
+  wire encoding is not the Rust core's, so browser-to-server collaboration is
+  not yet a runtime claim: it lands with the Wasm client binding.
 - Local UI mode is an interaction and persistence scaffold, not evidence of
   remote admission, invitations, multi-peer convergence, or durable service
   history. Those claims must be proven again in service mode.

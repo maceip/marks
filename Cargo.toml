@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/marks-auth"]
+members = ["crates/marks-auth", "crates/marks-server"]
 resolver = "2"
 
 [workspace.package]
