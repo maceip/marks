@@ -31,6 +31,16 @@ impl DeviceCapabilities {
     }
 }
 
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum DeviceError {
+    #[error("device is revoked")]
+    Revoked,
+    #[error("device is not allowed to revoke another device")]
+    NotAuthorized,
+    #[error("devices belong to different principals")]
+    PrincipalMismatch,
+}
+
 impl Serialize for DeviceCapabilities {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -67,6 +77,26 @@ pub struct DeviceRecord {
     pub revoked_at_ms: Option<u64>,
 }
 
+/// A controller with `REVOKE_DEVICES` may revoke any device on its principal.
+pub fn authorize_revoke_device(
+    actor: &DeviceRecord,
+    target: &DeviceRecord,
+) -> Result<(), DeviceError> {
+    if actor.revoked_at_ms.is_some() {
+        return Err(DeviceError::Revoked);
+    }
+    if actor.principal_id != target.principal_id {
+        return Err(DeviceError::PrincipalMismatch);
+    }
+    if !actor
+        .capabilities
+        .contains(DeviceCapabilities::REVOKE_DEVICES)
+    {
+        return Err(DeviceError::NotAuthorized);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,6 +110,32 @@ mod tests {
         assert_eq!(
             DeviceCapabilities::from_bits(DeviceCapabilities::CONTROLLER.bits()),
             Ok(DeviceCapabilities::CONTROLLER)
+        );
+    }
+
+    #[test]
+    fn only_a_controller_can_revoke_a_device_on_its_principal() {
+        let principal = PrincipalId::new("principal_1234").unwrap();
+        let controller = DeviceRecord {
+            id: DeviceId::new("device_phone_123").unwrap(),
+            principal_id: principal.clone(),
+            public_key_sec1: vec![4; 33],
+            key_epoch: 1,
+            capabilities: DeviceCapabilities::CONTROLLER,
+            revoked_at_ms: None,
+        };
+        let member = DeviceRecord {
+            id: DeviceId::new("device_1234567").unwrap(),
+            principal_id: principal,
+            public_key_sec1: vec![4; 33],
+            key_epoch: 1,
+            capabilities: DeviceCapabilities::MEMBER,
+            revoked_at_ms: None,
+        };
+        authorize_revoke_device(&controller, &member).unwrap();
+        assert_eq!(
+            authorize_revoke_device(&member, &controller),
+            Err(DeviceError::NotAuthorized)
         );
     }
 }

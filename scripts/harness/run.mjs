@@ -33,7 +33,9 @@ Examples:
 
   MARKS_URL=http://127.0.0.1:3000 node scripts/harness/run.mjs --driver=all
 
-The app must already be running (production build on :3000, or vite on :5173).
+The app must already be running. Vite on :5173 proxies /v1 and /collab to the
+Rust marks-server (MARKS_SERVER, default http://localhost:3000). Do not start
+a Node server workspace.
 Deep collab / two-peer / REST checks stay on Playwright: npm run smoke
 `;
 

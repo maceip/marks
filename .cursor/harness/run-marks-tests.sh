@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Cross-browser marks test runtime.
 #
-# 1. Hosts the marks production server (SPA + API + collab WS) on :3100, bound
-#    to 0.0.0.0 so it is reachable from every harness's CGNAT namespace via that
-#    namespace's host-veth gateway (100.64.{10,20,30}.1).
+# 1. Hosts the Rust marks-server (HTTP + collab WS) on :3100, bound to 0.0.0.0
+#    so it is reachable from every harness's CGNAT namespace via that
+#    namespace's host-veth gateway (100.64.{10,20,30}.1). The retired Node
+#    server/ workspace is never started.
 # 2. Loads the marks web app in all three hot, network-isolated browsers.
 # 3. Runs a real cross-browser collaboration test: Playwright types a unique
 #    marker into a shared document; Puppeteer and agent-browser — each in its own
@@ -22,31 +23,52 @@ AB_HOME=/home/ubuntu/.cache/harness/agent-home
 
 log() { printf '\n=== %s ===\n' "$*"; }
 
-# --- 1. build (if needed) + host the marks server ---------------------------
+# --- 1. build (if needed) + host the Rust marks-server ----------------------
 # node/npm come from nvm, which is only on PATH inside a login shell, so every
 # node/npm invocation as ubuntu goes through `bash -lc` (matching the other
 # harness scripts) rather than a bare `runuser` with a minimal PATH.
-if [ ! -f "$REPO_ROOT/client/dist/index.html" ] || [ ! -f "$REPO_ROOT/server/dist/index.js" ]; then
-  log "building marks"
+if [ -f "$REPO_ROOT/server/package.json" ] || [ -d "$REPO_ROOT/server/src" ]; then
+  echo "run-marks-tests: Node server/ is retired; refuse to start it" >&2
+  exit 1
+fi
+if [ ! -f "$REPO_ROOT/client/dist/index.html" ]; then
+  log "building marks client"
   runuser -u ubuntu -- bash -lc "cd '$REPO_ROOT' && npm run build"
 fi
 
+MARKS_BIN="${MARKS_SERVER_BIN:-}"
+if [ -z "$MARKS_BIN" ]; then
+  for candidate in \
+    "$REPO_ROOT/target/release/marks-server" \
+    "$REPO_ROOT/target/debug/marks-server"
+  do
+    if [ -x "$candidate" ]; then
+      MARKS_BIN="$candidate"
+      break
+    fi
+  done
+fi
+if [ -z "$MARKS_BIN" ]; then
+  echo "run-marks-tests: no marks-server binary. Build crates/marks-server and set MARKS_SERVER_BIN." >&2
+  exit 1
+fi
+
 SERVER_LOG=/tmp/marks-xbrowser-server.log
-if ! curl -sf --max-time 3 "http://localhost:$PORT/api/health" >/dev/null 2>&1; then
-  log "starting marks server on :$PORT (0.0.0.0)"
+if ! curl -sf --max-time 3 "http://localhost:$PORT/v1/health" >/dev/null 2>&1; then
+  log "starting Rust marks-server on :$PORT (0.0.0.0)"
   mkdir -p "$DATA_DIR"; chown ubuntu:ubuntu "$DATA_DIR" 2>/dev/null || true
-  rm -f "$SERVER_LOG" 2>/dev/null || true   # avoid a stale non-root-owned log clashing with the redirect
+  rm -f "$SERVER_LOG" 2>/dev/null || true
   nohup runuser -u ubuntu -- bash -lc \
-    "PORT='$PORT' HOST=0.0.0.0 MARKS_DATA_DIR='$DATA_DIR' node '$REPO_ROOT/server/dist/index.js'" \
+    "MARKS_BIND=0.0.0.0:${PORT} MARKS_DATA_DIR='$DATA_DIR' '$MARKS_BIN'" \
     >"$SERVER_LOG" 2>&1 &
   for _ in $(seq 1 30); do
-    curl -sf --max-time 2 "http://localhost:$PORT/api/health" >/dev/null 2>&1 && break
+    curl -sf --max-time 2 "http://localhost:$PORT/v1/health" >/dev/null 2>&1 && break
     sleep 1
   done
 fi
-curl -sf --max-time 3 "http://localhost:$PORT/api/health" >/dev/null 2>&1 \
-  || { echo "run-marks-tests: marks server not healthy on :$PORT" >&2; exit 1; }
-echo "marks server healthy on :$PORT"
+curl -sf --max-time 3 "http://localhost:$PORT/v1/health" >/dev/null 2>&1 \
+  || { echo "run-marks-tests: marks-server not healthy on :$PORT" >&2; exit 1; }
+echo "marks-server healthy on :$PORT"
 
 # --- 2. ensure CGNAT namespaces + hot browsers ------------------------------
 need_start=false
@@ -62,7 +84,7 @@ fi
 
 # --- 3. create a fresh shared document --------------------------------------
 log "creating a fresh shared marks document"
-resp="$(curl -s -X POST "http://localhost:$PORT/api/documents" -H 'content-type: application/json' -d '{}')"
+resp="$(curl -s -X POST "http://localhost:$PORT/v1/documents" -H 'content-type: application/json' -d '{}')"
 id="$(printf '%s' "$resp" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)"
 [ -n "$id" ] || { echo "run-marks-tests: failed to create document: $resp" >&2; exit 1; }
 docpath="/d/$id"

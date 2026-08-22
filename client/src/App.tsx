@@ -3,17 +3,21 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { createMarksDocumentAccess } from './auth/room-access';
 import { loadScratchCredential } from './auth/scratch';
 import { loadUser } from './collab/user';
+import type { AppDialog, ReviewSurface } from './components/AppOverlays';
 import { ContextMenu } from './components/ContextMenu';
-import { EmptyState } from './components/EmptyState';
 import type { CursorInfo } from './components/EditorPane';
+import { HomeSurface } from './components/HomeSurface';
 import { Icon, icons } from './components/Icon';
+import { LiquidDock } from './components/LiquidDock';
 import { OpeningShell } from './components/OpeningShell';
 import { Outline } from './components/Outline';
 import { PerfHud } from './components/PerfHud';
 import { Sidebar } from './components/Sidebar';
 import { StatusBar } from './components/StatusBar';
 import { TopBar, type ViewMode } from './components/TopBar';
+import { ToastRegion, type ToastMessage } from './components/ToastRegion';
 import { VoiceBar } from './components/VoiceBar';
+import type { LocalDocumentDraft, TemplateId } from './demo/workspace';
 import { useBrowserSurface } from './hooks/useBrowserSurface';
 import { useDocumentMeta } from './hooks/useDocumentMeta';
 import { useDocuments } from './hooks/useDocuments';
@@ -21,11 +25,13 @@ import { useMediaQuery } from './hooks/useMediaQuery';
 import { useRoute } from './hooks/useRoute';
 import { useSession } from './hooks/useSession';
 import { useTheme } from './hooks/useTheme';
+import { useUiPreferences } from './hooks/useUiPreferences';
 import { countWords } from './lib/format';
 import { EMPTY_SNAPSHOT, type HudSnapshot } from './lib/hud';
 import { LatencyTracker } from './lib/latency';
-import { UI_MEDIA } from './lib/product';
+import { UI_DATA_MODE, UI_MEDIA } from './lib/product';
 import { ScrollSync } from './lib/scroll-sync';
+import type { UiActionId } from './lib/ui-actions';
 import type { PreviewStats } from './markdown/preview';
 import type { Heading } from './markdown/types';
 
@@ -34,6 +40,9 @@ const Benchmark = lazy(() =>
 );
 const Workspace = lazy(() =>
   import('./components/Workspace').then((module) => ({ default: module.Workspace })),
+);
+const AppOverlays = lazy(() =>
+  import('./components/AppOverlays').then((module) => ({ default: module.AppOverlays })),
 );
 
 /** How often the HUD and word counts refresh. Editing never waits on this. */
@@ -49,7 +58,8 @@ function initialMode(): ViewMode {
 
 export function App() {
   const [route, navigate] = useRoute();
-  const [theme, toggleTheme] = useTheme();
+  const [theme, toggleTheme, setTheme] = useTheme();
+  const [preferences, setPreferences] = useUiPreferences();
   const phone = useMediaQuery(UI_MEDIA.phone);
   const overlayNavigation = useMediaQuery(UI_MEDIA.overlayNavigation);
   const user = useMemo(loadUser, []);
@@ -71,6 +81,14 @@ export function App() {
   const [hudOpen, setHudOpen] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [uiError, setUiError] = useState<string | null>(null);
+  const [focusMode, setFocusMode] = useState(false);
+  const [ribbonCollapsed, setRibbonCollapsed] = useState(
+    () => localStorage.getItem('marks:ribbon-collapsed') === 'true',
+  );
+  const [dialog, setDialog] = useState<AppDialog | null>(null);
+  const [reviewSurface, setReviewSurface] = useState<ReviewSurface | null>(null);
+  const [overlaysMounted, setOverlaysMounted] = useState(false);
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
   const documents = useDocuments(route.name !== 'benchmark');
   const docId = route.name === 'document' ? route.id : null;
@@ -87,6 +105,12 @@ export function App() {
   const textRef = useRef('');
   const viewRef = useRef<EditorView | null>(null);
   const previewRef = useRef<HTMLElement | null>(null);
+  const focusRestoreRef = useRef<{
+    sidebarOpen: boolean;
+    hudOpen: boolean;
+    outlineOpen: boolean;
+    reviewSurface: ReviewSurface | null;
+  } | null>(null);
   const getView = useCallback(() => viewRef.current, []);
   const getPreview = useCallback(() => previewRef.current, []);
   const surface = useBrowserSurface(session, getView, getPreview);
@@ -98,11 +122,15 @@ export function App() {
   useEffect(() => localStorage.setItem('marks:mode', mode), [mode]);
 
   useEffect(() => {
+    localStorage.setItem('marks:ribbon-collapsed', String(ribbonCollapsed));
+  }, [ribbonCollapsed]);
+
+  useEffect(() => {
     if (phone && mode === 'split') setMode('edit');
   }, [mode, phone]);
 
   useEffect(() => {
-    if (overlayNavigation) setSidebarOpen(false);
+    setSidebarOpen(!overlayNavigation);
   }, [overlayNavigation]);
 
   // Text is kept out of React state; only the derived counters are published.
@@ -167,6 +195,27 @@ export function App() {
     tracker.current.add(stats.latencyMs);
   }, []);
 
+  const title =
+    documents.documents.find((entry) => entry.id === docId)?.title ??
+    meta?.title ??
+    (docId ? 'Untitled' : 'marks');
+
+  const notify = useCallback(
+    (toastTitle: string, detail?: string, tone: ToastMessage['tone'] = 'neutral') => {
+      const id = crypto.randomUUID();
+      setToasts((current) => [...current, { id, title: toastTitle, detail, tone }].slice(-4));
+      window.setTimeout(() => {
+        setToasts((current) => current.filter((toast) => toast.id !== id));
+      }, 4200);
+    },
+    [],
+  );
+
+  const openDialog = useCallback((next: AppDialog) => {
+    setOverlaysMounted(true);
+    setDialog(next);
+  }, []);
+
   const openDocument = useCallback(
     (id: string) => {
       setUiError(null);
@@ -176,27 +225,169 @@ export function App() {
     [navigate, overlayNavigation],
   );
 
-  const createDocument = useCallback(async () => {
+  const createDocument = useCallback(async (draft?: LocalDocumentDraft) => {
     try {
       setUiError(null);
-      const created = await documents.create();
+      const created = await documents.create(draft);
+      setDialog(null);
       openDocument(created.id);
+      notify('Document created', `${created.title} is saved in this browser.`, 'success');
     } catch {
-      setUiError('The document service is not ready yet. Your current screen is still available.');
+      setUiError('Marks could not create that document. Your current screen is still available.');
     }
-  }, [documents, openDocument]);
+  }, [documents, notify, openDocument]);
+
+  const renameDocument = useCallback(
+    async (id: string, nextTitle: string) => {
+      try {
+        if (id === docId && session) {
+          const markdown = session.getText();
+          const heading = /^#\s+.*$/m;
+          session.setText(
+            heading.test(markdown)
+              ? markdown.replace(heading, `# ${nextTitle.trim()}`)
+              : `# ${nextTitle.trim()}\n\n${markdown}`,
+          );
+        }
+        const renamed = await documents.rename(id, nextTitle);
+        if (!renamed) throw new Error('missing document');
+        setDialog(null);
+        notify('Document renamed', `Now called “${renamed.title}”.`, 'success');
+      } catch {
+        notify('Rename unavailable', 'The active data adapter could not rename this document.', 'danger');
+      }
+    },
+    [docId, documents, notify, session],
+  );
+
+  const duplicateDocument = useCallback(async () => {
+    if (!docId) return;
+    try {
+      const duplicate = await documents.duplicate(docId, session?.getText());
+      if (!duplicate) throw new Error('missing document');
+      openDocument(duplicate.id);
+      notify('Document duplicated', 'The copy is independent and ready to edit.', 'success');
+    } catch {
+      notify('Duplicate unavailable', 'The active data adapter could not create a copy.', 'danger');
+    }
+  }, [docId, documents, notify, openDocument, session]);
 
   const removeDocument = useCallback(
     async (id: string) => {
       try {
         setUiError(null);
         await documents.remove(id);
+        setDialog(null);
         if (docId === id) navigate({ name: 'home' });
+        notify('Document deleted', 'It was removed from this browser.', 'success');
       } catch {
-        setUiError('That document could not be deleted while the service is unavailable.');
+        notify('Delete unavailable', 'The active data adapter could not remove this document.', 'danger');
       }
     },
-    [documents, docId, navigate],
+    [documents, docId, navigate, notify],
+  );
+
+  const closeSidebar = useCallback(() => setSidebarOpen(false), []);
+  const toggleSidebar = useCallback(() => setSidebarOpen((open) => !open), []);
+  const openBenchmark = useCallback(() => {
+    setReviewSurface(null);
+    if (overlayNavigation) setSidebarOpen(false);
+    navigate({ name: 'benchmark' });
+  }, [navigate, overlayNavigation]);
+
+  const runAction = useCallback(
+    (action: UiActionId) => {
+      switch (action) {
+        case 'new':
+          void createDocument();
+          break;
+        case 'templates':
+          openDialog({ type: 'templates' });
+          break;
+        case 'rename':
+          if (docId) openDialog({ type: 'rename', documentId: docId, title });
+          break;
+        case 'duplicate':
+          void duplicateDocument();
+          break;
+        case 'download': {
+          if (!session) break;
+          const blob = new Blob([session.getText()], { type: 'text/markdown;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const anchor = document.createElement('a');
+          anchor.href = url;
+          anchor.download = `${title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'marks-document'}.md`;
+          anchor.click();
+          URL.revokeObjectURL(url);
+          notify('Markdown exported', anchor.download, 'success');
+          break;
+        }
+        case 'print':
+          setMode('preview');
+          window.setTimeout(() => window.print(), 180);
+          break;
+        case 'delete':
+          if (docId) openDialog({ type: 'delete', documentId: docId, title });
+          break;
+        case 'share':
+          if (docId) openDialog({ type: 'share', documentId: docId, title });
+          break;
+        case 'comments':
+        case 'history':
+          if (!docId) break;
+          setOverlaysMounted(true);
+          setReviewSurface((current) =>
+            current?.type === action ? null : { type: action, documentId: docId, title },
+          );
+          break;
+        case 'command-palette':
+          openDialog({ type: 'command-palette' });
+          break;
+        case 'preferences':
+          openDialog({ type: 'preferences' });
+          break;
+        case 'focus':
+          setFocusMode((current) => {
+            if (!current) {
+              focusRestoreRef.current = { sidebarOpen, hudOpen, outlineOpen, reviewSurface };
+              setSidebarOpen(false);
+              setHudOpen(false);
+              setOutlineOpen(false);
+              setReviewSurface(null);
+            } else {
+              const restore = focusRestoreRef.current;
+              setSidebarOpen(restore?.sidebarOpen ?? !overlayNavigation);
+              setHudOpen(restore?.hudOpen ?? false);
+              setOutlineOpen(restore?.outlineOpen ?? false);
+              setReviewSurface(restore?.reviewSurface ?? null);
+              focusRestoreRef.current = null;
+            }
+            return !current;
+          });
+          break;
+        case 'benchmark':
+          openBenchmark();
+          break;
+        case 'about':
+          location.assign('/welcome/');
+          break;
+      }
+    },
+    [
+      createDocument,
+      docId,
+      duplicateDocument,
+      hudOpen,
+      notify,
+      openBenchmark,
+      openDialog,
+      outlineOpen,
+      overlayNavigation,
+      reviewSurface,
+      session,
+      sidebarOpen,
+      title,
+    ],
   );
 
   // Application shortcuts. Editor shortcuts live in the CodeMirror keymap.
@@ -204,6 +395,20 @@ export function App() {
     const onKeyDown = (event: KeyboardEvent) => {
       const mod = event.metaKey || event.ctrlKey;
       if (!mod) return;
+
+      if (event.shiftKey && event.key.toLowerCase() === 'p') {
+        event.preventDefault();
+        runAction('command-palette');
+        return;
+      }
+
+      if (event.key === 'F1' && docId && !phone) {
+        event.preventDefault();
+        setRibbonCollapsed((collapsed) => !collapsed);
+        return;
+      }
+
+      if (dialog) return;
 
       if (event.key === '\\') {
         event.preventDefault();
@@ -221,19 +426,21 @@ export function App() {
       } else if (event.shiftKey && event.key.toLowerCase() === 'd') {
         event.preventDefault();
         setSidebarOpen((open) => !open);
+      } else if (event.shiftKey && event.key.toLowerCase() === 'f') {
+        event.preventDefault();
+        runAction('focus');
+      } else if (event.key.toLowerCase() === 'n') {
+        event.preventDefault();
+        runAction('new');
+      } else if (event.key.toLowerCase() === 'p' && docId) {
+        event.preventDefault();
+        runAction('print');
       }
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [phone]);
-
-  // Titles are derived server-side from the first heading, so the polled index
-  // is fresher than the metadata fetched when the document was opened.
-  const title =
-    documents.documents.find((entry) => entry.id === docId)?.title ??
-    meta?.title ??
-    (docId ? 'Untitled' : 'marks');
+  }, [dialog, docId, phone, runAction]);
 
   useEffect(() => {
     document.title =
@@ -244,27 +451,30 @@ export function App() {
           : 'marks — collaborative writing at thought speed';
   }, [title, route.name]);
 
-  const closeSidebar = useCallback(() => setSidebarOpen(false), []);
-  const toggleSidebar = useCallback(() => setSidebarOpen((open) => !open), []);
-  const openBenchmark = useCallback(() => {
-    if (overlayNavigation) setSidebarOpen(false);
-    navigate({ name: 'benchmark' });
-  }, [navigate, overlayNavigation]);
+  useEffect(() => {
+    if (route.name === 'document') return;
+    setFocusMode(false);
+    setReviewSurface(null);
+    setOutlineOpen(false);
+  }, [route.name]);
 
   return (
-    <div className={`app route-${route.name}${sidebarOpen ? ' with-sidebar' : ''}`}>
-      {sidebarOpen && (
+    <div className={`app route-${route.name}${sidebarOpen && !focusMode ? ' with-sidebar' : ''}${focusMode ? ' focus-mode' : ''}${ribbonCollapsed ? ' ribbon-collapsed' : ''}`}>
+      {sidebarOpen && !focusMode && (
         <Sidebar
           documents={documents.documents}
           activeId={docId}
           loading={documents.loading}
           stale={documents.stale}
-          error={documents.error ?? uiError}
+          error={UI_DATA_MODE === 'service' ? documents.error ?? uiError : null}
           overlay={overlayNavigation}
           onClose={closeSidebar}
           onOpen={openDocument}
           onCreate={() => void createDocument()}
-          onDelete={(id) => void removeDocument(id)}
+          onDelete={(id) => {
+            const document = documents.documents.find((entry) => entry.id === id);
+            if (document) openDialog({ type: 'delete', documentId: id, title: document.title });
+          }}
           onOpenBenchmark={openBenchmark}
         />
       )}
@@ -285,13 +495,20 @@ export function App() {
           sidebarOpen={sidebarOpen}
           hudOpen={hudOpen}
           outlineOpen={outlineOpen}
+          reviewOpen={reviewSurface?.type ?? null}
+          localMode={UI_DATA_MODE === 'local'}
+          focusMode={focusMode}
+          ribbonCollapsed={ribbonCollapsed}
           onModeChange={setMode}
           onToggleSidebar={toggleSidebar}
           onToggleTheme={toggleTheme}
           onToggleHud={() => setHudOpen((open) => !open)}
           onToggleOutline={() => setOutlineOpen((open) => !open)}
+          onToggleRibbon={() => setRibbonCollapsed((collapsed) => !collapsed)}
+          onAction={runAction}
           onVoice={session ? surface.toggleVoice : undefined}
           voiceActive={surface.voiceStatus === 'listening'}
+          voiceSupported={surface.voiceSupported}
         />
 
         {route.name === 'benchmark' ? (
@@ -345,15 +562,15 @@ export function App() {
         ) : docId ? (
           <OpeningShell cached={Boolean(meta)} offline={surface.network === 'offline'} />
         ) : (
-          <EmptyState
+          <HomeSurface
+            documents={documents.documents}
+            loading={documents.loading}
             onCreate={() => void createDocument()}
+            onCreateFromTemplate={(templateId) => void createDocument({ templateId })}
+            onOpen={openDocument}
+            onOpenTemplates={() => openDialog({ type: 'templates' })}
             onOpenBenchmark={openBenchmark}
-            error={
-              uiError ??
-              (documents.error
-                ? 'The document service is not ready yet. You can still explore the workspace.'
-                : null)
-            }
+            onOpenPreferences={() => openDialog({ type: 'preferences' })}
           />
         )}
 
@@ -366,7 +583,8 @@ export function App() {
             latencyP50={snapshot.p50}
             latencyP95={snapshot.p95}
             peers={peers.length || 1}
-            network={surface.network}
+            network={UI_DATA_MODE === 'local' ? 'online' : surface.network}
+            localMode={UI_DATA_MODE === 'local'}
           />
         )}
       </main>
@@ -406,6 +624,45 @@ export function App() {
           onOpenBenchmark={openBenchmark}
         />
       )}
+
+      {route.name === 'document' && session && !phone && !focusMode && (
+        <LiquidDock
+          onCommands={() => runAction('command-palette')}
+          onComments={() => runAction('comments')}
+          onHistory={() => runAction('history')}
+          onVoice={surface.voiceSupported ? surface.toggleVoice : undefined}
+          voiceActive={surface.voiceStatus === 'listening'}
+          voiceSupported={surface.voiceSupported}
+        />
+      )}
+
+      {overlaysMounted && (
+        <Suspense fallback={null}>
+          <AppOverlays
+            dialog={dialog}
+            review={reviewSurface}
+            session={session}
+            userName={user.name}
+            theme={theme}
+            preferences={preferences}
+            hasDocument={Boolean(docId && session)}
+            onCloseDialog={() => setDialog(null)}
+            onCloseReview={() => setReviewSurface(null)}
+            onAction={runAction}
+            onCreateFromTemplate={(templateId: TemplateId) => void createDocument({ templateId })}
+            onRename={(id, nextTitle) => void renameDocument(id, nextTitle)}
+            onDelete={(id) => void removeDocument(id)}
+            onTheme={setTheme}
+            onPreferences={setPreferences}
+            onNotify={notify}
+          />
+        </Suspense>
+      )}
+
+      <ToastRegion
+        toasts={toasts}
+        onDismiss={(id) => setToasts((current) => current.filter((toast) => toast.id !== id))}
+      />
     </div>
   );
 }

@@ -1,4 +1,5 @@
 @import './tokens.css';
+@import './material.css';
 
 *,
 *::before,
@@ -18,7 +19,7 @@ html {
   --marketing-line: rgb(26 29 36 / 10%);
   --marketing-panel: rgb(255 255 255 / 70%);
   --marketing-panel-strong: rgb(255 255 255 / 88%);
-  --marketing-glow: rgb(91 91 214 / 22%);
+  --marketing-glow: rgb(49 94 234 / 22%);
   min-width: 0;
   margin: 0;
   overflow-x: hidden;
@@ -38,7 +39,7 @@ html {
   --marketing-line: rgb(255 255 255 / 10%);
   --marketing-panel: rgb(20 23 29 / 67%);
   --marketing-panel-strong: rgb(25 29 36 / 88%);
-  --marketing-glow: rgb(139 139 245 / 26%);
+  --marketing-glow: rgb(114 148 255 / 26%);
 }
 
 .marketing-body button,
@@ -98,7 +99,7 @@ html {
   left: 47%;
   width: 54rem;
   height: 54rem;
-  background: radial-gradient(circle, rgb(111 104 246 / 32%), rgb(111 104 246 / 0%) 68%);
+  background: radial-gradient(circle, rgb(49 94 234 / 28%), rgb(49 94 234 / 0%) 68%);
 }
 
 .ambient-orb-two {
@@ -128,8 +129,8 @@ html {
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .glass-material {
     background: color-mix(in srgb, var(--marketing-panel) 82%, transparent);
-    -webkit-backdrop-filter: blur(22px) saturate(145%);
-    backdrop-filter: blur(22px) saturate(145%);
+    -webkit-backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturation));
+    backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturation));
   }
 }
 
@@ -158,10 +159,14 @@ html {
 }
 
 .marketing-brand svg {
-  width: 18px;
-  height: 18px;
-  color: var(--accent);
+  width: 24px;
+  height: 24px;
 }
+
+.marketing-body .marks-logo { fill: var(--brand-navy); stroke: color-mix(in srgb, var(--brand-blue) 78%, white); stroke-width: 1; }
+.marketing-body .marks-logo .logo-page { fill: white; stroke: color-mix(in srgb, var(--brand-navy) 55%, #b9c2d8); }
+.marketing-body .marks-logo .logo-fold { fill: var(--brand-green); stroke: color-mix(in srgb, var(--brand-navy) 50%, var(--brand-green)); }
+.marketing-body .marks-logo .logo-lines { fill: none; stroke: var(--brand-blue); stroke-width: 1.4; stroke-linecap: round; }
 
 .marketing-links {
   display: flex;
@@ -635,8 +640,8 @@ html {
 .demo-preview blockquote {
   margin: 18px 0;
   padding: 11px 13px;
-  border-left: 3px solid var(--accent);
-  border-radius: 0 8px 8px 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--marketing-border));
+  border-radius: 8px;
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 

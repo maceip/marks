@@ -12,6 +12,7 @@ interface StatusBarProps {
   latencyP95: number;
   peers: number;
   network?: NetworkQuality;
+  localMode?: boolean;
 }
 
 export function StatusBar({
@@ -23,6 +24,7 @@ export function StatusBar({
   latencyP95,
   peers,
   network = 'online',
+  localMode = false,
 }: StatusBarProps) {
   return (
     <footer className="statusbar">
@@ -47,7 +49,7 @@ export function StatusBar({
         {network === 'slow' && <span title="The network is constrained; edits stay local until it catches up">slow network</span>}
         <span className={`status status-${status}`}>
           <span className="status-dot" />
-          {status}
+          {localMode ? 'local' : status}
         </span>
       </div>
     </footer>

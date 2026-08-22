@@ -11,7 +11,7 @@ function initialTheme(): Theme {
   return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
-export function useTheme(): [Theme, () => void] {
+export function useTheme(): [Theme, () => void, (theme: Theme) => void] {
   const [theme, setTheme] = useState<Theme>(initialTheme);
 
   useEffect(() => {
@@ -28,5 +28,7 @@ export function useTheme(): [Theme, () => void] {
     setTheme((current) => (current === 'dark' ? 'light' : 'dark'));
   }, []);
 
-  return [theme, toggle];
+  const choose = useCallback((next: Theme) => setTheme(next), []);
+
+  return [theme, toggle, choose];
 }

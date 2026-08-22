@@ -1,3 +1,5 @@
+import { surfaceRuntime } from './surface/runtime';
+
 const root = document.documentElement;
 const themeButton = document.querySelector<HTMLButtonElement>('.marketing-theme');
 
@@ -50,4 +52,45 @@ if (!reduceMotion && 'IntersectionObserver' in window) {
 
 for (const year of document.querySelectorAll<HTMLElement>('[data-year]')) {
   year.textContent = String(new Date().getFullYear());
+}
+
+// Marketing paints its complete CSS glass first. The same app renderer joins
+// after first paint on capable devices; nothing shader-related blocks the CTA.
+if (surfaceRuntime.supportsShader) {
+  const attachMaterials = () => {
+    void import('./surface/renderer').then(({ mountSurfaceMaterial }) => {
+      const cleanups: Array<() => void> = [];
+      const nav = document.querySelector<HTMLElement>('.marketing-nav');
+      const demoWindow = document.querySelector<HTMLElement>('.demo-window');
+      if (nav) cleanups.push(mountSurfaceMaterial(nav, { variant: 'chrome', intensity: 0.9 }));
+      if (demoWindow) {
+        if ('IntersectionObserver' in window) {
+          const observer = new IntersectionObserver(
+            (entries) => {
+              if (!entries[0]?.isIntersecting) return;
+              cleanups.push(
+                mountSurfaceMaterial(demoWindow, { variant: 'hero', intensity: 0.98 }),
+              );
+              observer.disconnect();
+            },
+            { rootMargin: '240px 0px', threshold: 0.01 },
+          );
+          observer.observe(demoWindow);
+          cleanups.push(() => observer.disconnect());
+        } else {
+          cleanups.push(
+            mountSurfaceMaterial(demoWindow, { variant: 'hero', intensity: 0.98 }),
+          );
+        }
+      }
+      window.addEventListener('pagehide', () => cleanups.forEach((cleanup) => cleanup()), {
+        once: true,
+      });
+    });
+  };
+  if ('requestIdleCallback' in window) {
+    window.requestIdleCallback(attachMaterials, { timeout: 780 });
+  } else {
+    setTimeout(attachMaterials, 90);
+  }
 }

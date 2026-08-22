@@ -228,6 +228,11 @@ export async function launch(options = {}) {
     async setOffline(offline) {
       await runCli(bin, ['set', 'offline', offline ? 'on' : 'off'], ctx);
     },
+    async screenshot(path, { fullPage = true } = {}) {
+      const args = fullPage ? ['screenshot', '--full', path] : ['screenshot', path];
+      await runCli(bin, args, { ...ctx, timeout: 20_000 });
+      return path;
+    },
     async close() {
       try {
         await runCli(bin, ['close'], { ...ctx, timeout: 10_000 });

@@ -2,8 +2,7 @@ import type { Extension } from '@codemirror/state';
 
 /**
  * The CRDT engine documents are stored in. ESBT is the only engine; the
- * server may still report `loro` or `yjs` on rows created before those
- * engines were removed, which the client refuses to open (see `lib/api.ts`).
+ * client refuses any other engine tag (see `documentIsOpenable`).
  */
 export type EngineName = 'esbt';
 

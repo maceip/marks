@@ -8,6 +8,7 @@ license = "MIT"
 rust-version = "1.85"
 
 [workspace.dependencies]
+base64ct = { version = "1.8.3", features = ["alloc"] }
 hmac = "0.12.1"
 p256 = { version = "0.13.2", features = ["ecdsa"] }
 rand_core = { version = "0.6.4", features = ["getrandom"] }

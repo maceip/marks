@@ -1,10 +1,9 @@
 /**
  * Remote carets and selections, drawn from the ESBT ephemeral store.
  *
- * This replaces the cursor layers loro-codemirror / y-codemirror.next used to
- * provide. The store is the transport (`${siteId}-cm-user` for identity,
+ * The store is the transport (`${siteId}-cm-user` for identity,
  * `${siteId}-cm-sel` for the selection, exactly the keys the integration
- * contract names); this extension publishes the local side and renders the
+ * contract names). This extension publishes the local side and renders the
  * remote side as CodeMirror decorations.
  *
  * Presence entries expire after 30 s, so everything here is re-published on a

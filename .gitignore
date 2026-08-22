@@ -4,7 +4,9 @@ build/
 *.log
 .env
 .env.local
-data/
+# Repo-root SQLite / marks-server working directory only.
+# A bare `data/` pattern also ignores client/src/data/.
+/data/
 *.sqlite
 *.sqlite-journal
 *.sqlite-wal

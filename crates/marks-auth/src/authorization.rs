@@ -1,4 +1,4 @@
-use crate::{DeviceId, DocumentId, PrincipalId, ScratchId, SessionId, SiteId};
+use crate::{DeviceId, DocumentId, EsbtSiteId, PrincipalId, ScratchId, SessionId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,15 +21,15 @@ pub enum DocumentAction {
     Delete,
 }
 
-/// Identity already resolved by the Marks session/ticket boundary. ESBT gets
-/// the `site_id`; product policy consumes every other field.
+/// Identity already resolved by Marks before the room admits a socket. ESBT
+/// receives only `esbt_site` plus operation bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Actor {
     pub principal_id: PrincipalId,
     pub session_id: SessionId,
     pub device_id: DeviceId,
     pub document_id: DocumentId,
-    pub site_id: SiteId,
+    pub esbt_site: EsbtSiteId,
     pub role: DocumentRole,
     pub authorization_epoch: u64,
 }
@@ -40,7 +40,7 @@ pub struct Actor {
 pub struct ScratchActor {
     pub scratch_id: ScratchId,
     pub document_id: DocumentId,
-    pub site_id: SiteId,
+    pub esbt_site: EsbtSiteId,
     pub authorization_epoch: u64,
 }
 
@@ -117,7 +117,7 @@ mod tests {
         let actor = RoomActor::Scratch(ScratchActor {
             scratch_id: ScratchId::new("scratch_123456").unwrap(),
             document_id: DocumentId::new("document_12345").unwrap(),
-            site_id: SiteId::new("site_123456789").unwrap(),
+            esbt_site: EsbtSiteId::new(2).unwrap(),
             authorization_epoch: 1,
         });
         assert!(authorize_room_action(&actor, DocumentAction::EditText));

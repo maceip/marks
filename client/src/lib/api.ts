@@ -1,11 +1,7 @@
 export interface DocumentMeta {
   id: string;
   title: string;
-  /**
-   * `esbt` for every document this client can open. Rows created by the
-   * retired Loro/Yjs engines keep their original value; they are listed but
-   * refused, since their binary formats need runtimes marks no longer ships.
-   */
+  /** `esbt` for documents this client can open. Unknown engine tags stay closed. */
   engine: string;
   chars: number;
   created_at: number;
@@ -15,6 +11,7 @@ export interface DocumentMeta {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
+    credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json', ...init?.headers },
   });
   if (!response.ok) throw new Error(`${init?.method ?? 'GET'} ${path} failed: ${response.status}`);
@@ -29,8 +26,16 @@ export function getDocument(id: string): Promise<{ document: DocumentMeta; conne
   return request(`/v1/documents/${id}`);
 }
 
-export function createDocument(): Promise<{ document: DocumentMeta }> {
-  return request('/v1/documents', { method: 'POST', body: JSON.stringify({}) });
+export function createDocument(draft?: { title?: string }): Promise<{ document: DocumentMeta }> {
+  return request('/v1/documents', { method: 'POST', body: JSON.stringify(draft ?? {}) });
+}
+
+export function renameDocument(id: string, title: string): Promise<{ document: DocumentMeta }> {
+  return request(`/v1/documents/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) });
+}
+
+export function duplicateDocument(id: string): Promise<{ document: DocumentMeta }> {
+  return request(`/v1/documents/${id}/duplicate`, { method: 'POST', body: JSON.stringify({}) });
 }
 
 export function deleteDocument(id: string): Promise<{ deleted: boolean }> {

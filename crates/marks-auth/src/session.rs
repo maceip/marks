@@ -1,6 +1,9 @@
 use crate::{DeviceRecord, PrincipalId, SessionId, bearer_secret_hash};
+use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use thiserror::Error;
+
+const CSRF_DOMAIN: &[u8] = b"marks-csrf-v1\0";
 
 const SESSION_SECRET_BYTES: usize = 32;
 
@@ -57,10 +60,33 @@ pub enum SessionError {
     DeviceRevoked,
     #[error("session secret is invalid")]
     InvalidSecret,
+    #[error("session CSRF token is invalid")]
+    InvalidCsrf,
 }
 
 pub fn session_secret_hash(secret: &[u8]) -> [u8; 32] {
     bearer_secret_hash(secret)
+}
+
+/// Readable same-origin CSRF token derived from the session secret. This is
+/// not the cookie; presenting it does not authenticate a session.
+pub fn session_csrf_token(session_secret: &[u8]) -> Result<[u8; 32], SessionError> {
+    if session_secret.len() != SESSION_SECRET_BYTES {
+        return Err(SessionError::InvalidSecret);
+    }
+    let mut digest = Sha256::new();
+    digest.update(CSRF_DOMAIN);
+    digest.update(session_secret);
+    Ok(digest.finalize().into())
+}
+
+pub fn validate_session_csrf(session_secret: &[u8], presented: &[u8]) -> Result<(), SessionError> {
+    let expected = session_csrf_token(session_secret)?;
+    if presented.len() != SESSION_SECRET_BYTES || expected.ct_eq(presented).unwrap_u8() != 1 {
+        Err(SessionError::InvalidCsrf)
+    } else {
+        Ok(())
+    }
 }
 
 pub fn validate_session(
@@ -175,6 +201,17 @@ mod tests {
         assert_eq!(
             validate_session(&session, &secret, &other_device, 99),
             Err(SessionError::DeviceMismatch)
+        );
+    }
+
+    #[test]
+    fn csrf_token_is_bound_to_the_session_secret() {
+        let secret = [7_u8; 32];
+        let token = session_csrf_token(&secret).unwrap();
+        validate_session_csrf(&secret, &token).unwrap();
+        assert_eq!(
+            validate_session_csrf(&[8_u8; 32], &token),
+            Err(SessionError::InvalidCsrf)
         );
     }
 }

@@ -10,6 +10,8 @@ pub struct ScratchRecord {
     pub capability_hash: [u8; 32],
     pub expires_at_ms: u64,
     pub claimed_by: Option<PrincipalId>,
+    pub claimed_at_ms: Option<u64>,
+    pub finalize_expires_at_ms: Option<u64>,
     pub revoked_at_ms: Option<u64>,
 }
 
@@ -36,6 +38,8 @@ pub enum ScratchError {
     NotClaimed,
     #[error("scratch workspace is revoked")]
     Revoked,
+    #[error("scratch finalize window has expired")]
+    FinalizeExpired,
 }
 
 fn validate_capability(
@@ -98,9 +102,33 @@ pub fn validate_claimed_scratch_capability(
     validate_capability(scratch, presented_capability)?;
     validate_live(scratch, now_ms)?;
     let principal_id = scratch.claimed_by.clone().ok_or(ScratchError::NotClaimed)?;
+    match scratch.finalize_expires_at_ms {
+        Some(deadline) if now_ms < deadline => {}
+        _ => return Err(ScratchError::FinalizeExpired),
+    }
     Ok(ClaimedScratchAuthority {
         scratch_id: scratch.id.clone(),
         principal_id,
+    })
+}
+
+/// Five-minute finalize-only window after a successful claim.
+pub const SCRATCH_FINALIZE_WINDOW_MS: u64 = 5 * 60 * 1000;
+
+pub fn mark_scratch_claimed(
+    scratch: &ScratchRecord,
+    principal_id: PrincipalId,
+    now_ms: u64,
+) -> Result<ScratchRecord, ScratchError> {
+    validate_live(scratch, now_ms)?;
+    if scratch.claimed_by.is_some() {
+        return Err(ScratchError::Claimed);
+    }
+    Ok(ScratchRecord {
+        claimed_by: Some(principal_id),
+        claimed_at_ms: Some(now_ms),
+        finalize_expires_at_ms: Some(now_ms.saturating_add(SCRATCH_FINALIZE_WINDOW_MS)),
+        ..scratch.clone()
     })
 }
 
@@ -116,6 +144,8 @@ mod tests {
                 capability_hash: scratch_capability_hash(&capability),
                 expires_at_ms: 10_000,
                 claimed_by: None,
+                claimed_at_ms: None,
+                finalize_expires_at_ms: None,
                 revoked_at_ms: None,
             },
             capability,
@@ -144,7 +174,10 @@ mod tests {
     #[test]
     fn claimed_revoked_and_expired_scratch_workspaces_fail_closed() {
         let (mut record, capability) = scratch();
+        record.expires_at_ms = 20_000;
         record.claimed_by = Some(PrincipalId::new("principal_1234").unwrap());
+        record.claimed_at_ms = Some(8_000);
+        record.finalize_expires_at_ms = Some(9_500);
         assert_eq!(
             validate_scratch_capability(&record, &capability, 9_000),
             Err(ScratchError::Claimed)
@@ -155,6 +188,10 @@ mod tests {
                 scratch_id: record.id.clone(),
                 principal_id: PrincipalId::new("principal_1234").unwrap(),
             })
+        );
+        assert_eq!(
+            validate_claimed_scratch_capability(&record, &capability, 9_500),
+            Err(ScratchError::FinalizeExpired)
         );
 
         let (mut record, capability) = scratch();

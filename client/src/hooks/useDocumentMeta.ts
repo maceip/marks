@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { readDocumentMeta, writeDocumentMeta } from '../browser/catalog-cache';
 import { documentIsOpenable } from '../browser/document-support';
-import { getDocument, type DocumentMeta } from '../lib/api';
+import { documentRepository } from '../data/documents';
+import type { DocumentMeta } from '../lib/api';
 
 export interface DocumentMetaState {
   meta: DocumentMeta | null;
@@ -16,8 +17,7 @@ export interface DocumentMetaState {
  * Resolve a document's metadata before opening a session.
  *
  * Unknown, deleted, or inaccessible ids remain closed. Document creation is a
- * separate authorized HTTP operation. Rows created by retired engines are also
- * refused rather than opened because their binary format is incompatible.
+ * separate authorized operation. Non-ESBT engine tags stay closed.
  */
 export function useDocumentMeta(docId: string | null): DocumentMetaState {
   const [meta, setMeta] = useState<DocumentMeta | null>(null);
@@ -33,17 +33,20 @@ export function useDocumentMeta(docId: string | null): DocumentMetaState {
     let active = true;
     setResolved(false);
 
-    void readDocumentMeta(docId).then((cached) => {
-      if (!active || !cached) return;
-      setMeta(cached);
-      setResolved(true);
-    });
+    if (documentRepository.mode === 'service') {
+      void readDocumentMeta(docId).then((cached) => {
+        if (!active || !cached) return;
+        setMeta(cached);
+        setResolved(true);
+      });
+    }
 
-    getDocument(docId)
-      .then(({ document }) => {
+    documentRepository
+      .get(docId)
+      .then((document) => {
         if (!active) return;
         setMeta(document);
-        void writeDocumentMeta(document);
+        if (document && documentRepository.mode === 'service') void writeDocumentMeta(document);
       })
       .catch(() => {
         // Keep a cached engine so an offline legacy document is not opened
@@ -53,8 +56,15 @@ export function useDocumentMeta(docId: string | null): DocumentMetaState {
         if (active) setResolved(true);
       });
 
+    const unsubscribe = documentRepository.subscribe(() => {
+      void documentRepository.get(docId).then((document) => {
+        if (active) setMeta(document);
+      });
+    });
+
     return () => {
       active = false;
+      unsubscribe();
     };
   }, [docId]);
 

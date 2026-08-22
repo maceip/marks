@@ -4,11 +4,14 @@ There are two layers:
 
 - **`scripts/harness/`** — product suite. Discovers Playwright, Puppeteer, and
   agent-browser on this machine and runs the portable glass checks against a
-  running marks server. This is what `npm run smoke:platforms` drives.
+  running Marks web app. The default local workspace is sufficient. This is
+  what `npm run smoke:platforms` drives.
 - **`.cursor/harness/`** — Cloud Agent CGNAT runtimes. Optional isolated
   namespaces (`cg-playwright`, `cg-puppeteer`, `cg-agent`) with hot Chrome on
   CDP 9222/9223/9224. Used by `.cursor/harness/run-marks-tests.sh` for
-  cross-namespace collab. Not required for `npm run smoke` or `smoke:platforms`.
+  cross-namespace collab against a running **Rust** `marks-server`. It will
+  not start the retired Node `server/` workspace. Not required for
+  `npm run smoke` or `smoke:platforms`.
 
 marks is exercised on three local browser platforms:
 
@@ -58,9 +61,13 @@ npm run smoke:platforms            # glass checks on all three
 Every runner accepts `--help`. `scripts/harness/run.mjs` also takes `--driver`, `--url`, `--headed`, `--list`.
 
 ```bash
-npm run build
-# Start the Rust Marks server separately on :3000.
-MARKS_URL=http://127.0.0.1:3000 npm run smoke:platforms
+npm run dev
+MARKS_URL=http://127.0.0.1:5173 npm run smoke:platforms
+
+# The deeper two-peer/REST suite is service-only.
+VITE_MARKS_DATA_MODE=service npm run build
+# Start the Rust Marks server separately on :3000, then:
+MARKS_URL=http://127.0.0.1:3000 npm run smoke
 ```
 
 The retired Node prototype has been removed. `npm run preview` serves only the
@@ -69,7 +76,10 @@ two-peer acceptance cases.
 
 ## What each suite covers
 
-**Portable surface** (`scripts/harness/suites/surface.mjs`) — create a document, first paint, scoped select-all, preview context menu, voice button, theme toggle, offline status. This is the set that must stay green on all three platforms.
+**Portable surface** (`scripts/harness/suites/surface.mjs`) — create a document,
+first paint, scoped select-all, preview context menu, honest voice availability,
+theme toggle, and honest local/offline status. This is the set that must stay
+green on all three platforms.
 
 **Playwright smoke** (`scripts/smoke.mjs`) — the above plus incremental preview, two ESBT peers, per-user undo, checkbox write-back, outline, scroll sync, snapshot/export REST, live-room delete, retired-engine refusal.
 
