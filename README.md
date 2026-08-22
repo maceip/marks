@@ -221,6 +221,7 @@ need a browser or a running server, on the Rust version in `rust-toolchain.toml`
 `smoke` / `smoke:platforms` / `measure`. A green CI check is not proof of
 multi-peer collaboration or service-mode admission.
 
+
 `npm run smoke` is Playwright-only and checks the things that need two real
 browsers or the REST surface. It is retained as the acceptance suite for the
 Rust server and is not runnable against a static Vite preview.
