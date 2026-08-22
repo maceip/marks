@@ -5,11 +5,11 @@
  * counter) so every peer converges on the result.
  */
 
-import type { EsbtDoc as EsbtDocContract, UndoManagerOptions } from './api.js';
-import type { EsbtDoc } from './doc.js';
+import type { EsbtDoc as EsbtDocContract, UndoManager as UndoManagerContract, UndoManagerOptions } from './api.js';
+import { EsbtDoc } from './doc.js';
 import type { Op } from './ops.js';
 
-export class UndoManager {
+export class UndoManager implements UndoManagerContract {
   private undoStack: Op[][] = [];
   private redoStack: Op[][] = [];
   private readonly doc: EsbtDoc;
@@ -18,15 +18,14 @@ export class UndoManager {
   private destroyed = false;
 
   constructor(doc: EsbtDocContract, options: UndoManagerOptions = {}) {
-    const impl = doc as unknown as EsbtDoc;
-    if (typeof impl._setUndoHook !== 'function' || typeof impl._applyUndoOps !== 'function') {
+    if (!(doc instanceof EsbtDoc)) {
       throw new Error('esbt: UndoManager requires an EsbtDoc from this package');
     }
-    this.doc = impl;
+    this.doc = doc;
     this.mergeIntervalMs = Math.max(0, options.mergeIntervalMs ?? 0);
     const excluded = options.excludeOriginPrefixes ?? [];
 
-    impl._setUndoHook((ops, origin) => {
+    this.doc._setUndoHook((ops, origin) => {
       if (origin === 'undo' || origin === 'redo') return;
       if (origin && excluded.some((prefix) => origin.startsWith(prefix))) return;
       if (ops.length === 0) return;
