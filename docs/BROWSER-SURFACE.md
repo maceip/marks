@@ -21,11 +21,11 @@ intentionally out of scope here.
 | Multiple tabs, same document | yes | yes (BroadcastChannel + Web Locks) | Surface |
 | Multiple tabs, different documents | yes | yes | Surface |
 | Fast cold open from a snapshot | yes | yes (HTTP snapshot + local cache first) | CRDT + Surface |
-| Comments on a range | yes | yes (CRDT map + quote/cursor reattach) | Surface + CRDT |
+| Comments on a range | yes | no (removed pending authenticated metadata path) | Product |
 | Suggestion mode / track changes | yes | no | Product |
 | Version history UI | yes | no (history is in the CRDT) | Product |
 | Named versions | yes | no | Product |
-| Share link | yes | yes (the URL) | already |
+| Share link | yes | prototype URL only; no ACL or rotatable capability | Product |
 | Find and replace | yes | yes (CodeMirror search) | already |
 | Copy / paste, including from other apps | yes | yes (HTML→markdown, `text/markdown`) | Surface |
 | Cut / copy / paste from a menu | yes | yes | Surface |
@@ -50,7 +50,7 @@ Yes, with a policy that prefers the platform menu when it is the better tool.
 - **Preview** always gets the marks menu (Copy, Select all, Copy markdown).
   There is no native editing menu worth keeping.
 - **Editor, mouse** gets the marks menu (Cut / Copy / Paste / Select all /
-  Comment / Voice). Paste from the menu uses the async Clipboard API so it
+  Voice). Paste from the menu uses the async Clipboard API so it
   works in Chrome, Firefox and Safari as long as the gesture is the click.
 - **Editor, coarse pointer + a live selection** does *not* steal the event.
   iOS and Android already put Copy / Look Up / Speak on the selection
@@ -98,30 +98,24 @@ would generate a storm of inserts and make undo unusable. Only final chunks
 are inserted at the cursor. `Mod-Shift-S` toggles listening while the editor
 is focused.
 
-### Do comments work?
+### Why are comments absent?
 
-Yes. Comments are a map on the same CRDT document as the markdown
-(`comments`), so they sync, work offline, and survive a merge without a
-second protocol.
+The previous implementation stored comments as ordinary operations in an
+ESBT keyed map. At the server's opaque update boundary, a commenter could not
+be allowed to send those operations without also being able to send markdown
+edits. The UI and integration were removed until Marks has principals, ACLs,
+an authenticated comments table, and a separate metadata message path. The
+sequenced work is in [ESBT-COMPLETION-PLAN.md](ESBT-COMPLETION-PLAN.md).
 
-Each comment stores:
-
-- the author's identity
-- the body
-- the source offsets and the quoted text
-- an ESBT weight-stable anchor (`indexToAnchor` / `anchorToIndex`), when
-  the engine can encode the range
-
-Offsets are re-resolved on read: trust the cursor, then the quote, then
-clamp. Resolving or deleting a comment is a CRDT write, not a REST call.
-`Mod-Alt-M` (Docs' shortcut) opens a composer on the current selection.
+Old snapshots can still contain the legacy map payload so their markdown stays
+readable, but the browser does not render or generate those records.
 
 ### Are we caching in a way that is smart but will not annoy users?
 
 Yes. The rules:
 
 1. **Never overwrite a newer local replica with an older HTTP snapshot.**
-   Import is a CRDT merge. The service worker does not cache `/api` or
+   Import is a CRDT merge. The service worker does not cache `/v1` or
    `/collab`.
 2. **Local cache paints first.** The HTTP snapshot is a refinement with a
    budget that shrinks when we already have a copy or the network is slow.
@@ -198,8 +192,9 @@ ESBT still owns merge; this layer owns the glass.
 
 - Offline is a first-class status. Edits apply to the local replica,
   persist to IndexedDB, and sync on reconnect as a version-vector delta on
-  `/collab/esbt`. Sibling tabs keep merging via BroadcastChannel
-  while the socket is down.
+  `/collab/esbt`. Every reconnect first obtains a fresh one-use Marks room
+  ticket; there is no unauthenticated socket fallback. Sibling tabs keep
+  merging via BroadcastChannel while the socket is down.
 - Slow (`saveData`, `2g`, `slow-2g`, or a tiny downlink) shortens the
   snapshot fetch and is shown in the status bar. The editor does not wait.
 - The app shell service worker lets a reload paint when `/` is unreachable;
@@ -212,8 +207,8 @@ npm run test:browser
 npm run test:harness
 npm run harness:probe
 npm run typecheck
-# against a production build:
-npm run build && npm start &
+# against a production build with the Rust server already running:
+npm run build
 npm run smoke              # Playwright two-peer / REST
 npm run smoke:platforms    # Playwright + Puppeteer + agent-browser glass checks
 ```

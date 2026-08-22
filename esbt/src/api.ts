@@ -23,8 +23,8 @@
  *     burst of keystrokes into one undo step (Loro's UndoManager interval,
  *     Yjs's captureTimeout). Without it, Mod-Z per keystroke.
  *   - `EsbtDoc.indexToAnchor` / `anchorToIndex` — weight-stable text anchors,
- *     requested by the integration document (§7) for comments and future
- *     range presence.
+ *     requested by the integration document (§7) for future authenticated
+ *     metadata ranges and range presence.
  */
 
 /** Replica / site identifier. Opaque, comparable, stable for the life of a doc instance. */
@@ -52,8 +52,8 @@ export interface EsbtTextRange {
 
 /**
  * A weight-stable position. Survives concurrent edits elsewhere in the
- * document, which a UTF-16 index does not; the intended carrier for comments
- * and long-lived range presence (integration document §7).
+ * document, which a UTF-16 index does not; the intended carrier for
+ * long-lived metadata ranges and range presence (integration document §7).
  */
 export interface EsbtAnchor {
   /** Canonical weight string of the anchored item (`EsbtItemId.weight`). */
@@ -224,7 +224,7 @@ export interface EsbtDoc {
 
   /**
    * Weight-stable anchor for the item at `index`; the END sentinel at or
-   * past the end. Contract addition for §7 (comments, range presence).
+   * past the end. Contract addition for §7 (metadata ranges, range presence).
    */
   indexToAnchor(index: number): EsbtAnchor;
   /**
@@ -235,9 +235,8 @@ export interface EsbtDoc {
 
   /**
    * Keyed last-writer-wins map riding the document — same oplog, snapshots,
-   * and version vectors as the text. Contract addition: marks stores comment
-   * records here (the way it used a Loro/Yjs map container), so they sync,
-   * work offline, and survive merges without polluting the markdown.
+   * and version vectors as the text. Retained as a generic compatibility
+   * primitive; Marks does not use it for authorized product metadata.
    * Values are opaque strings; the highest (lamport, site) write per key
    * wins on every replica. Deletes leave a mergeable tombstone.
    */
@@ -262,8 +261,7 @@ export interface UndoManagerOptions {
   mergeIntervalMs?: number;
   /**
    * Transacts whose origin starts with any of these prefixes never enter
-   * the undo stack (Loro's `excludeOriginPrefixes`). Marks excludes its
-   * comment writes so Mod-Z never deletes a comment.
+   * the undo stack (Loro's `excludeOriginPrefixes`).
    */
   excludeOriginPrefixes?: string[];
 }

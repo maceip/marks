@@ -1,6 +1,6 @@
 # marks
 
-Collaborative markdown editing that stays responsive at any document size.
+Collaborative Markdown editing designed to stay responsive on large documents.
 
 A HackMD-style split editor — source on the left, live preview on the right —
 where every keystroke lands in a local CRDT replica first, and the preview
@@ -38,29 +38,25 @@ main thread, the markdown parser is not.
 
 ```bash
 npm install
-npm run dev          # server on :3000, client on :5173
+npm run dev          # browser client on :5173
+cargo test --workspace
 ```
 
-Then open http://localhost:5173. For a production build:
+The Vite client proxies `/v1` and `/collab` to `MARKS_SERVER`, which defaults
+to `http://localhost:3000`. The disposable Node backend has been removed; a
+connected local session therefore also needs the production Rust server once
+that binary lands. The browser artifact itself builds with:
 
 ```bash
 npm run build
-npm start            # serves the built client and the sync server on :3000
+npm run preview      # static preview only; no API or collaboration backend
 ```
-
-Open the same document URL in two windows to see collaboration.
 
 ### Environment
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `PORT` | `3000` | HTTP and WebSocket port |
-| `HOST` | `0.0.0.0` | Bind address |
-| `MARKS_DATA_DIR` | `./data` | Where the SQLite database lives |
-| `MARKS_DB` | `$MARKS_DATA_DIR/marks.sqlite` | Database path |
-| `MARKS_PERSIST_DEBOUNCE` | `1500` | Idle milliseconds before a snapshot is written |
-| `MARKS_PERSIST_MAX_WAIT` | `10000` | Longest a stream of edits can defer a write |
-| `MARKS_ROOM_IDLE` | `60000` | How long an empty room stays in memory |
+| `MARKS_SERVER` | `http://localhost:3000` | Rust API/WebSocket target used by the Vite development proxy |
 
 ## Editing
 
@@ -79,28 +75,31 @@ people to expect:
 - **Presence**: avatars, live remote cursors and selections
 - **Per-user undo** — undoing reverts your edits, never a collaborator's
 - **Offline editing**, with local persistence, multi-tab replica sync, and automatic resync
-- **Comments** anchored to a source range, stored on the same CRDT as the markdown
 - **Voice input** where the browser exposes SpeechRecognition
 - **Document-scoped copy / paste / select-all / right-click**, including HTML→markdown paste
 - **Light and dark themes**, and a layout that works on a phone
-- **Export** to `.md`, and a share link that is just the URL
+- **Export** to `.md`; the Rust server will add revocable,
+  permission-checked share links
 
 ## Architecture
 
 ```
 client/                     Vite + React + TypeScript
-  browser/                  clipboard, context menu, voice, comments, tab sync, cache
+  auth/                     scratch/device primitives and room admission
+  browser/                  clipboard, context menu, voice, tab sync, cache
   collab/                   CollabSession interface, the ESBT engine,
                             presence decorations for CodeMirror
   markdown/                 markdown-it setup, block diffing, DOM patching
   workers/                  markdown.worker.ts, bench.worker.ts
   editor/                   CodeMirror 6 setup, commands, theme
   components/ pages/        UI
-esbt/                       @marks/esbt — the ESBT sequence CRDT (TypeScript)
-server/                     Express + ws + SQLite
-  esbt-room.ts              in-memory ESBT replica per document
-  store.ts api.ts           persistence and REST
+esbt/                       temporary TypeScript ESBT browser adapter
+crates/marks-auth/          in-progress identity/authorization primitives
 ```
+
+The next backend artifact is one Rust `marks-server` process owning HTTP,
+sessions, ACLs, durable document rooms, and the native ESBT replica. There is
+intentionally no Node server or compatibility layer.
 
 ### The rendering path
 
@@ -124,14 +123,16 @@ Documents are stored in **ESBT** (Mechaoui & Imine,
 [arXiv:2607.28101](https://arxiv.org/abs/2607.28101)), a sequence CRDT that
 orders characters by weighted identifiers — Stern–Brocot fractions with an
 integer ladder and a sequence path behind them — so deletes remove state
-instead of leaving tombstones. The implementation is the `@marks/esbt`
-workspace: pure TypeScript, no WASM, synchronous on the main thread, developed
-against the contract in [docs/ESBT-INTEGRATION.md](docs/ESBT-INTEGRATION.md)
-alongside the Rust reference in
-[maceip/ESBT-web](https://github.com/maceip/ESBT-web). It replaced Loro and
-Yjs; everything above the `CollabSession` interface never noticed. Comments
-ride the engine's keyed last-writer-wins map with weight-stable anchors, so
-they sync and merge exactly like the text they annotate.
+instead of leaving tombstones. The browser currently runs the temporary
+`@marks/esbt` TypeScript workspace synchronously on the main thread. It
+preserved the `CollabSession` seam while the editor was being built, but it is
+not a second production engine. The authoritative implementation is the Rust
+core in [maceip/ESBT-web](https://github.com/maceip/ESBT-web); v1 will use that
+same core natively in the room server and through Wasm in the browser after its
+undo, local-journal, and native/Wasm conformance gates pass. Comments are
+intentionally absent until authenticated metadata storage and a
+commenter-specific authorization path exist. The binding and release boundary
+is [docs/V1-SCOPE.md](docs/V1-SCOPE.md).
 
 **Benchmark engine** in the sidebar runs an editing trace against it, in a
 worker, in your browser. One run of the 25,000-edit trace in Node on one
@@ -155,16 +156,16 @@ touching the contract.
 
 ### Sync protocol
 
-Rooms speak a small binary protocol over one WebSocket per document — a tag
-byte plus a payload. Clients announce the version vector they already hold in
-the connection URL, so a reconnect or a warm open costs a delta rather than a
-snapshot. The server is a full replica rather than a relay, which is what lets
-it answer a cold open with a single snapshot instead of a replay of history;
-its replica keeps a stable per-document site id across restarts, so reconnect
-vectors stay small.
-
-Documents persist to SQLite, and the document title is derived from the first
-heading server-side, so every client agrees on it without extra coordination.
+The current client still contains the prototype tag-byte room protocol. It is
+not the production trust boundary. The Rust server/client binding will use a
+versioned, bounded, authenticated envelope with a retry-safe message ID and an
+exact principal/session/document/site/role binding. A room applies a valid
+update to staged in-memory state, commits the exact envelope and revision to
+the durable journal, and only then publishes the staged state, broadcasts it,
+and returns one `committed` acknowledgement. Retry IDs make a crash between
+commit and acknowledgement idempotent. Snapshots are asynchronous compaction.
+That server is not present yet, so this paragraph is a target contract rather
+than a runtime claim.
 
 ## Performance panel
 
@@ -177,9 +178,12 @@ parse and render time, bytes on the wire, and the encoded size of the document.
 ## Tests
 
 ```bash
-npm run test:esbt        # 40 CRDT engine contract tests, including fuzzed convergence
-npm run test:browser     # clipboard, comments, context-menu, select-all, tab isolation
+npm run test:esbt        # 41 CRDT engine contract tests, including fuzzed convergence
+npm run test:browser     # clipboard, context-menu, select-all, tab isolation
+npm run test:markdown    # document-global preview invalidation
+npm run test:auth        # browser/Rust canonical auth wire and scratch helpers
 npm run test:harness     # chrome discovery, measure budgets, wait-for-server
+cargo test --workspace  # Marks-owned Rust authn/authz validators
 npm run harness:probe    # print Playwright / Puppeteer / agent-browser + Chrome paths
 npm run smoke            # Playwright two-peer / REST smoke
 npm run smoke:platforms  # portable glass checks on Playwright, Puppeteer, agent-browser
@@ -187,22 +191,20 @@ npm run measure          # latency on a large generated document
 ```
 
 `npm run smoke` is Playwright-only and checks the things that need two real
-browsers or the REST surface: rendering, incremental repainting, scroll sync,
-outline, convergence, presence and remote cursors, per-user undo,
-preview-to-source edits, offline resync, live-room delete, and refusal of the
-retired engines' socket paths.
+browsers or the REST surface. It is retained as the acceptance suite for the
+Rust server and is not runnable against a static Vite preview.
 
 `npm run smoke:platforms` runs the same document-glass checks (select-all,
-context menu, comments, voice affordance, theme, offline status) on all three
+context menu, voice affordance, theme, offline status) on all three
 local platforms. How each platform is found, and which Chrome binary they
 launch, is in [docs/TEST-HARNESS.md](docs/TEST-HARNESS.md).
 
-Needs a build and a running server:
+Connected suites need a build and an independently running Rust server:
 
 ```bash
-npm run build && npm start &
-npm run smoke
-npm run smoke:platforms
+npm run build
+MARKS_URL=http://127.0.0.1:3000 npm run smoke
+MARKS_URL=http://127.0.0.1:3000 npm run smoke:platforms
 ```
 
 ## Known limits
@@ -210,14 +212,18 @@ npm run smoke:platforms
 - The markdown worker re-parses the whole document on every keystroke. Parsing
   is ~20 ms for a 50 KB document and it is off the main thread, but incremental
   block-level parsing is the obvious next win.
-- Documents created by the retired Loro/Yjs engines are listed but cannot be
-  opened; there is no converter from their binary formats, so their sockets
-  are refused and their exports are empty.
+- The browser still uses the temporary TypeScript CRDT adapter. The qualified
+  Rust/Wasm binding, per-replica undo, and IndexedDB update journal are not yet
+  integrated into Marks.
 - Encoded documents are larger than the retired engines' columnar formats —
   identifiers are stored explicitly, one item per UTF-16 unit. Compact
   encoding is the paper's stated future work and fits behind `export`/`import`.
-- There is no authentication. Anyone who can reach the server can open any
-  document by id. Put it behind something before exposing it.
+- The production Rust HTTP/room server is not implemented yet. The old Node
+  prototype was deliberately deleted rather than becoming an accidental
+  compatibility target. The browser now refuses to open a collaboration socket
+  without a one-use room ticket. No runtime claim is made until the Rust server
+  consumes the identity system's narrow admission result and proves a validated
+  principal/session/document/site/role binding end to end.
 
 ## Built on
 
@@ -227,9 +233,9 @@ npm run smoke:platforms
 [markdown-it](https://github.com/markdown-it/markdown-it) · [KaTeX](https://katex.org) ·
 [Mermaid](https://mermaid.js.org) · [highlight.js](https://highlightjs.org) ·
 [DOMPurify](https://github.com/cure53/DOMPurify) · [React](https://react.dev) ·
-[Vite](https://vite.dev) · [Express](https://expressjs.com)
+[Vite](https://vite.dev) · [Rust](https://www.rust-lang.org/)
 
 The research behind the CRDT choices, with papers and implementations from
 January 2025 to August 2026, is in [docs/RESEARCH.md](docs/RESEARCH.md). The
-browser-surface review — right-click, clipboard, voice, comments, caching,
+browser-surface review — right-click, clipboard, voice, caching,
 multi-tab, slow/offline — is in [docs/BROWSER-SURFACE.md](docs/BROWSER-SURFACE.md).

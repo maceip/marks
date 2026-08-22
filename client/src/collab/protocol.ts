@@ -1,6 +1,6 @@
 /**
  * Wire protocol for the ESBT sync rooms.
- * Keep this file in sync with `server/src/protocol.ts`.
+ * The production Rust server must implement these Marks-owned room frames.
  */
 export const MSG_UPDATE = 0x01;
 export const MSG_EPHEMERAL = 0x02;

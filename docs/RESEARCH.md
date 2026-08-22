@@ -18,7 +18,7 @@ replaced Loro/Yjs with a first-party ESBT engine.
 
 | Current | For |
 | --- | --- |
-| [`@marks/esbt`](../esbt) | Only document engine, presence, undo, and comments map |
+| [`@marks/esbt`](../esbt) | Only document engine, presence, undo, and compatibility primitives |
 
 | Survey-era (removed in PR #6) | Was used for |
 | --- | --- |

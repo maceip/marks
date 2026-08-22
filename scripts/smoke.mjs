@@ -6,7 +6,8 @@
  * offline editing, per-user undo, incremental preview rendering, and the
  * server's derived titles. Run it against a build:
  *
- *   npm run build && npm start &
+ *   npm run build
+ *   # Start the Rust Marks server separately.
  *   node scripts/smoke.mjs
  *
  * Playwright owns this two-peer / REST suite. The same glass checks run on
@@ -246,16 +247,6 @@ try {
   check('preview right-click opens the marks menu', (await a.page.locator('.context-menu').count()) === 1);
   await a.page.keyboard.press('Escape');
 
-  await a.page.click('.cm-content');
-  await a.page.keyboard.press('Control+A');
-  await a.page.click('button[aria-label="Comment"]');
-  await settle(a.page, 200);
-  check('comment composer opens on a selection', (await a.page.locator('.comment-composer textarea').count()) === 1);
-  await a.page.fill('.comment-composer textarea', 'A review note');
-  await a.page.click('.comment-composer button.primary');
-  await settle(a.page, 500);
-  check('a comment is stored on the document', (await a.page.locator('.comment-card').count()) >= 1);
-
   check('voice input is offered', (await a.page.locator('button[aria-label="Voice input"]').count()) === 1);
   check('opening shell does not stay up', (await a.page.locator('.opening-shell').count()) === 0);
 
@@ -323,13 +314,13 @@ try {
   /* ---------------------------------------------------- server ---------- */
   console.log('\nserver');
   const docId = secondUrl.split('/d/')[1];
-  const exported = await (await fetch(`${BASE}/api/documents/${docId}/export`)).text();
+  const exported = await (await fetch(`${BASE}/v1/documents/${docId}/export`)).text();
   check('server exports the document as markdown', exported.includes('Second document') && exported.includes('From peer C'));
 
-  const meta = await (await fetch(`${BASE}/api/documents/${docId}`)).json();
+  const meta = await (await fetch(`${BASE}/v1/documents/${docId}`)).json();
   check('server derives the title from the first heading', meta.document.title === 'Second document', meta.document.title);
 
-  const snapshot = await fetch(`${BASE}/api/documents/${docId}/snapshot`);
+  const snapshot = await fetch(`${BASE}/v1/documents/${docId}/snapshot`);
   check('snapshot endpoint serves CRDT state', snapshot.ok && Number(snapshot.headers.get('content-length') ?? 1) !== 0);
 
   // Exporting has to read the live document: both engines persist on a
@@ -338,7 +329,7 @@ try {
   await d.page.keyboard.press('Control+End');
   await d.page.keyboard.type(' Freshly typed.');
   await settle(d.page, 400);
-  const freshExport = await (await fetch(`${BASE}/api/documents/${docId}/export`)).text();
+  const freshExport = await (await fetch(`${BASE}/v1/documents/${docId}/export`)).text();
   check('export includes edits newer than the last store', freshExport.includes('Freshly typed'));
 
   // A document with a live room must stay deleted: the room holds a pending
@@ -353,9 +344,9 @@ try {
   await doomed.page.keyboard.type('# About to be deleted');
   await settle(doomed.page, 300);
 
-  await fetch(`${BASE}/api/documents/${doomedId}`, { method: 'DELETE' });
+  await fetch(`${BASE}/v1/documents/${doomedId}`, { method: 'DELETE' });
   await settle(doomed.page, 4000); // past the persist debounce
-  const afterDelete = await fetch(`${BASE}/api/documents/${doomedId}`);
+  const afterDelete = await fetch(`${BASE}/v1/documents/${doomedId}`);
   check('a deleted document stays deleted while its room is live', afterDelete.status === 404, `status ${afterDelete.status}`);
 
   // The retired engines' paths must be refused: connecting one to an

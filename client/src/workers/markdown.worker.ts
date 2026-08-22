@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 import type { Token } from 'markdown-it';
 import { collectHeadings, envSignature, groupTokens, hashString } from '../markdown/blocks';
-import { createMarkdownIt } from '../markdown/md';
+import { createMarkdownIt, type MarkdownRendererFeatures } from '../markdown/md';
 import type { BlockPatch, RenderRequest, RenderResponse } from '../markdown/types';
 
 /**
@@ -14,7 +14,26 @@ import type { BlockPatch, RenderRequest, RenderResponse } from '../markdown/type
  * actually changed, and ships HTML only for blocks the main thread does not
  * already hold.
  */
-const md = createMarkdownIt();
+let md = createMarkdownIt();
+let katexPlugin: MarkdownRendererFeatures['katex'];
+let highlighter: MarkdownRendererFeatures['highlightCode'];
+
+const MATH_HINT = /(^|[^\\])\$/m;
+const FENCE_LANGUAGE_HINT = /^(?: {0,3})(?:`{3,}|~{3,})\s*([A-Za-z][\w+-]*)/gm;
+const HIGHLIGHT_LANGUAGES = new Set([
+  'bash', 'sh', 'zsh', 'shell', 'console', 'c', 'cpp', 'csharp', 'css', 'diff',
+  'dockerfile', 'go', 'graphql', 'ini', 'toml', 'java', 'javascript', 'js', 'mjs',
+  'cjs', 'node', 'json', 'kotlin', 'lua', 'markdown', 'php', 'python', 'py', 'ruby',
+  'rust', 'rs', 'scss', 'sql', 'swift', 'typescript', 'ts', 'tsx', 'jsx', 'xml',
+  'html', 'svg', 'vue', 'yaml', 'yml',
+]);
+
+function requestsSyntaxHighlight(text: string): boolean {
+  for (const match of text.matchAll(FENCE_LANGUAGE_HINT)) {
+    if (HIGHLIGHT_LANGUAGES.has(match[1].toLowerCase())) return true;
+  }
+  return false;
+}
 
 /** key -> rendered HTML, from the previous pass. */
 let cache = new Map<string, string>();
@@ -22,16 +41,43 @@ let cache = new Map<string, string>();
 let present = new Set<string>();
 let lastEnvSignature = '';
 
-function render(seq: number, text: string): RenderResponse {
+function clearRenderCache(): void {
+  cache = new Map();
+  present = new Set();
+  lastEnvSignature = '';
+}
+
+async function loadRequestedFeatures(text: string): Promise<void> {
+  let changed = false;
+
+  if (!highlighter && requestsSyntaxHighlight(text)) {
+    const module = await import('../markdown/highlight');
+    highlighter = module.highlightCode;
+    changed = true;
+  }
+
+  if (!katexPlugin && MATH_HINT.test(text)) {
+    const module = await import('@vscode/markdown-it-katex');
+    katexPlugin = module.default as MarkdownRendererFeatures['katex'];
+    changed = true;
+  }
+
+  if (!changed) return;
+  md = createMarkdownIt({ katex: katexPlugin, highlightCode: highlighter });
+  clearRenderCache();
+}
+
+async function render(seq: number, text: string): Promise<RenderResponse> {
+  await loadRequestedFeatures(text);
   const parseStart = performance.now();
   const env: Record<string, unknown> = {};
   const tokens = md.parse(text, env) as Token[];
   const parseMs = performance.now() - parseStart;
 
-  const signature = envSignature(env);
+  const signature = envSignature(env, tokens);
   if (signature !== lastEnvSignature) {
-    // A reference, abbreviation or footnote definition moved: block rendering
-    // is no longer independent of the rest of the document.
+    // A reference, abbreviation, footnote, or globally allocated heading slug
+    // changed: block rendering is no longer independent of the document.
     cache = new Map();
     present = new Set();
     lastEnvSignature = signature;
@@ -96,19 +142,17 @@ function render(seq: number, text: string): RenderResponse {
   };
 }
 
-self.onmessage = (event: MessageEvent<RenderRequest>) => {
+self.onmessage = async (event: MessageEvent<RenderRequest>) => {
   const message = event.data;
 
   if (message.type === 'reset') {
-    cache = new Map();
-    present = new Set();
-    lastEnvSignature = '';
+    clearRenderCache();
     return;
   }
 
   if (message.type === 'render') {
     try {
-      (self as unknown as Worker).postMessage(render(message.seq, message.text));
+      (self as unknown as Worker).postMessage(await render(message.seq, message.text));
     } catch (error) {
       console.error('[marks] markdown render failed', error);
       const response: RenderResponse = {

@@ -4,9 +4,11 @@
  * Types into a generated document of a given size and reports the numbers the
  * in-app performance panel shows, so the claims in the README can be checked
  * rather than taken on faith. Budget flags make the process fail when a
- * reading exceeds its cap (the daily workflow uses those).
+ * reading exceeds its cap (the future Rust-server performance workflow will
+ * use those).
  *
- *   npm run build && npm start &
+ *   npm run build
+ *   # Start the Rust Marks server separately.
  *   node scripts/measure.mjs
  *   node scripts/measure.mjs 400
  *   node scripts/measure.mjs --budget-p50 150 --budget-p95 300 --budget-first-ms 20000

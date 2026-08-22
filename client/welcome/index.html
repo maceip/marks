@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      name="description"
+      content="Marks is collaborative Markdown at thought speed: local-first editing, instant preview, and portable documents."
+    />
+    <meta name="theme-color" content="#f4f5f8" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0b0d11" media="(prefers-color-scheme: dark)" />
+    <title>marks — write together at thought speed</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><path d='M57 5 17 57h31l-6 38 41-55H52z' fill='%235b5bd6'/></svg>"
+    />
+    <script>
+      try {
+        const stored = localStorage.getItem('marks:theme');
+        const theme = stored ?? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.dataset.theme = theme;
+      } catch {}
+      document.documentElement.classList.add('marketing-js');
+    </script>
+    <link rel="stylesheet" href="/src/styles/marketing.css" />
+  </head>
+  <body class="marketing-body">
+    <a class="marketing-skip" href="#main">Skip to content</a>
+
+    <div class="marketing-ambient" aria-hidden="true">
+      <span class="ambient-orb ambient-orb-one"></span>
+      <span class="ambient-orb ambient-orb-two"></span>
+      <span class="ambient-grid"></span>
+    </div>
+
+    <header class="marketing-nav glass-material">
+      <a class="marketing-brand" href="/welcome/" aria-label="Marks home">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M13 2 4 14h7l-1 8 9-12h-7z"></path>
+        </svg>
+        <span>marks</span>
+      </a>
+
+      <nav class="marketing-links" aria-label="Primary">
+        <a href="#product">Product</a>
+        <a href="#performance">Performance</a>
+        <a href="#principles">Principles</a>
+      </nav>
+
+      <div class="marketing-nav-actions">
+        <button class="marketing-theme" type="button" aria-label="Switch color theme">
+          <svg class="theme-moon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 14a8 8 0 1 1-10-10 7 7 0 0 0 10 10z"></path>
+          </svg>
+          <svg class="theme-sun" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8zm0-6v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4m0-14.2-1.4 1.4M6.3 17.7l-1.4 1.4"></path>
+          </svg>
+        </button>
+        <a class="marketing-open" href="/">
+          Open Marks
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"></path></svg>
+        </a>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="marketing-hero reveal is-visible" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="marketing-eyebrow"><span></span> Collaborative Markdown, local at the keystroke</p>
+          <h1 id="hero-title">Write together at <em>thought speed.</em></h1>
+          <p class="hero-lede">
+            Marks keeps the source honest, the preview immediate, and every collaborator in the
+            same document—without making a keystroke wait for the network.
+          </p>
+          <div class="hero-actions">
+            <a class="hero-primary" href="/">
+              Start a document
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"></path></svg>
+            </a>
+            <a class="hero-secondary" href="#product">See how it works</a>
+          </div>
+          <ul class="hero-proof" aria-label="Product principles">
+            <li><span>01</span> Local-first editing</li>
+            <li><span>02</span> Dirty-block preview</li>
+            <li><span>03</span> Portable Markdown</li>
+          </ul>
+        </div>
+
+        <div class="product-stage" id="product" data-demo-mode="split">
+          <div class="stage-halo" aria-hidden="true"></div>
+          <div class="demo-window glass-material">
+            <div class="demo-titlebar">
+              <div class="demo-document">
+                <span class="demo-mark"><svg viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"></path></svg></span>
+                <div>
+                  <strong>Release notes</strong>
+                  <small><i></i> Saved locally</small>
+                </div>
+              </div>
+              <div class="demo-people" aria-hidden="true"><span>NO</span><span>NL</span></div>
+              <div class="demo-modes" role="group" aria-label="Preview the Marks workspace">
+                <button type="button" data-mode="edit" aria-pressed="false">Edit</button>
+                <button type="button" data-mode="split" aria-pressed="true">Split</button>
+                <button type="button" data-mode="preview" aria-pressed="false">Read</button>
+              </div>
+            </div>
+
+            <div class="demo-ribbon" aria-hidden="true">
+              <span class="demo-tab active">Home</span><span class="demo-tab">Insert</span><span class="demo-tab">Review</span><span class="demo-tab">View</span>
+              <div class="demo-tools">
+                <b>H</b><b>B</b><b><i>I</i></b><b>↗</b><b>☷</b><b>✓</b><b>&lt;/&gt;</b>
+              </div>
+            </div>
+
+            <div class="demo-workspace">
+              <div class="demo-source" aria-label="Markdown source preview">
+                <div class="code-row"><span class="line-number">1</span><code><mark>#</mark> Release notes</code></div>
+                <div class="code-row"><span class="line-number">2</span><code></code></div>
+                <div class="code-row"><span class="line-number">3</span><code>A shared scratchpad for the release.</code></div>
+                <div class="code-row"><span class="line-number">4</span><code>Everyone edits at once.</code></div>
+                <div class="code-row"><span class="line-number">5</span><code></code></div>
+                <div class="code-row active"><span class="line-number">6</span><code><mark>&gt;</mark> Ship date is <strong>**Thursday**</strong>.<i class="demo-caret"></i></code></div>
+                <div class="code-row"><span class="line-number">7</span><code></code></div>
+                <div class="code-row"><span class="line-number">8</span><code><mark>##</mark> What landed</code></div>
+                <div class="code-row"><span class="line-number">9</span><code><mark>- [x]</mark> Snapshot cold opens</code></div>
+                <div class="code-row"><span class="line-number">10</span><code><mark>- [x]</mark> Incremental preview</code></div>
+              </div>
+
+              <article class="demo-preview" aria-label="Rendered document preview">
+                <h2>Release notes</h2>
+                <p>A shared scratchpad for the release. Everyone edits at once.</p>
+                <blockquote>Ship date is <strong>Thursday</strong>.</blockquote>
+                <h3>What landed</h3>
+                <label><input type="checkbox" checked disabled /> Snapshot cold opens</label>
+                <label><input type="checkbox" checked disabled /> Incremental preview</label>
+                <label><input type="checkbox" disabled /> Draft the announcement</label>
+              </article>
+            </div>
+
+            <footer class="demo-status">
+              <span>84 words</span><span>Ln 6, Col 34</span><span class="demo-status-right"><i></i> local edit committed</span>
+            </footer>
+          </div>
+        </div>
+      </section>
+
+      <section class="receipt-strip reveal" id="performance" aria-label="Performance approach">
+        <article><strong>0</strong><span>network waits on a keystroke</span></article>
+        <article><strong>1</strong><span>dirty block repainted for a typical edit</span></article>
+        <article><strong>.md</strong><span>the source stays portable and yours</span></article>
+      </section>
+
+      <section class="marketing-section reveal" id="principles">
+        <div class="section-heading">
+          <p class="marketing-eyebrow"><span></span> Built around the work</p>
+          <h2>A serious writing surface that happens to feel effortless.</h2>
+          <p>Fast is not a mode. It is the rule every feature has to survive.</p>
+        </div>
+
+        <div class="principle-grid">
+          <article class="principle-card glass-material">
+            <span class="principle-number">01</span>
+            <h3>Immediate by design</h3>
+            <p>Your local replica accepts the edit first. Collaboration, persistence, and preview work follow without blocking the cursor.</p>
+          </article>
+          <article class="principle-card glass-material">
+            <span class="principle-number">02</span>
+            <h3>Rich without the weight</h3>
+            <p>Math, diagrams, syntax, comments, and history arrive when the document asks for them—not before the first paint.</p>
+          </article>
+          <article class="principle-card glass-material">
+            <span class="principle-number">03</span>
+            <h3>Made for every posture</h3>
+            <p>A full ribbon on desktop, a focused command surface on phones, and real two-pane editing on unfolded devices.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="marketing-cta reveal">
+        <div>
+          <p class="marketing-eyebrow"><span></span> The document is waiting</p>
+          <h2>Keep up with the thought.</h2>
+        </div>
+        <a class="hero-primary" href="/">Open Marks <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"></path></svg></a>
+      </section>
+    </main>
+
+    <footer class="marketing-footer">
+      <a class="marketing-brand" href="/welcome/">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"></path></svg>
+        <span>marks</span>
+      </a>
+      <p>Collaborative Markdown at thought speed.</p>
+      <span>© <span data-year></span></span>
+    </footer>
+
+    <script type="module" src="/src/marketing.ts"></script>
+  </body>
+</html>

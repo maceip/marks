@@ -12,19 +12,6 @@ export {
 } from './context-menu.ts';
 export { surfaceForEvent, selectElementContents, shouldHandleSelectAll, previewHasSelection, type Surface } from './select-all.ts';
 export { VoiceSession, type VoiceStatus, type VoiceTranscript } from './voice.ts';
-export {
-  COMMENTS_MAP,
-  COMMENT_ORIGIN,
-  createCommentId,
-  parseComment,
-  serializeComment,
-  readCommentMap,
-  resolveCommentRange,
-  encodeBytes,
-  decodeBytes,
-  openComments,
-  type CommentRecord,
-} from './comments.ts';
 export { TabChannel, tabChannelName, createTabId } from './tab-sync.ts';
 export { withPersistLock, writeSnapshotUnderLock, persistLockName } from './persist-lock.ts';
 export { documentIsOpenable } from './document-support.ts';

@@ -2,9 +2,7 @@ import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { useLayoutEffect, useRef } from 'react';
 import type { CollabSession } from '../collab/types';
-import { setCommentHighlights } from '../editor/comment-highlights';
 import { createEditorExtensions } from '../editor/setup';
-import { Toolbar } from './Toolbar';
 
 export interface CursorInfo {
   line: number;
@@ -14,24 +12,16 @@ export interface CursorInfo {
 
 interface EditorPaneProps {
   session: CollabSession;
-  showToolbar: boolean;
   onView: (view: EditorView | null) => void;
   onScroll: () => void;
   onCursor: (info: CursorInfo) => void;
-  onComment?: () => void;
-  onVoice?: () => void;
-  voiceActive?: boolean;
 }
 
 export function EditorPane({
   session,
-  showToolbar,
   onView,
   onScroll,
   onCursor,
-  onComment,
-  onVoice,
-  voiceActive,
 }: EditorPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -74,21 +64,9 @@ export function EditorPane({
 
     viewRef.current = view;
     handlers.current.onView(view);
-    const paintHighlights = (comments: ReturnType<CollabSession['comments']>) => {
-      // Comment writes go through the same CRDT transaction as the editor
-      // binding. Dispatching decorations synchronously re-enters
-      // EditorView.update and CodeMirror logs a console error.
-      queueMicrotask(() => {
-        if (viewRef.current !== view) return;
-        view.dispatch({ effects: setCommentHighlights.of(comments) });
-      });
-    };
-    paintHighlights(session.comments());
-    const offComments = session.onCommentsChange(paintHighlights);
     view.focus();
 
     return () => {
-      offComments();
       handlers.current.onView(null);
       viewRef.current = null;
       view.destroy();
@@ -97,14 +75,6 @@ export function EditorPane({
 
   return (
     <section className="pane editor-pane" aria-label="Markdown source">
-      {showToolbar && (
-        <Toolbar
-          getView={() => viewRef.current}
-          onComment={onComment}
-          onVoice={onVoice}
-          voiceActive={voiceActive}
-        />
-      )}
       <div className="editor-host" ref={hostRef} />
     </section>
   );

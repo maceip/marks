@@ -65,14 +65,20 @@ export function groupTokens(tokens: Token[], lines: string[]): TokenGroup[] {
 
 /**
  * Anything markdown-it resolves document-wide — link reference definitions,
- * footnotes, abbreviations — invalidates the whole cache when it changes,
- * because a block's rendering can depend on a definition far away from it.
+ * footnotes, abbreviations, and allocated heading IDs — invalidates the whole
+ * cache when it changes, because a block's rendering can depend on a token far
+ * away from it. Heading IDs matter when duplicate slugs are inserted or moved:
+ * an unchanged `# B` block can change from `id="b"` to `id="b-1"`.
  */
-export function envSignature(env: Record<string, unknown>): string {
+export function envSignature(env: Record<string, unknown>, tokens: Token[] = []): string {
   const references = env.references ? JSON.stringify(env.references) : '';
-  const footnotes = env.footnotes as { list?: unknown[] } | undefined;
+  const footnotes = env.footnotes ? JSON.stringify(env.footnotes) : '';
   const abbreviations = env.abbreviations ? JSON.stringify(env.abbreviations) : '';
-  return `${hashString(references)}:${footnotes?.list?.length ?? 0}:${hashString(abbreviations)}`;
+  const headingIds = tokens
+    .filter((token) => token.type === 'heading_open')
+    .map((token) => token.attrGet('id') ?? '')
+    .join('\0');
+  return [references, footnotes, abbreviations, headingIds].map(hashString).join(':');
 }
 
 /**

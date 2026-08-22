@@ -16,6 +16,20 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+
+      - name: Rust format
+        run: cargo fmt --all --check
+
+      - name: Rust auth tests
+        run: cargo test --workspace --locked
+
+      - name: Rust auth lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
       - name: Setup Node.js v22
         uses: actions/setup-node@v4
         with:
@@ -34,5 +48,14 @@ jobs:
       - name: Browser unit tests
         run: npm run test:browser
 
+      - name: Markdown renderer tests
+        run: npm run test:markdown
+
+      - name: Browser auth protocol tests
+        run: npm run test:auth
+
       - name: Harness unit tests
         run: npm run test:harness
+
+      - name: Production client build
+        run: npm run build

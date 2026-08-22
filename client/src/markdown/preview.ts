@@ -6,6 +6,12 @@ import type { BlockPatch, Heading, RenderRequest, RenderResponse, RenderStats } 
 /** First paint inserts this many blocks before yielding to the browser. */
 const FIRST_PAINT_BLOCKS = 48;
 const IDLE_PAINT_BLOCKS = 40;
+let mathStyles: Promise<unknown> | null = null;
+
+function loadMathStylesWhenNeeded(blocks: BlockPatch[]): void {
+  if (mathStyles || !blocks.some((block) => block.html?.includes('class="katex'))) return;
+  mathStyles = import('../styles/katex.css').catch(() => undefined);
+}
 
 export interface PreviewStats extends RenderStats {
   /** Time from the edit landing to the preview being painted. */
@@ -104,6 +110,7 @@ export class PreviewRenderer {
     }
 
     const patchStart = performance.now();
+    loadMathStylesWhenNeeded(response.blocks);
     const touched = this.patch(response.blocks);
     const patchMs = performance.now() - patchStart;
 

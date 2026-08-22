@@ -1,7 +1,8 @@
 import type { EditorView } from '@codemirror/view';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { loadUser } from './collab';
-import { CommentsDrawer } from './components/CommentsDrawer';
+import { createMarksDocumentAccess } from './auth/room-access';
+import { loadScratchCredential } from './auth/scratch';
+import { loadUser } from './collab/user';
 import { ContextMenu } from './components/ContextMenu';
 import { EmptyState } from './components/EmptyState';
 import type { CursorInfo } from './components/EditorPane';
@@ -13,22 +14,26 @@ import { Sidebar } from './components/Sidebar';
 import { StatusBar } from './components/StatusBar';
 import { TopBar, type ViewMode } from './components/TopBar';
 import { VoiceBar } from './components/VoiceBar';
-import { Workspace } from './components/Workspace';
 import { useBrowserSurface } from './hooks/useBrowserSurface';
 import { useDocumentMeta } from './hooks/useDocumentMeta';
 import { useDocuments } from './hooks/useDocuments';
+import { useMediaQuery } from './hooks/useMediaQuery';
 import { useRoute } from './hooks/useRoute';
 import { useSession } from './hooks/useSession';
 import { useTheme } from './hooks/useTheme';
 import { countWords } from './lib/format';
 import { EMPTY_SNAPSHOT, type HudSnapshot } from './lib/hud';
 import { LatencyTracker } from './lib/latency';
+import { UI_MEDIA } from './lib/product';
 import { ScrollSync } from './lib/scroll-sync';
 import type { PreviewStats } from './markdown/preview';
 import type { Heading } from './markdown/types';
 
 const Benchmark = lazy(() =>
   import('./pages/Benchmark').then((module) => ({ default: module.Benchmark })),
+);
+const Workspace = lazy(() =>
+  import('./components/Workspace').then((module) => ({ default: module.Workspace })),
 );
 
 /** How often the HUD and word counts refresh. Editing never waits on this. */
@@ -39,25 +44,41 @@ const MODE_ORDER: ViewMode[] = ['edit', 'split', 'preview'];
 function initialMode(): ViewMode {
   const stored = localStorage.getItem('marks:mode');
   if (stored === 'edit' || stored === 'split' || stored === 'preview') return stored;
-  return matchMedia('(max-width: 900px)').matches ? 'edit' : 'split';
+  return matchMedia(UI_MEDIA.phone).matches ? 'edit' : 'split';
 }
 
 export function App() {
   const [route, navigate] = useRoute();
   const [theme, toggleTheme] = useTheme();
+  const phone = useMediaQuery(UI_MEDIA.phone);
+  const overlayNavigation = useMediaQuery(UI_MEDIA.overlayNavigation);
   const user = useMemo(loadUser, []);
+  const documentAccess = useMemo(
+    () =>
+      createMarksDocumentAccess({
+        authority: () => {
+          const credential = loadScratchCredential(sessionStorage);
+          return credential ? { kind: 'scratch', credential } : { kind: 'session' };
+        },
+      }),
+    [],
+  );
 
   const [mode, setMode] = useState<ViewMode>(initialMode);
-  const [sidebarOpen, setSidebarOpen] = useState(() => !matchMedia('(max-width: 900px)').matches);
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => !matchMedia(UI_MEDIA.overlayNavigation).matches,
+  );
   const [hudOpen, setHudOpen] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
+  const [uiError, setUiError] = useState<string | null>(null);
 
-  const documents = useDocuments();
+  const documents = useDocuments(route.name !== 'benchmark');
   const docId = route.name === 'document' ? route.id : null;
   const { meta, engine, supported, resolved } = useDocumentMeta(docId);
-  const { session, status, peers, comments } = useSession(
+  const { session, status, peers, hydrated } = useSession(
     resolved && supported ? docId : null,
     user,
+    documentAccess,
   );
 
   const scrollSync = useMemo(() => new ScrollSync(), []);
@@ -76,6 +97,14 @@ export function App() {
 
   useEffect(() => localStorage.setItem('marks:mode', mode), [mode]);
 
+  useEffect(() => {
+    if (phone && mode === 'split') setMode('edit');
+  }, [mode, phone]);
+
+  useEffect(() => {
+    if (overlayNavigation) setSidebarOpen(false);
+  }, [overlayNavigation]);
+
   // Text is kept out of React state; only the derived counters are published.
   useEffect(() => {
     if (!session) {
@@ -90,13 +119,18 @@ export function App() {
   }, [session]);
 
   useEffect(() => {
-    const interval = window.setInterval(() => {
+    if (!session) {
+      setSnapshot({ ...EMPTY_SNAPSHOT, engine });
+      return;
+    }
+
+    const sample = () => {
       const stats = latest.current;
-      const engineStats = session?.stats();
+      const engineStats = session.stats();
       const text = textRef.current;
 
       setSnapshot({
-        engine: session?.engine ?? engine,
+        engine: session.engine,
         p50: tracker.current.p50,
         p95: tracker.current.p95,
         max: tracker.current.max,
@@ -110,10 +144,15 @@ export function App() {
         htmlBytes: stats?.bytes ?? 0,
         chars: text.length,
         words: countWords(text),
-        snapshotBytes: engineStats?.snapshotBytes ?? 0,
-        sent: engineStats?.sent ?? 0,
-        received: engineStats?.received ?? 0,
+        snapshotBytes: engineStats.snapshotBytes,
+        sent: engineStats.sent,
+        received: engineStats.received,
       });
+    };
+
+    sample();
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') sample();
     }, SAMPLE_INTERVAL_MS);
 
     return () => clearInterval(interval);
@@ -130,21 +169,32 @@ export function App() {
 
   const openDocument = useCallback(
     (id: string) => {
+      setUiError(null);
       navigate({ name: 'document', id });
-      if (matchMedia('(max-width: 900px)').matches) setSidebarOpen(false);
+      if (overlayNavigation) setSidebarOpen(false);
     },
-    [navigate],
+    [navigate, overlayNavigation],
   );
 
   const createDocument = useCallback(async () => {
-    const created = await documents.create();
-    openDocument(created.id);
+    try {
+      setUiError(null);
+      const created = await documents.create();
+      openDocument(created.id);
+    } catch {
+      setUiError('The document service is not ready yet. Your current screen is still available.');
+    }
   }, [documents, openDocument]);
 
   const removeDocument = useCallback(
     async (id: string) => {
-      await documents.remove(id);
-      if (docId === id) navigate({ name: 'home' });
+      try {
+        setUiError(null);
+        await documents.remove(id);
+        if (docId === id) navigate({ name: 'home' });
+      } catch {
+        setUiError('That document could not be deleted while the service is unavailable.');
+      }
     },
     [documents, docId, navigate],
   );
@@ -157,7 +207,11 @@ export function App() {
 
       if (event.key === '\\') {
         event.preventDefault();
-        setMode((current) => MODE_ORDER[(MODE_ORDER.indexOf(current) + 1) % MODE_ORDER.length]);
+        const availableModes = phone ? MODE_ORDER.filter((item) => item !== 'split') : MODE_ORDER;
+        setMode(
+          (current) =>
+            availableModes[(availableModes.indexOf(current) + 1) % availableModes.length],
+        );
       } else if (event.shiftKey && event.key.toLowerCase() === 'o') {
         event.preventDefault();
         setOutlineOpen((open) => !open);
@@ -172,7 +226,7 @@ export function App() {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [phone]);
 
   // Titles are derived server-side from the first heading, so the polled index
   // is fresher than the metadata fetched when the document was opened.
@@ -182,29 +236,48 @@ export function App() {
     (docId ? 'Untitled' : 'marks');
 
   useEffect(() => {
-    document.title = route.name === 'benchmark' ? 'Benchmark · marks' : `${title} · marks`;
+    document.title =
+      route.name === 'benchmark'
+        ? 'Benchmark · marks'
+        : route.name === 'document'
+          ? `${title} · marks`
+          : 'marks — collaborative writing at thought speed';
   }, [title, route.name]);
 
+  const closeSidebar = useCallback(() => setSidebarOpen(false), []);
+  const toggleSidebar = useCallback(() => setSidebarOpen((open) => !open), []);
+  const openBenchmark = useCallback(() => {
+    if (overlayNavigation) setSidebarOpen(false);
+    navigate({ name: 'benchmark' });
+  }, [navigate, overlayNavigation]);
+
   return (
-    <div className={`app${sidebarOpen ? ' with-sidebar' : ''}`}>
+    <div className={`app route-${route.name}${sidebarOpen ? ' with-sidebar' : ''}`}>
       {sidebarOpen && (
         <Sidebar
           documents={documents.documents}
           activeId={docId}
           loading={documents.loading}
           stale={documents.stale}
+          error={documents.error ?? uiError}
+          overlay={overlayNavigation}
+          onClose={closeSidebar}
           onOpen={openDocument}
           onCreate={() => void createDocument()}
           onDelete={(id) => void removeDocument(id)}
-          onOpenBenchmark={() => navigate({ name: 'benchmark' })}
+          onOpenBenchmark={openBenchmark}
         />
       )}
 
-      <main className="main">
+      <main className={`main route-${route.name}`}>
         <TopBar
           title={route.name === 'benchmark' ? 'Engine benchmark' : title}
           docId={docId}
-          engine={engine}
+          route={route.name}
+          documentReady={Boolean(session && hydrated)}
+          documentAvailable={!resolved || supported}
+          phone={phone}
+          getView={getView}
           status={status}
           peers={peers}
           mode={mode}
@@ -212,14 +285,13 @@ export function App() {
           sidebarOpen={sidebarOpen}
           hudOpen={hudOpen}
           outlineOpen={outlineOpen}
-          commentsOpen={surface.commentsOpen}
-          commentCount={comments.filter((comment) => !comment.resolved).length}
           onModeChange={setMode}
-          onToggleSidebar={() => setSidebarOpen((open) => !open)}
+          onToggleSidebar={toggleSidebar}
           onToggleTheme={toggleTheme}
           onToggleHud={() => setHudOpen((open) => !open)}
           onToggleOutline={() => setOutlineOpen((open) => !open)}
-          onToggleComments={() => surface.setCommentsOpen(!surface.commentsOpen)}
+          onVoice={session ? surface.toggleVoice : undefined}
+          voiceActive={surface.voiceStatus === 'listening'}
         />
 
         {route.name === 'benchmark' ? (
@@ -229,12 +301,16 @@ export function App() {
         ) : docId && resolved && !supported ? (
           <div className="empty-state">
             <div className="empty-card">
-              <h2>Legacy document</h2>
-              <p>
-                This document was created with the retired <code>{engine}</code> engine and its
-                stored bytes cannot be opened by the ESBT engine. Create a new document and paste
-                its content across from an older export.
-              </p>
+              <h2>{meta ? 'Legacy document' : 'Document unavailable'}</h2>
+              {meta ? (
+                <p>
+                  This document was created with the retired <code>{engine}</code> engine and its
+                  stored bytes cannot be opened by the ESBT engine. Create a new document and paste
+                  its content across from an older export.
+                </p>
+              ) : (
+                <p>This document does not exist, was deleted, or is not available to this session.</p>
+              )}
             </div>
           </div>
         ) : session ? (
@@ -246,24 +322,24 @@ export function App() {
               else if (target.closest('.editor-pane')) surface.setLastSurface('editor');
             }}
           >
-            {!surface.hydrated && (
+            {!hydrated && (
               <OpeningShell cached={Boolean(meta)} offline={surface.network === 'offline'} />
             )}
-            <Workspace
-              session={session}
-              mode={mode}
-              scrollSync={scrollSync}
-              onStats={handleStats}
-              onHeadings={setHeadings}
-              onCursor={setCursor}
-              onView={handleView}
-              onPreview={(element) => {
-                previewRef.current = element;
-              }}
-              onComment={surface.beginComment}
-              onVoice={surface.toggleVoice}
-              voiceActive={surface.voiceStatus === 'listening'}
-            />
+            <Suspense fallback={<OpeningShell cached offline={false} />}>
+              <Workspace
+                session={session}
+                mode={mode}
+                scrollSync={scrollSync}
+                onStats={handleStats}
+                onHeadings={setHeadings}
+                onCursor={setCursor}
+                onView={handleView}
+                previewRequested={outlineOpen}
+                onPreview={(element) => {
+                  previewRef.current = element;
+                }}
+              />
+            </Suspense>
             <VoiceBar status={surface.voiceStatus} interim={surface.voiceInterim} onStop={surface.stopVoice} />
           </div>
         ) : docId ? (
@@ -271,11 +347,17 @@ export function App() {
         ) : (
           <EmptyState
             onCreate={() => void createDocument()}
-            onOpenBenchmark={() => navigate({ name: 'benchmark' })}
+            onOpenBenchmark={openBenchmark}
+            error={
+              uiError ??
+              (documents.error
+                ? 'The document service is not ready yet. You can still explore the workspace.'
+                : null)
+            }
           />
         )}
 
-        {route.name !== 'benchmark' && (
+        {route.name === 'document' && session && (
           <StatusBar
             words={snapshot.words}
             chars={snapshot.chars}
@@ -298,28 +380,7 @@ export function App() {
         />
       )}
 
-      {surface.commentsOpen && session && route.name !== 'benchmark' && (
-        <CommentsDrawer
-          comments={comments}
-          draftQuote={surface.draftQuote}
-          onSubmitDraft={surface.submitComment}
-          onCancelDraft={surface.cancelDraft}
-          onResolve={(id) => session.resolveComment(id)}
-          onDelete={(id) => session.deleteComment(id)}
-          onSelect={(comment) => {
-            const view = viewRef.current;
-            if (!view) return;
-            view.dispatch({
-              selection: { anchor: comment.from, head: comment.to },
-              scrollIntoView: true,
-            });
-            view.focus();
-          }}
-          onClose={() => surface.setCommentsOpen(false)}
-        />
-      )}
-
-      {outlineOpen && route.name !== 'benchmark' && (
+      {outlineOpen && route.name === 'document' && (
         <aside className="outline-drawer" aria-label="Outline">
           <header className="drawer-head">
             <h2>
@@ -342,7 +403,7 @@ export function App() {
         <PerfHud
           snapshot={snapshot}
           onClose={() => setHudOpen(false)}
-          onOpenBenchmark={() => navigate({ name: 'benchmark' })}
+          onOpenBenchmark={openBenchmark}
         />
       )}
     </div>

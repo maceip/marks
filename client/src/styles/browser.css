@@ -1,4 +1,4 @@
-/* Browser-surface chrome: menus, comments, voice, first-paint skeleton.
+/* Browser-surface chrome: menus, voice, first-paint skeleton.
    Animations are transform/opacity only so they stay on the compositor. */
 
 .workspace-shell {
@@ -114,90 +114,6 @@
   font-size: 11px;
 }
 
-.comments-drawer .comment-list {
-  overflow-y: auto;
-  padding: 8px;
-}
-
-.comment-composer {
-  display: grid;
-  gap: 8px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
-}
-
-.comment-composer textarea {
-  width: 100%;
-  resize: vertical;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-}
-
-.comment-composer-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.comment-card {
-  padding: 8px;
-  border-radius: var(--radius);
-}
-
-.comment-card.resolved {
-  opacity: 0.62;
-}
-
-.comment-card-main {
-  display: flex;
-  gap: 8px;
-  width: 100%;
-  padding: 0;
-  border: 0;
-  background: none;
-  text-align: left;
-  cursor: pointer;
-}
-
-.comment-card-main header {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.comment-card-main header time {
-  color: var(--text-faint);
-  font-size: 11px;
-}
-
-.comment-quote {
-  margin: 4px 0;
-  padding-left: 8px;
-  border-left: 2px solid var(--accent);
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.comment-body {
-  font-size: 13px;
-}
-
-.comment-card-actions {
-  display: flex;
-  gap: 10px;
-  padding: 4px 0 0 34px;
-}
-
-.comment-resolved-label {
-  margin: 12px 8px 4px;
-  color: var(--text-faint);
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
 .voice-bar {
   position: absolute;
   left: 50%;
@@ -231,21 +147,6 @@
   white-space: nowrap;
 }
 
-.icon-badge {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 4px;
-  border-radius: 999px;
-  background: var(--accent);
-  color: #fff;
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 14px;
-}
-
 .icon-button {
   position: relative;
 }
@@ -253,11 +154,6 @@
 .toolbar-button.active {
   background: var(--accent-soft);
   color: var(--accent);
-}
-
-.cm-comment-range {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  border-bottom: 1.5px solid var(--accent);
 }
 
 .editor-host .cm-content {
@@ -275,7 +171,7 @@
 
 @media print {
   .sidebar,
-  .topbar,
+  .app-ribbon,
   .statusbar,
   .toolbar,
   .splitter,

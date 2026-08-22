@@ -1,0 +1,417 @@
+use crate::{
+    Actor, AuthenticatedSession, DeviceId, DocumentId, DocumentRole, PrincipalId, ScratchActor,
+    ScratchId, ScratchRecord, SessionId, SiteId, TicketId, bearer_secret_hash,
+};
+use subtle::ConstantTimeEq;
+use thiserror::Error;
+
+const TICKET_SECRET_BYTES: usize = 32;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DocumentTicketRecord {
+    pub id: TicketId,
+    pub secret_hash: [u8; 32],
+    pub principal_id: PrincipalId,
+    pub session_id: SessionId,
+    pub device_id: DeviceId,
+    pub document_id: DocumentId,
+    pub site_id: SiteId,
+    pub role: DocumentRole,
+    pub authorization_epoch: u64,
+    pub expires_at_ms: u64,
+    pub consumed_at_ms: Option<u64>,
+    pub revoked_at_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScratchDocumentTicketRecord {
+    pub id: TicketId,
+    pub secret_hash: [u8; 32],
+    pub scratch_id: ScratchId,
+    pub document_id: DocumentId,
+    pub site_id: SiteId,
+    pub authorization_epoch: u64,
+    pub expires_at_ms: u64,
+    pub consumed_at_ms: Option<u64>,
+    pub revoked_at_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum DocumentTicketError {
+    #[error("document ticket secret is invalid")]
+    InvalidSecret,
+    #[error("document ticket was already consumed")]
+    Consumed,
+    #[error("document ticket is revoked")]
+    Revoked,
+    #[error("document ticket is expired")]
+    Expired,
+    #[error("document ticket session is expired or revoked")]
+    SessionInactive,
+    #[error("document ticket is not bound to this session")]
+    SessionMismatch,
+    #[error("document ticket is not bound to this document")]
+    DocumentMismatch,
+    #[error("document ticket is not bound to this ESBT replica")]
+    SiteMismatch,
+    #[error("document authorization changed after this ticket was issued")]
+    AuthorizationStale,
+    #[error("scratch document ticket is not bound to this scratch workspace")]
+    ScratchMismatch,
+    #[error("scratch workspace is expired, revoked, or already claimed")]
+    ScratchInactive,
+}
+
+/// Redeem a one-use room ticket for a still-unclaimed scratch workspace. The
+/// caller first used the scratch capability to mint this ticket; upgrade only
+/// needs the ticket, current scratch row, document ownership, and epoch.
+pub fn redeem_scratch_document_ticket(
+    ticket: &ScratchDocumentTicketRecord,
+    presented_secret: &[u8],
+    scratch: &ScratchRecord,
+    expected_document_id: &DocumentId,
+    expected_site_id: &SiteId,
+    expected_authorization_epoch: u64,
+    now_ms: u64,
+) -> Result<ScratchActor, DocumentTicketError> {
+    if presented_secret.len() != TICKET_SECRET_BYTES
+        || ticket
+            .secret_hash
+            .ct_eq(&ticket_secret_hash(presented_secret))
+            .unwrap_u8()
+            != 1
+    {
+        return Err(DocumentTicketError::InvalidSecret);
+    }
+    if ticket.consumed_at_ms.is_some() {
+        return Err(DocumentTicketError::Consumed);
+    }
+    if ticket.revoked_at_ms.is_some() {
+        return Err(DocumentTicketError::Revoked);
+    }
+    if now_ms >= ticket.expires_at_ms {
+        return Err(DocumentTicketError::Expired);
+    }
+    if ticket.scratch_id != scratch.id {
+        return Err(DocumentTicketError::ScratchMismatch);
+    }
+    if scratch.revoked_at_ms.is_some()
+        || scratch.claimed_by.is_some()
+        || now_ms >= scratch.expires_at_ms
+    {
+        return Err(DocumentTicketError::ScratchInactive);
+    }
+    if &ticket.document_id != expected_document_id {
+        return Err(DocumentTicketError::DocumentMismatch);
+    }
+    if &ticket.site_id != expected_site_id {
+        return Err(DocumentTicketError::SiteMismatch);
+    }
+    if ticket.authorization_epoch != expected_authorization_epoch {
+        return Err(DocumentTicketError::AuthorizationStale);
+    }
+
+    Ok(ScratchActor {
+        scratch_id: ticket.scratch_id.clone(),
+        document_id: ticket.document_id.clone(),
+        site_id: ticket.site_id.clone(),
+        authorization_epoch: ticket.authorization_epoch,
+    })
+}
+
+pub fn ticket_secret_hash(secret: &[u8]) -> [u8; 32] {
+    bearer_secret_hash(secret)
+}
+
+/// Redeem a one-use document ticket into the actor attached to a WebSocket.
+/// The caller must mark the ticket consumed atomically before admitting the
+/// socket; this pure validator cannot serialize concurrent upgrades.
+pub fn redeem_document_ticket(
+    ticket: &DocumentTicketRecord,
+    presented_secret: &[u8],
+    session: &AuthenticatedSession,
+    expected_document_id: &DocumentId,
+    expected_site_id: &SiteId,
+    expected_authorization_epoch: u64,
+    now_ms: u64,
+) -> Result<Actor, DocumentTicketError> {
+    if presented_secret.len() != TICKET_SECRET_BYTES
+        || ticket
+            .secret_hash
+            .ct_eq(&ticket_secret_hash(presented_secret))
+            .unwrap_u8()
+            != 1
+    {
+        return Err(DocumentTicketError::InvalidSecret);
+    }
+    if ticket.consumed_at_ms.is_some() {
+        return Err(DocumentTicketError::Consumed);
+    }
+    if ticket.revoked_at_ms.is_some() {
+        return Err(DocumentTicketError::Revoked);
+    }
+    if now_ms >= ticket.expires_at_ms {
+        return Err(DocumentTicketError::Expired);
+    }
+    if now_ms >= session.expires_at_ms() {
+        return Err(DocumentTicketError::SessionInactive);
+    }
+    if &ticket.session_id != session.id()
+        || &ticket.principal_id != session.principal_id()
+        || &ticket.device_id != session.device_id()
+    {
+        return Err(DocumentTicketError::SessionMismatch);
+    }
+    if &ticket.document_id != expected_document_id {
+        return Err(DocumentTicketError::DocumentMismatch);
+    }
+    if &ticket.site_id != expected_site_id {
+        return Err(DocumentTicketError::SiteMismatch);
+    }
+    if ticket.authorization_epoch != expected_authorization_epoch {
+        return Err(DocumentTicketError::AuthorizationStale);
+    }
+
+    Ok(Actor {
+        principal_id: ticket.principal_id.clone(),
+        session_id: ticket.session_id.clone(),
+        device_id: ticket.device_id.clone(),
+        document_id: ticket.document_id.clone(),
+        site_id: ticket.site_id.clone(),
+        role: ticket.role,
+        authorization_epoch: ticket.authorization_epoch,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        DeviceCapabilities, DeviceRecord, SessionRecord, session_secret_hash, validate_session,
+    };
+
+    fn ticket() -> (DocumentTicketRecord, AuthenticatedSession, [u8; 32]) {
+        let principal_id = PrincipalId::new("principal_1234").unwrap();
+        let session_id = SessionId::new("session_12345").unwrap();
+        let device_id = DeviceId::new("device_1234567").unwrap();
+        let secret = [4_u8; 32];
+        (
+            DocumentTicketRecord {
+                id: TicketId::new("ticket_12345678").unwrap(),
+                secret_hash: ticket_secret_hash(&secret),
+                principal_id: principal_id.clone(),
+                session_id: session_id.clone(),
+                device_id: device_id.clone(),
+                document_id: DocumentId::new("document_12345").unwrap(),
+                site_id: SiteId::new("site_123456789").unwrap(),
+                role: DocumentRole::Editor,
+                authorization_epoch: 4,
+                expires_at_ms: 10_000,
+                consumed_at_ms: None,
+                revoked_at_ms: None,
+            },
+            authenticated_session(session_id, principal_id, device_id),
+            secret,
+        )
+    }
+
+    fn authenticated_session(
+        session_id: SessionId,
+        principal_id: PrincipalId,
+        device_id: DeviceId,
+    ) -> AuthenticatedSession {
+        let session_secret = [7_u8; 32];
+        let session = SessionRecord {
+            id: session_id,
+            principal_id: principal_id.clone(),
+            device_id: device_id.clone(),
+            secret_hash: session_secret_hash(&session_secret),
+            expires_at_ms: 20_000,
+            revoked_at_ms: None,
+        };
+        let device = DeviceRecord {
+            id: device_id,
+            principal_id,
+            public_key_sec1: vec![4; 33],
+            key_epoch: 1,
+            capabilities: DeviceCapabilities::MEMBER,
+            revoked_at_ms: None,
+        };
+        validate_session(&session, &session_secret, &device, 1_000).unwrap()
+    }
+
+    #[test]
+    fn ticket_redeems_to_an_exact_socket_actor() {
+        let (ticket, session, secret) = ticket();
+        let actor = redeem_document_ticket(
+            &ticket,
+            &secret,
+            &session,
+            &ticket.document_id,
+            &ticket.site_id,
+            ticket.authorization_epoch,
+            9_000,
+        )
+        .unwrap();
+
+        assert_eq!(actor.principal_id, ticket.principal_id);
+        assert_eq!(actor.document_id, ticket.document_id);
+        assert_eq!(actor.site_id, ticket.site_id);
+        assert_eq!(actor.role, DocumentRole::Editor);
+    }
+
+    #[test]
+    fn replay_cross_document_and_cross_site_redemption_fail() {
+        let (mut replayed_ticket, session, secret) = ticket();
+        replayed_ticket.consumed_at_ms = Some(8_000);
+        assert_eq!(
+            redeem_document_ticket(
+                &replayed_ticket,
+                &secret,
+                &session,
+                &replayed_ticket.document_id,
+                &replayed_ticket.site_id,
+                replayed_ticket.authorization_epoch,
+                9_000,
+            ),
+            Err(DocumentTicketError::Consumed)
+        );
+
+        let (ticket, session, secret) = ticket();
+        assert_eq!(
+            redeem_document_ticket(
+                &ticket,
+                &secret,
+                &session,
+                &DocumentId::new("document_other1").unwrap(),
+                &ticket.site_id,
+                ticket.authorization_epoch,
+                9_000,
+            ),
+            Err(DocumentTicketError::DocumentMismatch)
+        );
+        assert_eq!(
+            redeem_document_ticket(
+                &ticket,
+                &secret,
+                &session,
+                &ticket.document_id,
+                &SiteId::new("site_other_1234").unwrap(),
+                ticket.authorization_epoch,
+                9_000,
+            ),
+            Err(DocumentTicketError::SiteMismatch)
+        );
+    }
+
+    #[test]
+    fn ticket_is_bound_to_the_issuing_session() {
+        let (ticket, _session, secret) = ticket();
+        let other_session = authenticated_session(
+            SessionId::new("session_other1").unwrap(),
+            ticket.principal_id.clone(),
+            ticket.device_id.clone(),
+        );
+        assert_eq!(
+            redeem_document_ticket(
+                &ticket,
+                &secret,
+                &other_session,
+                &ticket.document_id,
+                &ticket.site_id,
+                ticket.authorization_epoch,
+                9_000,
+            ),
+            Err(DocumentTicketError::SessionMismatch)
+        );
+    }
+
+    #[test]
+    fn acl_epoch_change_invalidates_an_unconsumed_ticket() {
+        let (ticket, session, secret) = ticket();
+        assert_eq!(
+            redeem_document_ticket(
+                &ticket,
+                &secret,
+                &session,
+                &ticket.document_id,
+                &ticket.site_id,
+                ticket.authorization_epoch + 1,
+                9_000,
+            ),
+            Err(DocumentTicketError::AuthorizationStale)
+        );
+    }
+
+    #[test]
+    fn live_scratch_ticket_redeems_without_inventing_a_principal() {
+        let secret = [5_u8; 32];
+        let scratch = ScratchRecord {
+            id: ScratchId::new("scratch_123456").unwrap(),
+            capability_hash: [0; 32],
+            expires_at_ms: 20_000,
+            claimed_by: None,
+            revoked_at_ms: None,
+        };
+        let ticket = ScratchDocumentTicketRecord {
+            id: TicketId::new("ticket_scratch1").unwrap(),
+            secret_hash: ticket_secret_hash(&secret),
+            scratch_id: scratch.id.clone(),
+            document_id: DocumentId::new("document_12345").unwrap(),
+            site_id: SiteId::new("site_123456789").unwrap(),
+            authorization_epoch: 2,
+            expires_at_ms: 10_000,
+            consumed_at_ms: None,
+            revoked_at_ms: None,
+        };
+
+        let actor = redeem_scratch_document_ticket(
+            &ticket,
+            &secret,
+            &scratch,
+            &ticket.document_id,
+            &ticket.site_id,
+            ticket.authorization_epoch,
+            9_000,
+        )
+        .unwrap();
+        assert_eq!(actor.scratch_id, scratch.id);
+    }
+
+    #[test]
+    fn claiming_scratch_invalidates_its_unconsumed_room_ticket() {
+        let secret = [5_u8; 32];
+        let scratch_id = ScratchId::new("scratch_123456").unwrap();
+        let scratch = ScratchRecord {
+            id: scratch_id.clone(),
+            capability_hash: [0; 32],
+            expires_at_ms: 20_000,
+            claimed_by: Some(PrincipalId::new("principal_1234").unwrap()),
+            revoked_at_ms: None,
+        };
+        let ticket = ScratchDocumentTicketRecord {
+            id: TicketId::new("ticket_scratch1").unwrap(),
+            secret_hash: ticket_secret_hash(&secret),
+            scratch_id,
+            document_id: DocumentId::new("document_12345").unwrap(),
+            site_id: SiteId::new("site_123456789").unwrap(),
+            authorization_epoch: 2,
+            expires_at_ms: 10_000,
+            consumed_at_ms: None,
+            revoked_at_ms: None,
+        };
+
+        assert_eq!(
+            redeem_scratch_document_ticket(
+                &ticket,
+                &secret,
+                &scratch,
+                &ticket.document_id,
+                &ticket.site_id,
+                ticket.authorization_epoch,
+                9_000,
+            ),
+            Err(DocumentTicketError::ScratchInactive)
+        );
+    }
+}

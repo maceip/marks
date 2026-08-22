@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { documentIsOpenable } from './document-support.ts';
 
-test('unknown documents are openable so first connect can create an ESBT row', () => {
-  assert.equal(documentIsOpenable(null), true);
-  assert.equal(documentIsOpenable(undefined), true);
+test('unknown documents stay closed until an explicit create succeeds', () => {
+  assert.equal(documentIsOpenable(null), false);
+  assert.equal(documentIsOpenable(undefined), false);
 });
 
 test('esbt documents are openable', () => {

@@ -3,6 +3,7 @@ import BenchWorker from '../workers/bench.worker?worker';
 import type { BenchMessage, BenchOptions, BenchRow } from '../bench/types';
 import { Icon, icons } from '../components/Icon';
 import { formatBytes, formatCount, formatMs } from '../lib/format';
+import '../styles/benchmark.css';
 
 interface BenchmarkProps {
   onBack: () => void;

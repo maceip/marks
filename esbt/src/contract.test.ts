@@ -526,6 +526,27 @@ test('undo skips steps a collaborator already deleted', () => {
   undo.destroy();
 });
 
+test('undoing a deletion of collaborator text does not alias its tombstone', () => {
+  const a = new EsbtDoc({ siteId: 'a' });
+  const b = new EsbtDoc({ siteId: 'b' });
+  a.insert(0, 'X'); // A's first insertion has counter 1.
+  b.import(a.export({ mode: 'update' }));
+
+  const undo = new UndoManager(b);
+  const toA = wire(b, a);
+  const toB = wire(a, b);
+  b.delete(0, 1); // B's first exact-weight reuse would also have counter 1.
+  assert.equal(a.getText(), '');
+
+  undo.undo();
+  assert.equal(b.getText(), 'X');
+  assert.equal(a.getText(), 'X');
+
+  toA();
+  toB();
+  undo.destroy();
+});
+
 test('undo grouping: transacts inside mergeIntervalMs form one step', () => {
   const doc = new EsbtDoc();
   const undo = new UndoManager(doc, { mergeIntervalMs: 60_000 });
@@ -650,24 +671,24 @@ test('map: set/get/delete/entries, syncs over updates, rides snapshots', () => {
   const b = new EsbtDoc({ siteId: 'b' });
   const unwire = wire(a, b);
 
-  a.mapSet('c_1', '{"body":"first comment"}');
-  a.mapSet('c_2', '{"body":"second"}');
-  assert.equal(a.mapGet('c_1'), '{"body":"first comment"}');
+  a.mapSet('meta_1', '{"value":"first"}');
+  a.mapSet('meta_2', '{"value":"second"}');
+  assert.equal(a.mapGet('meta_1'), '{"value":"first"}');
   assert.deepEqual(
     a.mapEntries(),
     [
-      ['c_1', '{"body":"first comment"}'],
-      ['c_2', '{"body":"second"}'],
+      ['meta_1', '{"value":"first"}'],
+      ['meta_2', '{"value":"second"}'],
     ],
   );
   assert.deepEqual(b.mapEntries(), a.mapEntries());
 
-  a.mapDelete('c_1');
-  assert.equal(a.mapGet('c_1'), undefined);
-  assert.deepEqual(b.mapEntries(), [['c_2', '{"body":"second"}']]);
+  a.mapDelete('meta_1');
+  assert.equal(a.mapGet('meta_1'), undefined);
+  assert.deepEqual(b.mapEntries(), [['meta_2', '{"value":"second"}']]);
   unwire();
 
-  // Snapshots (both flavours) carry the map: a cold open paints comments.
+  // Snapshots (both flavours) carry compatibility map state.
   const fresh = new EsbtDoc();
   fresh.import(a.export({ mode: 'snapshot' }));
   assert.deepEqual(fresh.mapEntries(), a.mapEntries());
@@ -678,7 +699,7 @@ test('map: set/get/delete/entries, syncs over updates, rides snapshots', () => {
   // The tombstone must merge: a replica that only saw the set drops the key.
   const late = new EsbtDoc({ siteId: 'late' });
   late.import(a.export({ mode: 'snapshot' }));
-  assert.equal(late.mapGet('c_1'), undefined);
+  assert.equal(late.mapGet('meta_1'), undefined);
 });
 
 test('map: concurrent writes to one key converge on the same winner', () => {
@@ -713,10 +734,10 @@ test('map: writes fire subscribe, ride local updates, and offline deltas include
   const events: string[] = [];
   b.subscribe((event) => events.push(event.origin ?? 'remote'));
 
-  a.transact(() => a.mapSet('c', 'v1'), 'comments');
+  a.transact(() => a.mapSet('meta', 'v1'), 'metadata');
   b.import(a.export({ mode: 'update', from: b.oplogVersion() }));
   assert.equal(events.length, 1);
-  assert.equal(b.mapGet('c'), 'v1');
+  assert.equal(b.mapGet('meta'), 'v1');
 
   // Idempotent: replaying everything from birth changes nothing, silently.
   b.import(a.export({ mode: 'update' }));
@@ -725,23 +746,23 @@ test('map: writes fire subscribe, ride local updates, and offline deltas include
 
 test('map writes never enter the undo stack', () => {
   const doc = new EsbtDoc();
-  const undo = new UndoManager(doc, { excludeOriginPrefixes: ['comments'] });
+  const undo = new UndoManager(doc, { excludeOriginPrefixes: ['metadata'] });
 
   doc.transact(() => doc.insert(0, 'text'), 'editor');
-  doc.transact(() => doc.mapSet('c_1', 'a comment'), 'comments');
+  doc.transact(() => doc.mapSet('meta_1', 'retained'), 'metadata');
 
   undo.undo();
   assert.equal(doc.getText(), '');
-  assert.equal(doc.mapGet('c_1'), 'a comment'); // the comment survives Mod-Z
+  assert.equal(doc.mapGet('meta_1'), 'retained');
 
   // Even in a mixed batch, undo skips map ops.
   doc.transact(() => {
     doc.insert(0, 'more');
-    doc.mapSet('c_2', 'inline');
+    doc.mapSet('meta_2', 'inline');
   }, 'editor');
   undo.undo();
   assert.equal(doc.getText(), '');
-  assert.equal(doc.mapGet('c_2'), 'inline');
+  assert.equal(doc.mapGet('meta_2'), 'inline');
   undo.destroy();
 });
 

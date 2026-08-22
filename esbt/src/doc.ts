@@ -67,7 +67,7 @@ export class EsbtDoc implements EsbtDocContract {
   private readonly log = new Map<SiteId, Map<number, Op>>();
   /** site → last insertion counter c that site handed out. */
   private readonly counters = new Map<SiteId, number>();
-  /** Keyed LWW registers riding the document (comments and similar). */
+  /** Keyed LWW registers retained as a generic compatibility primitive. */
   private readonly mapState = new Map<
     string,
     { value: string | null; lamport: number; site: SiteId }
@@ -198,7 +198,7 @@ export class EsbtDoc implements EsbtDocContract {
     }
   }
 
-  private insertUnit(index: number, unit: number): void {
+  private insertUnit(index: number, unit: number): Op {
     const left = index === 0 ? weightBegin() : this.seq.at(index - 1)!.weight;
     // A twin pinch (neighbours differing only by site, see Allocator) leaves
     // no admissible weight in the gap; widen it rightward until one exists.
@@ -211,8 +211,7 @@ export class EsbtDoc implements EsbtDocContract {
         rightIndex >= this.seq.length ? weightEnd() : this.seq.at(rightIndex)!.weight;
       const w = this.alloc.createWeight(left, right, this.siteId);
       if (w && !this.seq.has(w)) {
-        this.insertAtWeight(w, unit);
-        return;
+        return this.insertAtWeight(w, unit);
       }
       if (rightIndex < this.seq.length) rightIndex += 1;
     }
@@ -267,9 +266,9 @@ export class EsbtDoc implements EsbtDocContract {
 
   /**
    * Set a key in the document's keyed last-writer-wins map. The map rides
-   * the same oplog, snapshots, and version vectors as the text — marks
-   * stores comment records here so they sync, work offline, and survive a
-   * merge, without ever being encoded as characters in the markdown.
+   * the same oplog, snapshots, and version vectors as the text. Marks keeps
+   * this API for snapshot compatibility but does not use it for comments;
+   * authorized product metadata belongs outside the document update stream.
    */
   mapSet(key: string, value: string): void {
     this.transact(() => this.mapWrite(key, value));
@@ -668,9 +667,17 @@ export class EsbtDoc implements EsbtDocContract {
           if (op.unit === undefined) continue;
           if (this.seq.has(op.weight)) continue;
           if (this.deleteLog.has(op.weight, op.counter)) {
-            // Reinsert the released weight under a fresh counter; document
-            // order is unchanged because c does not participate in order.
-            inverse.push(this.insertAtWeightReusing(op.weight, op.unit));
+            if (op.weight.site === this.siteId) {
+              // A site may safely reuse one of its own released weights: its
+              // insertion counter is monotonic for that weight namespace.
+              inverse.push(this.insertAtWeightReusing(op.weight, op.unit));
+            } else {
+              // `(weight, counter)` does not carry the insertion origin. If a
+              // second site reused the collaborator's exact weight, equal
+              // local counters could alias the old delete tombstone. Allocate
+              // a fresh site-owned weight at the released position instead.
+              inverse.push(this.insertUnit(this.seq.lowerBound(op.weight), op.unit));
+            }
           }
         }
       }

@@ -16,7 +16,6 @@ import {
 } from '@codemirror/view';
 import type { CollabSession } from '../collab/types';
 import { handleEditorCopy, handleEditorCut, handleEditorPaste, markdownKeymap } from './commands';
-import { commentHighlights } from './comment-highlights';
 import { editorTheme, markdownHighlighting } from './theme';
 
 /**
@@ -74,7 +73,6 @@ export function createEditorExtensions({
     search({ top: true }),
     autocompletion({ activateOnTyping: true, icons: false }),
     placeholder('Start writing…'),
-    commentHighlights,
     EditorView.contentAttributes.of({
       spellcheck: 'true',
       autocorrect: 'on',

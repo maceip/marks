@@ -1,4 +1,3 @@
-import katex from '@vscode/markdown-it-katex';
 import MarkdownIt from 'markdown-it';
 import type { MarkdownIt as MarkdownItInstance, StateCore, Token } from 'markdown-it';
 import abbr from 'markdown-it-abbr';
@@ -12,7 +11,13 @@ import mark from 'markdown-it-mark';
 import multimdTable from 'markdown-it-multimd-table';
 import sub from 'markdown-it-sub';
 import sup from 'markdown-it-sup';
-import { highlightCode } from './highlight';
+
+type MarkdownPlugin = Parameters<MarkdownItInstance['use']>[0];
+
+export interface MarkdownRendererFeatures {
+  katex?: MarkdownPlugin;
+  highlightCode?: (code: string, language: string) => string | null;
+}
 
 /** Callout blocks, matching the `:::info` syntax people already type in HackMD. */
 const CALLOUTS = ['info', 'success', 'warning', 'danger', 'note'] as const;
@@ -83,7 +88,7 @@ function taskLists(md: MarkdownItInstance): void {
   });
 }
 
-export function createMarkdownIt(): MarkdownItInstance {
+export function createMarkdownIt(features: MarkdownRendererFeatures = {}): MarkdownItInstance {
   const md = new MarkdownIt({
     html: true, // sanitised downstream by DOMPurify
     linkify: true,
@@ -96,7 +101,7 @@ export function createMarkdownIt(): MarkdownItInstance {
           code,
         )}</pre><div class="marks-mermaid-out"></div></div>`;
       }
-      const highlighted = highlightCode(code, language);
+      const highlighted = features.highlightCode?.(code, language) ?? null;
       const body = highlighted ?? escapeHtml(code);
       const languageClass = language ? ` language-${escapeHtml(language)}` : '';
       return `<pre class="marks-code"><code class="hljs${languageClass}">${body}</code></pre>`;
@@ -117,9 +122,13 @@ export function createMarkdownIt(): MarkdownItInstance {
     .use(interop(ins))
     .use(interop(emoji))
     .use(taskLists)
-    .use(interop(multimdTable), { multiline: true, rowspan: true, headerless: true })
-    .use(interop(katex), { throwOnError: false, errorColor: 'var(--danger)' })
-    .use(interop(anchor), {
+    .use(interop(multimdTable), { multiline: true, rowspan: true, headerless: true });
+
+  if (features.katex) {
+    md.use(interop(features.katex), { throwOnError: false, errorColor: 'var(--danger)' });
+  }
+
+  md.use(interop(anchor), {
       slugify,
       permalink: anchor.permalink.linkInsideHeader({
         symbol: '#',

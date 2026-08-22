@@ -18,7 +18,6 @@ import {
 } from '../browser';
 import type { CollabSession } from '../collab/types';
 import type { ContextMenuAction } from '../components/ContextMenu';
-import { insertAtSelection } from '../editor/commands';
 import { VoiceSession } from '../browser/voice';
 
 export interface ContextMenuState {
@@ -33,19 +32,21 @@ export interface BrowserSurface {
   contextMenu: ContextMenuState | null;
   closeContextMenu: () => void;
   onContextMenu: (event: React.MouseEvent | MouseEvent) => void;
-  commentsOpen: boolean;
-  setCommentsOpen: (open: boolean) => void;
-  draftQuote: string;
-  beginComment: () => void;
-  submitComment: (body: string) => void;
-  cancelDraft: () => void;
   voiceStatus: VoiceStatus;
   voiceInterim: string;
   toggleVoice: () => void;
   stopVoice: () => void;
   voiceSupported: boolean;
   network: NetworkQuality;
-  hydrated: boolean;
+}
+
+async function insertTextAtSelection(
+  view: EditorView,
+  text: string,
+  userEvent: string,
+): Promise<void> {
+  const { insertAtSelection } = await import('../editor/commands');
+  insertAtSelection(view, text, userEvent);
 }
 
 export function useBrowserSurface(
@@ -55,29 +56,29 @@ export function useBrowserSurface(
 ): BrowserSurface {
   const [lastSurface, setLastSurface] = useState<Surface>('editor');
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-  const [commentsOpen, setCommentsOpen] = useState(false);
-  const [draftQuote, setDraftQuote] = useState('');
-  const draftRange = useRef<{ from: number; to: number; quote: string } | null>(null);
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>(
     speechRecognitionCtor() ? 'idle' : 'unsupported',
   );
   const [voiceInterim, setVoiceInterim] = useState('');
-  const [network, setNetwork] = useState<NetworkQuality>(readNetworkQuality);
-  const [hydrated, setHydrated] = useState(false);
+  const [network, setNetwork] = useState<NetworkQuality>('online');
   const voiceRef = useRef<VoiceSession | null>(null);
-
-  useEffect(() => subscribeNetwork(setNetwork), []);
 
   useEffect(() => {
     if (!session) {
-      setHydrated(false);
+      setNetwork('online');
       return;
     }
-    setHydrated(session.hydrated());
-    return session.onHydrated(() => setHydrated(true));
+    setNetwork(readNetworkQuality());
+    return subscribeNetwork(setNetwork);
   }, [session]);
 
   useEffect(() => {
+    if (!session) {
+      voiceRef.current = null;
+      setVoiceStatus(speechRecognitionCtor() ? 'idle' : 'unsupported');
+      setVoiceInterim('');
+      return;
+    }
     const voice = new VoiceSession({
       onStatus: setVoiceStatus,
       onTranscript: ({ finalText, interimText }) => {
@@ -86,40 +87,14 @@ export function useBrowserSurface(
         const view = getView();
         if (!view) return;
         const suffix = /\s$/.test(finalText) ? '' : ' ';
-        insertAtSelection(view, finalText + suffix, 'input.voice');
+        void insertTextAtSelection(view, finalText + suffix, 'input.voice');
       },
     });
     voiceRef.current = voice;
     return () => voice.destroy();
-  }, [getView]);
-
-  const closeContextMenu = useCallback(() => setContextMenu(null), []);
-
-  const beginComment = useCallback(() => {
-    const view = getView();
-    if (!view || !session) return;
-    const range = view.state.selection.main;
-    if (range.empty) return;
-    const quote = view.state.sliceDoc(range.from, range.to);
-    draftRange.current = { from: range.from, to: range.to, quote };
-    setDraftQuote(quote);
-    setCommentsOpen(true);
   }, [getView, session]);
 
-  const submitComment = useCallback(
-    (body: string) => {
-      if (!session || !draftRange.current) return;
-      session.addComment({ ...draftRange.current, body });
-      draftRange.current = null;
-      setDraftQuote('');
-    },
-    [session],
-  );
-
-  const cancelDraft = useCallback(() => {
-    draftRange.current = null;
-    setDraftQuote('');
-  }, []);
+  const closeContextMenu = useCallback(() => setContextMenu(null), []);
 
   const toggleVoice = useCallback(() => voiceRef.current?.toggle(), []);
   const stopVoice = useCallback(() => voiceRef.current?.stop(), []);
@@ -147,7 +122,8 @@ export function useBrowserSurface(
 
       const pasteEditor = () => {
         void readClipboardMarkdown().then((text) => {
-          if (text && getView()) insertAtSelection(getView()!, text, 'input.paste');
+          const current = getView();
+          if (text && current) void insertTextAtSelection(current, text, 'input.paste');
         });
       };
 
@@ -191,7 +167,6 @@ export function useBrowserSurface(
         { id: 'copy', label: 'Copy', shortcut: 'Mod+C', disabled: !selected, run: copyEditor },
         { id: 'paste', label: 'Paste', shortcut: 'Mod+V', run: pasteEditor },
         { id: 'select-all', label: 'Select all', shortcut: 'Mod+A', run: selectAllEditor },
-        { id: 'comment', label: 'Comment', shortcut: 'Mod+Alt+M', disabled: !selected, run: beginComment },
         {
           id: 'voice',
           label: voiceStatus === 'listening' ? 'Stop voice input' : 'Voice input',
@@ -200,7 +175,7 @@ export function useBrowserSurface(
         },
       ];
     },
-    [beginComment, getPreview, getView, session, toggleVoice, voiceStatus],
+    [getPreview, getView, session, toggleVoice, voiceStatus],
   );
 
   const onContextMenu = useCallback(
@@ -224,6 +199,7 @@ export function useBrowserSurface(
   );
 
   useEffect(() => {
+    if (!session) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (shouldHandleSelectAll(event, lastSurface)) {
         const preview = getPreview();
@@ -235,11 +211,6 @@ export function useBrowserSurface(
       }
 
       const mod = event.metaKey || event.ctrlKey;
-      if (mod && event.altKey && event.key.toLowerCase() === 'm') {
-        event.preventDefault();
-        beginComment();
-        return;
-      }
       if (mod && event.shiftKey && event.key.toLowerCase() === 's') {
         const target = event.target as HTMLElement | null;
         if (target?.closest('.cm-editor, .editor-pane')) {
@@ -255,9 +226,10 @@ export function useBrowserSurface(
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('contextmenu', onContextMenu);
     };
-  }, [beginComment, getPreview, lastSurface, onContextMenu, toggleVoice]);
+  }, [getPreview, lastSurface, onContextMenu, session, toggleVoice]);
 
   useEffect(() => {
+    if (!session) return;
     const longPress = createLongPress((event) => {
       const surface = surfaceFromTarget(event.target);
       if (surface === 'other') return;
@@ -286,7 +258,7 @@ export function useBrowserSurface(
       window.removeEventListener('pointercancel', up);
       longPress.destroy();
     };
-  }, [buildActions]);
+  }, [buildActions, session]);
 
   return useMemo(
     () => ({
@@ -295,33 +267,20 @@ export function useBrowserSurface(
       contextMenu,
       closeContextMenu,
       onContextMenu,
-      commentsOpen,
-      setCommentsOpen,
-      draftQuote,
-      beginComment,
-      submitComment,
-      cancelDraft,
       voiceStatus,
       voiceInterim,
       toggleVoice,
       stopVoice,
       voiceSupported: voiceStatus !== 'unsupported',
       network,
-      hydrated,
     }),
     [
-      beginComment,
-      cancelDraft,
       closeContextMenu,
-      commentsOpen,
       contextMenu,
-      draftQuote,
-      hydrated,
       lastSurface,
       network,
       onContextMenu,
       stopVoice,
-      submitComment,
       toggleVoice,
       voiceInterim,
       voiceStatus,

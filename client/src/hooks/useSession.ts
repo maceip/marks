@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { CommentRecord } from '../browser/comments';
-import { createSession } from '../collab';
-import type { CollabSession, ConnectionStatus, LocalUser, Peer } from '../collab/types';
+import type {
+  CollabSession,
+  ConnectionStatus,
+  DocumentAccessProvider,
+  LocalUser,
+  Peer,
+} from '../collab/types';
 
 export interface SessionState {
   session: CollabSession | null;
   status: ConnectionStatus;
   peers: Peer[];
-  comments: CommentRecord[];
   hydrated: boolean;
 }
 
@@ -18,11 +21,14 @@ export interface SessionState {
  * flows straight to the editor and the preview renderer, neither of which is
  * a React-rendered tree.
  */
-export function useSession(docId: string | null, user: LocalUser): SessionState {
+export function useSession(
+  docId: string | null,
+  user: LocalUser,
+  access: DocumentAccessProvider,
+): SessionState {
   const [session, setSession] = useState<CollabSession | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
   const [peers, setPeers] = useState<Peer[]>([]);
-  const [comments, setComments] = useState<CommentRecord[]>([]);
   const [hydrated, setHydrated] = useState(false);
 
   // Identity changes should not tear down a live session.
@@ -31,32 +37,45 @@ export function useSession(docId: string | null, user: LocalUser): SessionState 
   useEffect(() => {
     if (!docId) {
       setSession(null);
-      setComments([]);
       setHydrated(false);
+      setPeers([]);
       return;
     }
 
-    const next = createSession({ docId, user: identity });
-    setSession(next);
-    setStatus(next.status());
-    setPeers(next.peers());
-    setComments(next.comments());
-    setHydrated(next.hydrated());
+    let active = true;
+    let next: CollabSession | null = null;
+    let unsubscribe: Array<() => void> = [];
+    setStatus('connecting');
+    setPeers([]);
+    setHydrated(false);
 
-    const offStatus = next.onStatusChange(setStatus);
-    const offPeers = next.onPeersChange(setPeers);
-    const offComments = next.onCommentsChange(setComments);
-    const offHydrated = next.onHydrated(() => setHydrated(true));
+    // The documents shell should not pay for CodeMirror, the CRDT, or their
+    // bindings. Load the editing engine only when a document is ready to open.
+    void import('../collab')
+      .then(({ createSession }) => {
+        if (!active) return;
+        next = createSession({ docId, user: identity, access });
+        setSession(next);
+        setStatus(next.status());
+        setPeers(next.peers());
+        setHydrated(next.hydrated());
+        unsubscribe = [
+          next.onStatusChange(setStatus),
+          next.onPeersChange(setPeers),
+          next.onHydrated(() => setHydrated(true)),
+        ];
+      })
+      .catch(() => {
+        if (active) setStatus('offline');
+      });
 
     return () => {
-      offStatus();
-      offPeers();
-      offComments();
-      offHydrated();
-      next.destroy();
+      active = false;
+      for (const off of unsubscribe) off();
+      next?.destroy();
       setSession(null);
     };
-  }, [docId, identity]);
+  }, [docId, identity, access]);
 
-  return { session, status, peers, comments, hydrated };
+  return { session, status, peers, hydrated };
 }

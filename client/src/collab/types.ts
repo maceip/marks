@@ -1,5 +1,4 @@
 import type { Extension } from '@codemirror/state';
-import type { CommentRecord } from '../browser/comments';
 
 /**
  * The CRDT engine documents are stored in. ESBT is the only engine; the
@@ -21,6 +20,17 @@ export interface Peer {
 export interface LocalUser {
   name: string;
   colorIndex: number;
+}
+
+export interface RoomTicket {
+  roomUrl: string;
+  ticketId: string;
+  ticketSecret: string;
+}
+
+export interface DocumentAccessProvider {
+  fetchSnapshot(documentId: string, signal: AbortSignal): Promise<Response>;
+  admit(documentId: string, siteId: string, signal: AbortSignal): Promise<RoomTicket>;
 }
 
 export interface EngineStats {
@@ -63,12 +73,6 @@ export interface CollabSession {
   onStatusChange(listener: (status: ConnectionStatus) => void): () => void;
   onPeersChange(listener: (peers: Peer[]) => void): () => void;
 
-  comments(): CommentRecord[];
-  addComment(input: { from: number; to: number; quote: string; body: string }): string;
-  resolveComment(id: string): void;
-  deleteComment(id: string): void;
-  onCommentsChange(listener: (comments: CommentRecord[]) => void): () => void;
-
   /** True once the local replica has been read, even if the document is empty. */
   hydrated(): boolean;
   onHydrated(listener: () => void): () => void;
@@ -79,4 +83,5 @@ export interface CollabSession {
 export interface SessionOptions {
   docId: string;
   user: LocalUser;
+  access: DocumentAccessProvider;
 }

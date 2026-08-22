@@ -42,7 +42,7 @@ export interface SnapshotPayload {
   version: Map<SiteId, number>;
   /** site → last insertion counter c handed out by that site. */
   counters: Map<SiteId, number>;
-  /** Keyed LWW register state (comments and similar document metadata). */
+  /** Keyed LWW register state retained for payload compatibility. */
   mapState: MapStateEntry[];
   /** Full oplog (empty in a shallow snapshot). */
   ops: Op[];
@@ -116,8 +116,7 @@ export function encodeSnapshot(payload: Omit<SnapshotPayload, 'kind'>, shallow: 
   writeSiteMap(body, table, payload.version);
   writeSiteMap(body, table, payload.counters);
 
-  // The LWW map is visible state, so both snapshot flavours carry it —
-  // a cold open must paint comments, not only text.
+  // The LWW map is compatibility state, so both snapshot flavours carry it.
   body.uint(payload.mapState.length);
   for (const entry of payload.mapState) {
     body.str(entry.key);

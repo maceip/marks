@@ -6,7 +6,6 @@
   "description": "Real-time collaborative markdown editor with Google Docs responsiveness, built on ESBT",
   "workspaces": [
     "client",
-    "server",
     "esbt"
   ],
   "engines": {
@@ -14,16 +13,17 @@
   },
   "scripts": {
     "predev": "npm run build --workspace=@marks/esbt",
-    "dev": "concurrently -n server,client -c cyan,magenta \"npm:dev:server\" \"npm:dev:client\"",
-    "dev:server": "npm run dev --workspace=server",
+    "dev": "npm run dev --workspace=client",
     "dev:client": "npm run dev --workspace=client",
-    "build": "npm run build --workspace=@marks/esbt && npm run build --workspace=client && npm run build --workspace=server",
-    "start": "npm run start --workspace=server",
+    "preview": "npm run preview --workspace=client",
+    "build": "npm run build --workspace=@marks/esbt && npm run build --workspace=client",
     "pretypecheck": "npm run build --workspace=@marks/esbt",
-    "typecheck": "npm run typecheck --workspace=@marks/esbt && npm run typecheck --workspace=client && npm run typecheck --workspace=server",
-    "clean": "rm -rf client/dist server/dist esbt/dist node_modules/.vite",
+    "typecheck": "npm run typecheck --workspace=@marks/esbt && npm run typecheck --workspace=client",
+    "clean": "rm -rf client/dist esbt/dist node_modules/.vite",
     "test:esbt": "npm test --workspace=@marks/esbt",
     "test:browser": "node --experimental-strip-types --test client/src/browser/*.test.ts",
+    "test:markdown": "node --experimental-strip-types --test client/src/markdown/*.test.ts",
+    "test:auth": "node --experimental-strip-types --test client/src/auth/*.test.ts",
     "test:harness": "node --test scripts/harness/*.test.mjs",
     "harness:probe": "node scripts/harness/probe.mjs",
     "smoke": "node scripts/smoke.mjs",
@@ -32,11 +32,11 @@
     "smoke:puppeteer": "node scripts/harness/run.mjs --driver=puppeteer",
     "smoke:agent-browser": "node scripts/harness/run.mjs --driver=agent-browser",
     "smoke:platforms": "node scripts/harness/run.mjs --driver=all",
-    "measure": "node scripts/measure.mjs"
+    "measure": "node scripts/measure.mjs",
+    "check:ui-budgets": "node scripts/check-ui-budgets.mjs"
   },
   "devDependencies": {
     "agent-browser": "^0.34.0",
-    "concurrently": "^9.2.1",
     "playwright": "^1.62.1",
     "puppeteer-core": "^25.8.0",
     "typescript": "^5.9.3"

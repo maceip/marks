@@ -19,9 +19,12 @@ import {
 } from '../editor/commands';
 import { Icon, icons } from './Icon';
 
+export type RibbonSection = 'home' | 'insert';
+
 interface ToolbarProps {
   getView: () => EditorView | null;
-  onComment?: () => void;
+  section: RibbonSection;
+  disabled?: boolean;
   onVoice?: () => void;
   voiceActive?: boolean;
 }
@@ -33,30 +36,65 @@ interface Action {
   command: StateCommand;
 }
 
-const GROUPS: Action[][] = [
-  [
-    { icon: 'heading', label: 'Heading', shortcut: 'Mod+1', command: setHeading(2) },
-    { icon: 'bold', label: 'Bold', shortcut: 'Mod+B', command: toggleBold },
-    { icon: 'italic', label: 'Italic', shortcut: 'Mod+I', command: toggleItalic },
-    { icon: 'strikethrough', label: 'Strikethrough', shortcut: 'Mod+Shift+X', command: toggleStrikethrough },
-    { icon: 'highlight', label: 'Highlight', shortcut: 'Mod+Shift+H', command: toggleHighlight },
-  ],
-  [
-    { icon: 'link', label: 'Link', shortcut: 'Mod+K', command: insertLink },
-    { icon: 'image', label: 'Image', command: insertImage },
-    { icon: 'code', label: 'Inline code', shortcut: 'Mod+E', command: toggleInlineCode },
-    { icon: 'table', label: 'Table', command: insertTable },
-  ],
-  [
-    { icon: 'list', label: 'Bullet list', shortcut: 'Mod+Shift+8', command: toggleBullet },
-    { icon: 'numbered', label: 'Numbered list', shortcut: 'Mod+Shift+7', command: toggleNumbered },
-    { icon: 'task', label: 'Task list', shortcut: 'Mod+Shift+9', command: toggleTask },
-    { icon: 'quote', label: 'Quote', shortcut: 'Mod+Shift+.', command: toggleQuote },
-  ],
-  [
-    { icon: 'code', label: 'Code block', command: insertCodeBlock },
-    { icon: 'hr', label: 'Divider', command: insertHorizontalRule },
-  ],
+interface ActionGroup {
+  label: string;
+  actions: Action[];
+}
+
+const HOME_GROUPS: ActionGroup[] = [
+  {
+    label: 'Text style',
+    actions: [
+      { icon: 'heading', label: 'Heading', shortcut: 'Mod+1', command: setHeading(2) },
+      { icon: 'bold', label: 'Bold', shortcut: 'Mod+B', command: toggleBold },
+      { icon: 'italic', label: 'Italic', shortcut: 'Mod+I', command: toggleItalic },
+      {
+        icon: 'strikethrough',
+        label: 'Strike',
+        shortcut: 'Mod+Shift+X',
+        command: toggleStrikethrough,
+      },
+      {
+        icon: 'highlight',
+        label: 'Highlight',
+        shortcut: 'Mod+Shift+H',
+        command: toggleHighlight,
+      },
+      { icon: 'code', label: 'Inline code', shortcut: 'Mod+E', command: toggleInlineCode },
+    ],
+  },
+  {
+    label: 'Structure',
+    actions: [
+      { icon: 'list', label: 'Bullets', shortcut: 'Mod+Shift+8', command: toggleBullet },
+      {
+        icon: 'numbered',
+        label: 'Numbered',
+        shortcut: 'Mod+Shift+7',
+        command: toggleNumbered,
+      },
+      { icon: 'task', label: 'Tasks', shortcut: 'Mod+Shift+9', command: toggleTask },
+      { icon: 'quote', label: 'Quote', shortcut: 'Mod+Shift+.', command: toggleQuote },
+    ],
+  },
+];
+
+const INSERT_GROUPS: ActionGroup[] = [
+  {
+    label: 'References',
+    actions: [
+      { icon: 'link', label: 'Link', shortcut: 'Mod+K', command: insertLink },
+      { icon: 'image', label: 'Image', command: insertImage },
+    ],
+  },
+  {
+    label: 'Blocks',
+    actions: [
+      { icon: 'table', label: 'Table', command: insertTable },
+      { icon: 'code', label: 'Code block', command: insertCodeBlock },
+      { icon: 'hr', label: 'Divider', command: insertHorizontalRule },
+    ],
+  },
 ];
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iP(hone|ad|od)/.test(navigator.platform);
@@ -66,7 +104,9 @@ function shortcutLabel(shortcut?: string): string {
   return ` (${shortcut.replace('Mod', isMac ? '⌘' : 'Ctrl')})`;
 }
 
-export function Toolbar({ getView, onComment, onVoice, voiceActive }: ToolbarProps) {
+export function Toolbar({ getView, section, disabled, onVoice, voiceActive }: ToolbarProps) {
+  const groups = section === 'home' ? HOME_GROUPS : INSERT_GROUPS;
+
   const run = (command: StateCommand) => {
     const view = getView();
     if (!view) return;
@@ -75,51 +115,47 @@ export function Toolbar({ getView, onComment, onVoice, voiceActive }: ToolbarPro
   };
 
   return (
-    <div className="toolbar" role="toolbar" aria-label="Formatting">
-      {GROUPS.map((group, index) => (
-        <div className="toolbar-group" key={index}>
-          {group.map((action) => (
-            <button
-              key={action.label}
-              type="button"
-              className="toolbar-button"
-              title={`${action.label}${shortcutLabel(action.shortcut)}`}
-              aria-label={action.label}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => run(action.command)}
-            >
-              <Icon path={icons[action.icon]} />
-            </button>
-          ))}
+    <div className="toolbar ribbon-toolbar" role="toolbar" aria-label={`${section} commands`}>
+      {groups.map((group) => (
+        <div className="ribbon-command-group" key={group.label}>
+          <div className="ribbon-command-row">
+            {group.actions.map((action) => (
+              <button
+                key={action.label}
+                type="button"
+                className="ribbon-command"
+                title={`${action.label}${shortcutLabel(action.shortcut)}`}
+                aria-label={action.label}
+                disabled={disabled}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => run(action.command)}
+              >
+                <Icon path={icons[action.icon]} />
+                <span className="ribbon-command-label">{action.label}</span>
+              </button>
+            ))}
+          </div>
+          <span className="ribbon-group-label">{group.label}</span>
         </div>
       ))}
-      {(onComment || onVoice) && (
-        <div className="toolbar-group">
-          {onComment && (
+      {section === 'home' && onVoice && (
+        <div className="ribbon-command-group">
+          <div className="ribbon-command-row">
             <button
               type="button"
-              className="toolbar-button"
-              title="Comment (Ctrl+Alt+M)"
-              aria-label="Comment"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={onComment}
-            >
-              <Icon path={icons.comment} />
-            </button>
-          )}
-          {onVoice && (
-            <button
-              type="button"
-              className={`toolbar-button${voiceActive ? ' active' : ''}`}
+              className={`ribbon-command${voiceActive ? ' active' : ''}`}
               title="Voice input (Ctrl+Shift+S)"
               aria-label="Voice input"
               aria-pressed={voiceActive}
+              disabled={disabled}
               onMouseDown={(event) => event.preventDefault()}
               onClick={onVoice}
             >
               <Icon path={icons.mic} />
+              <span className="ribbon-command-label">Dictate</span>
             </button>
-          )}
+          </div>
+          <span className="ribbon-group-label">Input</span>
         </div>
       )}
     </div>

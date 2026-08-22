@@ -14,17 +14,20 @@ export function registerServiceWorker(): void {
   if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) return;
 
   const register = () => {
-    void navigator.serviceWorker.register('/sw.js', { scope: '/' }).then((registration) => {
-      registration.addEventListener('updatefound', () => {
-        const worker = registration.installing;
-        if (!worker) return;
-        worker.addEventListener('statechange', () => {
-          if (worker.state === 'installed' && !navigator.serviceWorker.controller) {
-            worker.postMessage('skipWaiting');
-          }
+    void navigator.serviceWorker
+      .register('/sw.js', { scope: '/' })
+      .then((registration) => {
+        registration.addEventListener('updatefound', () => {
+          const worker = registration.installing;
+          if (!worker) return;
+          worker.addEventListener('statechange', () => {
+            if (worker.state === 'installed' && !navigator.serviceWorker.controller) {
+              worker.postMessage('skipWaiting');
+            }
+          });
         });
-      });
-    });
+      })
+      .catch(() => undefined);
   };
 
   if (document.readyState === 'complete') register();

@@ -1,12 +1,19 @@
 import type { EditorView } from '@codemirror/view';
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type { CollabSession } from '../collab/types';
 import type { ScrollSync } from '../lib/scroll-sync';
 import type { PreviewStats } from '../markdown/preview';
 import type { Heading } from '../markdown/types';
-import { EditorPane, type CursorInfo } from './EditorPane';
-import { PreviewPane } from './PreviewPane';
+import '../styles/document.css';
+import type { CursorInfo } from './EditorPane';
 import type { ViewMode } from './TopBar';
+
+const EditorPane = lazy(() =>
+  import('./EditorPane').then((module) => ({ default: module.EditorPane })),
+);
+const PreviewPane = lazy(() =>
+  import('./PreviewPane').then((module) => ({ default: module.PreviewPane })),
+);
 
 interface WorkspaceProps {
   session: CollabSession;
@@ -17,9 +24,7 @@ interface WorkspaceProps {
   onCursor: (cursor: CursorInfo) => void;
   onView: (view: EditorView | null) => void;
   onPreview?: (element: HTMLElement | null) => void;
-  onComment?: () => void;
-  onVoice?: () => void;
-  voiceActive?: boolean;
+  previewRequested?: boolean;
 }
 
 const SPLIT_KEY = 'marks:split';
@@ -40,13 +45,18 @@ function WorkspaceView({
   onCursor,
   onView,
   onPreview,
-  onComment,
-  onVoice,
-  voiceActive,
+  previewRequested,
 }: WorkspaceProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [split, setSplit] = useState(loadSplit);
   const [dragging, setDragging] = useState(false);
+  const [previewWarm, setPreviewWarm] = useState(
+    () => mode !== 'edit' || Boolean(previewRequested),
+  );
+
+  useEffect(() => {
+    if (mode !== 'edit' || previewRequested) setPreviewWarm(true);
+  }, [mode, previewRequested]);
 
   const handleView = useCallback(
     (view: EditorView | null) => {
@@ -104,16 +114,20 @@ function WorkspaceView({
         itself, and the collaborative cursor layers throw when they try.
       */}
       {mode !== 'preview' && (
-        <EditorPane
-          session={session}
-          showToolbar
-          onView={handleView}
-          onScroll={() => scrollSync.fromEditor()}
-          onCursor={onCursor}
-          onComment={onComment}
-          onVoice={onVoice}
-          voiceActive={voiceActive}
-        />
+        <Suspense
+          fallback={
+            <section className="pane editor-pane editor-loading" aria-label="Markdown source">
+              Preparing editor…
+            </section>
+          }
+        >
+          <EditorPane
+            session={session}
+            onView={handleView}
+            onScroll={() => scrollSync.fromEditor()}
+            onCursor={onCursor}
+          />
+        </Suspense>
       )}
 
       <div
@@ -133,13 +147,23 @@ function WorkspaceView({
         }}
       />
 
-      <PreviewPane
-        session={session}
-        onContainer={handleContainer}
-        onStats={onStats}
-        onHeadings={onHeadings}
-        onScroll={() => scrollSync.fromPreview()}
-      />
+      {previewWarm && (
+        <Suspense
+          fallback={
+            <section className="pane preview-pane preview-loading" aria-label="Preview">
+              Preparing preview…
+            </section>
+          }
+        >
+          <PreviewPane
+            session={session}
+            onContainer={handleContainer}
+            onStats={onStats}
+            onHeadings={onHeadings}
+            onScroll={() => scrollSync.fromPreview()}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

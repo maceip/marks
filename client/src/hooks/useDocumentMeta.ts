@@ -7,7 +7,7 @@ export interface DocumentMetaState {
   meta: DocumentMeta | null;
   /** The engine tag to display; `esbt` for anything this client can open. */
   engine: string;
-  /** False for rows created by the retired Loro/Yjs engines. */
+  /** False for missing/inaccessible documents and retired engine rows. */
   supported: boolean;
   resolved: boolean;
 }
@@ -15,10 +15,9 @@ export interface DocumentMetaState {
 /**
  * Resolve a document's metadata before opening a session.
  *
- * Unknown ids are created as ESBT documents on first connect. Rows created
- * by the retired engines are refused rather than opened: their stored bytes
- * are in a binary format marks no longer ships a runtime for, and connecting
- * an ESBT replica to them would overwrite good state with an empty document.
+ * Unknown, deleted, or inaccessible ids remain closed. Document creation is a
+ * separate authorized HTTP operation. Rows created by retired engines are also
+ * refused rather than opened because their binary format is incompatible.
  */
 export function useDocumentMeta(docId: string | null): DocumentMetaState {
   const [meta, setMeta] = useState<DocumentMeta | null>(null);

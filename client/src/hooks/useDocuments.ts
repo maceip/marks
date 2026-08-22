@@ -20,7 +20,7 @@ export interface DocumentsState {
  * Titles are derived server-side from each document's first heading, so the
  * list updates a beat after someone edits a heading — no client coordination.
  */
-export function useDocuments(): DocumentsState {
+export function useDocuments(enabled = true): DocumentsState {
   const [documents, setDocuments] = useState<api.DocumentMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -44,6 +44,14 @@ export function useDocuments(): DocumentsState {
 
   useEffect(() => {
     mounted.current = true;
+    if (!enabled) {
+      setLoading(false);
+      return () => {
+        mounted.current = false;
+      };
+    }
+
+    setLoading(true);
     void readCatalog().then((cached) => {
       if (!mounted.current || !cached || cached.length === 0) return;
       setDocuments(cached);
@@ -65,7 +73,7 @@ export function useDocuments(): DocumentsState {
       clearInterval(interval);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [refresh]);
+  }, [enabled, refresh]);
 
   const create = useCallback(async () => {
     const { document: created } = await api.createDocument();

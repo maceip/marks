@@ -3,7 +3,7 @@
  *
  * Deep collab / two-peer / REST cases stay in scripts/smoke.mjs
  * (Playwright). This suite covers the glass: create a doc, preview,
- * select-all, context menu, comments, voice affordance, theme, offline.
+ * select-all, context menu, voice affordance, theme, offline.
  */
 
 const FIXTURE = `# Surface harness
@@ -57,16 +57,6 @@ export async function runSurface(session, { check }) {
   check('preview right-click opens the marks menu', (await session.count('.context-menu')) === 1);
   await session.press('Escape');
 
-  await session.click('.cm-content');
-  await session.press('Control+A');
-  await session.click('button[aria-label="Comment"]');
-  await session.wait(250);
-  check('comment composer opens on a selection', (await session.count('.comment-composer textarea')) === 1);
-  await session.fill('.comment-composer textarea', 'A review note');
-  await session.click('.comment-composer button.primary');
-  await session.wait(500);
-  check('a comment is stored on the document', (await session.count('.comment-card')) >= 1);
-
   const themeBefore = await session.evaluate(() => document.documentElement.dataset.theme ?? 'light');
   const themeButton =
     themeBefore === 'dark'
@@ -90,8 +80,6 @@ export const SURFACE_CHECK_NAMES = [
   'voice input is offered',
   'select-all in the preview stays inside the document',
   'preview right-click opens the marks menu',
-  'comment composer opens on a selection',
-  'a comment is stored on the document',
   'theme toggles',
   'offline is reported',
 ];

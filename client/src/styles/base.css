@@ -42,6 +42,11 @@ textarea {
   color: inherit;
 }
 
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
 a {
   color: var(--accent);
 }
@@ -99,7 +104,8 @@ a {
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease, transform 60ms ease;
+  transition: background var(--motion-fast) ease, border-color var(--motion-fast) ease,
+    transform 60ms ease;
 }
 
 .button:hover {
@@ -143,7 +149,7 @@ a {
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
+  transition: background var(--motion-fast) ease, color var(--motion-fast) ease;
 }
 
 .icon-button:hover {
@@ -154,6 +160,11 @@ a {
 .icon-button[aria-pressed='true'] {
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+.icon-button:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
 }
 
 .icon-button.danger:hover {

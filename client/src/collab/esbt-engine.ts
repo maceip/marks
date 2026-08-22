@@ -1,25 +1,16 @@
 import { Annotation, Prec, type Extension } from '@codemirror/state';
 import { ViewPlugin, keymap, type EditorView } from '@codemirror/view';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
-import { EphemeralStore, EsbtDoc, UndoManager, VersionVector, type EsbtAnchor } from '@marks/esbt';
+import { EphemeralStore, EsbtDoc, UndoManager, VersionVector } from '@marks/esbt';
 import {
-  COMMENT_ORIGIN,
-  createCommentId,
-  decodeBytes,
-  encodeBytes,
-  fetchWithTimeout,
-  parseComment,
   persistLockName,
-  readCommentMap,
   readNetworkQuality,
-  resolveCommentRange,
-  serializeComment,
   snapshotFetchTimeoutMs,
   TabChannel,
   tabChannelName,
   writeSnapshotUnderLock,
-  type CommentRecord,
 } from '../browser';
+import { roomTicketProtocols } from '../auth/room-access';
 import { HEARTBEAT_MS, esbtPresence } from './presence';
 import { MSG_EPHEMERAL, MSG_SERVER_VV, MSG_SNAPSHOT, MSG_SYNCED, MSG_UPDATE, frame, toBase64Url } from './protocol';
 import type { CollabSession, ConnectionStatus, EngineStats, Peer, SessionOptions } from './types';
@@ -58,9 +49,7 @@ const EDITOR_ORIGIN = 'editor';
  * Every keystroke applies to the local replica synchronously — no WebAssembly
  * boundary, no worker round-trip — and the update bytes it emits go to the
  * room over one WebSocket per document (tag byte + payload, version-vector
- * deltas on reconnect) and to sibling tabs over a BroadcastChannel. Comments
- * ride the document in the engine's keyed LWW map with weight-stable anchors,
- * so they sync, work offline, and survive merges.
+ * deltas on reconnect) and to sibling tabs over a BroadcastChannel.
  */
 export class EsbtEngine implements CollabSession {
   readonly engine = 'esbt' as const;
@@ -71,9 +60,11 @@ export class EsbtEngine implements CollabSession {
   private readonly ephemeral = new EphemeralStore(EPHEMERAL_TIMEOUT_MS);
   private readonly undoManager: UndoManager;
   private readonly user: SessionOptions['user'];
+  private readonly access: SessionOptions['access'];
   private readonly tabs: TabChannel;
 
   private socket: WebSocket | null = null;
+  private admissionAbort: AbortController | null = null;
   private reconnectDelay = RECONNECT_MIN_MS;
   private reconnectTimer: number | null = null;
   private presenceHeartbeat: number | null = null;
@@ -84,7 +75,6 @@ export class EsbtEngine implements CollabSession {
 
   private currentStatus: ConnectionStatus = 'connecting';
   private cachedPeers: Peer[] = [];
-  private cachedComments: CommentRecord[] = [];
   private counters = { received: 0, sent: 0, snapshotBytes: 0 };
 
   private saveTimer: number | null = null;
@@ -92,16 +82,14 @@ export class EsbtEngine implements CollabSession {
   private readonly textListeners = new Set<(text: string) => void>();
   private readonly statusListeners = new Set<(status: ConnectionStatus) => void>();
   private readonly peerListeners = new Set<(peers: Peer[]) => void>();
-  private readonly commentListeners = new Set<(comments: CommentRecord[]) => void>();
   private readonly hydratedListeners = new Set<() => void>();
 
-  constructor({ docId, user }: SessionOptions) {
+  constructor({ docId, user, access }: SessionOptions) {
     this.docId = docId;
     this.user = user;
+    this.access = access;
     this.undoManager = new UndoManager(this.doc, {
       mergeIntervalMs: UNDO_MERGE_MS,
-      // Mod-Z must never delete a comment.
-      excludeOriginPrefixes: [COMMENT_ORIGIN],
     });
     this.tabs = new TabChannel(tabChannelName('esbt', docId), {
       onHello: () => this.scheduleTabSnapshot(),
@@ -122,7 +110,6 @@ export class EsbtEngine implements CollabSession {
     this.unsubscribers.push(
       this.doc.subscribe(() => {
         this.emitText();
-        this.emitComments();
         this.scheduleLocalSave();
       }),
       this.doc.subscribeLocalUpdates((bytes) => {
@@ -300,61 +287,6 @@ export class EsbtEngine implements CollabSession {
     return () => this.peerListeners.delete(listener);
   }
 
-  /* ------------------------------------------------------------- comments */
-
-  comments(): CommentRecord[] {
-    return this.cachedComments;
-  }
-
-  addComment(input: { from: number; to: number; quote: string; body: string }): string {
-    const id = createCommentId();
-    // Weight-stable anchors: the ESBT equivalent of a Loro Cursor. They
-    // survive concurrent edits anywhere else in the document; quote+offset
-    // remain as the fallback the shared resolver understands.
-    let startCursor: string | undefined;
-    let endCursor: string | undefined;
-    try {
-      startCursor = encodeAnchor(this.doc.indexToAnchor(input.from));
-      endCursor = encodeAnchor(this.doc.indexToAnchor(input.to));
-    } catch {
-      // Anchors are an optimisation; quote+offset still work.
-    }
-
-    const record: CommentRecord = {
-      id,
-      body: input.body,
-      author: this.user.name,
-      colorIndex: this.user.colorIndex,
-      createdAt: Date.now(),
-      resolved: false,
-      from: input.from,
-      to: input.to,
-      quote: input.quote,
-      startCursor,
-      endCursor,
-    };
-    this.doc.transact(() => this.doc.mapSet(id, serializeComment(record)), COMMENT_ORIGIN);
-    return id;
-  }
-
-  resolveComment(id: string): void {
-    const existing = parseComment(this.doc.mapGet(id));
-    if (!existing || existing.resolved) return;
-    this.doc.transact(
-      () => this.doc.mapSet(id, serializeComment({ ...existing, resolved: true })),
-      COMMENT_ORIGIN,
-    );
-  }
-
-  deleteComment(id: string): void {
-    this.doc.transact(() => this.doc.mapDelete(id), COMMENT_ORIGIN);
-  }
-
-  onCommentsChange(listener: (comments: CommentRecord[]) => void): () => void {
-    this.commentListeners.add(listener);
-    return () => this.commentListeners.delete(listener);
-  }
-
   hydrated(): boolean {
     return this.isHydrated;
   }
@@ -372,9 +304,9 @@ export class EsbtEngine implements CollabSession {
     await this.loadLocalSnapshot();
     this.markHydrated();
     this.tabs.hello();
-    // Then the server's snapshot over plain HTTP, which is cacheable and
-    // arrives without waiting for a WebSocket handshake. A local copy plus a
-    // slow network means we do not block the editor on that request.
+    // Then the server's authenticated snapshot over HTTP, which arrives
+    // without waiting for a WebSocket handshake. A local copy plus a slow
+    // network means we do not block the editor on that request.
     await this.loadServerSnapshot();
     if (this.destroyed) return;
 
@@ -401,54 +333,69 @@ export class EsbtEngine implements CollabSession {
     const timeoutMs = snapshotFetchTimeoutMs(quality, hasLocal);
     if (timeoutMs <= 0) return;
 
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetchWithTimeout(
-        `/api/documents/${this.docId}/snapshot?shallow=1`,
-        { headers: { Accept: 'application/octet-stream' } },
-        timeoutMs,
-      );
+      const response = await this.access.fetchSnapshot(this.docId, controller.signal);
       if (!response.ok || response.status === 204 || this.destroyed) return;
       const bytes = new Uint8Array(await response.arrayBuffer());
       if (bytes.byteLength === 0) return;
       this.counters.received += bytes.byteLength;
       this.doc.import(bytes);
       this.emitText();
-      this.emitComments();
     } catch {
       // Offline, aborted, or slow: the local cache and the WebSocket retry
       // loop cover us. Do not surface a failed snapshot as a document error.
+    } finally {
+      window.clearTimeout(timer);
     }
   }
 
   private connect(): void {
-    if (this.destroyed) return;
+    if (this.destroyed || this.socket || this.admissionAbort) return;
 
-    const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-    const url = new URL(`${protocol}://${location.host}/collab/esbt/${this.docId}`);
-
-    // Tell the server what we already have so it can reply with a delta
-    // instead of a full snapshot.
-    try {
-      const vv = this.doc.oplogVersion().encode();
-      if (vv.byteLength > 0 && vv.byteLength <= MAX_VV_QUERY_BYTES) {
-        url.searchParams.set('vv', toBase64Url(vv));
-      }
-    } catch {
-      // No version vector: the server falls back to a snapshot.
-    }
-
+    const controller = new AbortController();
+    this.admissionAbort = controller;
     this.setStatus('connecting');
-    const socket = new WebSocket(url);
-    socket.binaryType = 'arraybuffer';
-    this.socket = socket;
+    void this.admitAndConnect(controller);
+  }
 
-    socket.addEventListener('message', (event) => this.onMessage(event.data as ArrayBuffer));
-    socket.addEventListener('open', () => {
-      this.reconnectDelay = RECONNECT_MIN_MS;
-      this.send(MSG_EPHEMERAL, this.ephemeral.encodeAll());
-    });
-    socket.addEventListener('close', (event) => this.onDisconnect(socket, event.code));
-    socket.addEventListener('error', () => this.onDisconnect(socket));
+  private async admitAndConnect(controller: AbortController): Promise<void> {
+    try {
+      const ticket = await this.access.admit(this.docId, this.doc.siteId, controller.signal);
+      if (this.destroyed || controller.signal.aborted || this.admissionAbort !== controller) return;
+      this.admissionAbort = null;
+
+      const url = new URL(ticket.roomUrl);
+
+      // Tell the server what we already have so it can reply with a delta
+      // instead of a full snapshot. Credentials never enter the URL.
+      try {
+        const vv = this.doc.oplogVersion().encode();
+        if (vv.byteLength > 0 && vv.byteLength <= MAX_VV_QUERY_BYTES) {
+          url.searchParams.set('vv', toBase64Url(vv));
+        }
+      } catch {
+        // No version vector: the server falls back to a snapshot.
+      }
+
+      const socket = new WebSocket(url, roomTicketProtocols(ticket));
+      socket.binaryType = 'arraybuffer';
+      this.socket = socket;
+
+      socket.addEventListener('message', (event) => this.onMessage(event.data as ArrayBuffer));
+      socket.addEventListener('open', () => {
+        this.reconnectDelay = RECONNECT_MIN_MS;
+        this.send(MSG_EPHEMERAL, this.ephemeral.encodeAll());
+      });
+      socket.addEventListener('close', (event) => this.onDisconnect(socket, event.code));
+      socket.addEventListener('error', () => this.onDisconnect(socket));
+    } catch (error) {
+      if (this.admissionAbort === controller) this.admissionAbort = null;
+      if (this.destroyed || controller.signal.aborted) return;
+      this.setStatus('offline');
+      if (shouldRetryAdmission(error)) this.scheduleReconnect();
+    }
   }
 
   private onDisconnect(socket: WebSocket, code?: number): void {
@@ -488,6 +435,8 @@ export class EsbtEngine implements CollabSession {
   };
 
   private handleOffline = (): void => {
+    this.admissionAbort?.abort();
+    this.admissionAbort = null;
     this.setStatus('offline');
   };
 
@@ -650,37 +599,7 @@ export class EsbtEngine implements CollabSession {
   private markHydrated(): void {
     if (this.isHydrated) return;
     this.isHydrated = true;
-    this.emitComments();
     for (const listener of this.hydratedListeners) listener();
-  }
-
-  private emitComments(): void {
-    this.cachedComments = this.readComments();
-    for (const listener of this.commentListeners) listener(this.cachedComments);
-  }
-
-  private readComments(): CommentRecord[] {
-    const raw = readCommentMap(this.doc.mapEntries());
-    const text = this.getText();
-    return raw.map((comment) => {
-      const fromAnchors = this.rangeFromAnchors(comment);
-      const resolved = fromAnchors ?? resolveCommentRange(comment, text);
-      return resolved ? { ...comment, from: resolved.from, to: resolved.to } : comment;
-    });
-  }
-
-  private rangeFromAnchors(comment: CommentRecord): { from: number; to: number } | null {
-    if (!comment.startCursor || !comment.endCursor) return null;
-    try {
-      const start = decodeAnchor(comment.startCursor);
-      const end = decodeAnchor(comment.endCursor);
-      if (!start || !end) return null;
-      const from = this.doc.anchorToIndex(start);
-      const to = this.doc.anchorToIndex(end);
-      return { from: Math.min(from, to), to: Math.max(from, to) };
-    } catch {
-      return null;
-    }
   }
 
   private refreshPeers(): void {
@@ -726,6 +645,8 @@ export class EsbtEngine implements CollabSession {
     window.removeEventListener('offline', this.handleOffline);
     document.removeEventListener('visibilitychange', this.handleVisibility);
     window.removeEventListener('pagehide', this.handlePageHide);
+    this.admissionAbort?.abort();
+    this.admissionAbort = null;
     if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
     if (this.snapshotReplyTimer !== null) clearTimeout(this.snapshotReplyTimer);
     if (this.presenceHeartbeat !== null) clearInterval(this.presenceHeartbeat);
@@ -738,23 +659,15 @@ export class EsbtEngine implements CollabSession {
     this.textListeners.clear();
     this.statusListeners.clear();
     this.peerListeners.clear();
-    this.commentListeners.clear();
     this.hydratedListeners.clear();
   }
 }
 
-const anchorEncoder = new TextEncoder();
-const anchorDecoder = new TextDecoder();
-
-/** Anchors travel inside comment records as opaque base64url strings. */
-function encodeAnchor(anchor: EsbtAnchor): string {
-  return encodeBytes(anchorEncoder.encode(JSON.stringify(anchor)));
-}
-
-function decodeAnchor(value: string): EsbtAnchor | null {
-  const bytes = decodeBytes(value);
-  if (!bytes) return null;
-  const parsed = JSON.parse(anchorDecoder.decode(bytes)) as Partial<EsbtAnchor>;
-  if (typeof parsed.weight !== 'string' || typeof parsed.offset !== 'number') return null;
-  return { weight: parsed.weight, offset: parsed.offset };
+function shouldRetryAdmission(error: unknown): boolean {
+  return !(
+    typeof error === 'object' &&
+    error !== null &&
+    'retryable' in error &&
+    error.retryable === false
+  );
 }

@@ -22,21 +22,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function listDocuments(): Promise<{ documents: DocumentMeta[] }> {
-  return request('/api/documents');
+  return request('/v1/documents');
 }
 
 export function getDocument(id: string): Promise<{ document: DocumentMeta; connections: number }> {
-  return request(`/api/documents/${id}`);
+  return request(`/v1/documents/${id}`);
 }
 
 export function createDocument(): Promise<{ document: DocumentMeta }> {
-  return request('/api/documents', { method: 'POST', body: JSON.stringify({}) });
+  return request('/v1/documents', { method: 'POST', body: JSON.stringify({}) });
 }
 
 export function deleteDocument(id: string): Promise<{ deleted: boolean }> {
-  return request(`/api/documents/${id}`, { method: 'DELETE' });
+  return request(`/v1/documents/${id}`, { method: 'DELETE' });
 }
 
 export function exportUrl(id: string): string {
-  return `/api/documents/${id}/export`;
+  return `/v1/documents/${id}/export`;
 }

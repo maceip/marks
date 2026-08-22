@@ -19,8 +19,8 @@ import { weight } from './weight.js';
  * for locally generated ops (the undo manager needs the removed unit to
  * reinsert it); it is never encoded on the wire for deletes.
  *
- * `map` ops carry the keyed last-writer-wins register writes that ride the
- * document (marks stores comments there). They have no causal dependencies:
+ * `map` ops carry generic keyed last-writer-wins register writes that ride the
+ * document for format compatibility. They have no causal dependencies:
  * the highest (lamport, site) write for a key wins on every replica.
  */
 export interface SeqOp {

@@ -58,6 +58,5 @@ export const icons = {
   pencil: 'M4 20h4l11-11-4-4L4 16zM14 6l4 4',
   bolt: 'M13 2L4 14h7l-1 8 9-12h-7z',
   close: 'M6 6l12 12M18 6L6 18',
-  comment: 'M5 5h14v10H8l-3 3z',
   mic: 'M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3zM6 11a6 6 0 0 0 12 0M12 17v4',
 } as const;

@@ -19,7 +19,7 @@ export interface ContextMenuRequest {
  *    callouts (Copy, Look Up, Speak) still appear
  *  - anything outside the editor or preview
  *
- * Everywhere else we show our own menu so Cut/Copy/Paste/Select All/Comment
+ * Everywhere else we show our own menu so Cut/Copy/Paste/Select All
  * work the same in Chrome, Firefox, Safari and on a mouse-driven tablet.
  */
 export function shouldOfferCustomMenu(request: ContextMenuRequest): boolean {
