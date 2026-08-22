@@ -1,5 +1,5 @@
-import { Icon, icons } from './Icon';
-import { SurfaceMaterial } from './SurfaceMaterial';
+import { Icon, icons } from '../ui/Icon';
+import { SurfaceMaterial } from '../ui/SurfaceMaterial';
 
 interface LiquidDockProps {
   onCommands: () => void;

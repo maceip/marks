@@ -3,7 +3,7 @@ import type { EditorView } from '@codemirror/view';
 import { AI_MODES, composeLocally, type AiMode } from '../../lib/ai-compose';
 import { insertAiResult } from '../../editor/actions';
 import { Glyph, type GlyphName } from '../glyphs/Glyph';
-import { SurfaceMaterial } from '../SurfaceMaterial';
+import { SurfaceMaterial } from '../ui/SurfaceMaterial';
 import '../../styles/chrome.css';
 
 const MODE_COPY: Record<AiMode, { label: string; glyph: GlyphName; detail: string }> = {

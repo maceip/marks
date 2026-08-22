@@ -1,9 +1,9 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import type { DocumentMeta } from '../lib/api';
-import { formatCount, formatRelativeTime } from '../lib/format';
-import { Icon, icons } from './Icon';
-import { MarksMark } from './MarksMark';
-import { SurfaceMaterial } from './SurfaceMaterial';
+import type { DocumentMeta } from '../../lib/api';
+import { formatCount, formatRelativeTime } from '../../lib/format';
+import { Icon, icons } from '../ui/Icon';
+import { MarksMark } from '../ui/MarksMark';
+import { SurfaceMaterial } from '../ui/SurfaceMaterial';
 
 interface SidebarProps {
   documents: DocumentMeta[];

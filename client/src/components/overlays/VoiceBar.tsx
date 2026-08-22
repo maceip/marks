@@ -1,4 +1,4 @@
-import type { VoiceStatus } from '../browser';
+import type { VoiceStatus } from '../../browser';
 
 interface VoiceBarProps {
   status: VoiceStatus;

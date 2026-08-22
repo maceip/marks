@@ -1,21 +1,21 @@
 import type { EditorView } from '@codemirror/view';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import type { ConnectionStatus, Peer } from '../collab/types';
-import type { Posture } from '../lib/posture';
-import type { UiActionId } from '../lib/ui-actions';
-import { Icon, icons } from './Icon';
-import { MarksMark } from './MarksMark';
+import type { ConnectionStatus, Peer } from '../../collab/types';
+import type { Posture } from '../../lib/posture';
+import type { UiActionId } from '../../lib/ui-actions';
+import { Icon, icons } from '../ui/Icon';
+import { MarksMark } from '../ui/MarksMark';
 import { PresenceBar } from './PresenceBar';
-import { SurfaceMaterial } from './SurfaceMaterial';
+import { SurfaceMaterial } from '../ui/SurfaceMaterial';
 
 export type ViewMode = 'edit' | 'split' | 'preview';
 export type SurfaceRoute = 'home' | 'document' | 'benchmark';
 
 const DocumentChrome = lazy(() =>
-  import('./chrome/DocumentChrome').then((module) => ({ default: module.DocumentChrome })),
+  import('../chrome/DocumentChrome').then((module) => ({ default: module.DocumentChrome })),
 );
 const QuickAccess = lazy(() =>
-  import('./chrome/DocumentChrome').then((module) => ({ default: module.QuickAccess })),
+  import('../chrome/DocumentChrome').then((module) => ({ default: module.QuickAccess })),
 );
 
 interface TopBarProps {

@@ -1,5 +1,5 @@
 import { ROLE_COPY, SCRATCH_HONEST_LINE } from '../../lib/identity-copy';
-import { Icon, icons } from '../Icon';
+import { Icon, icons } from '../ui/Icon';
 
 interface AccountSheetProps {
   onNotify: (title: string, detail?: string, tone?: 'neutral' | 'success' | 'danger') => void;

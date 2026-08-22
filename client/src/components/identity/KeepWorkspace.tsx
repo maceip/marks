@@ -1,5 +1,5 @@
 import { SCRATCH_HONEST_LINE, SCRATCH_LOCAL_LINE, SCRATCH_UPGRADE_LINE } from '../../lib/identity-copy';
-import { Icon, icons } from '../Icon';
+import { Icon, icons } from '../ui/Icon';
 
 interface KeepWorkspaceProps {
   onNotify: (title: string, detail?: string, tone?: 'neutral' | 'success' | 'danger') => void;

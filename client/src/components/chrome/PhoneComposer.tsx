@@ -20,9 +20,9 @@ import {
 import { insertImageFile, openFind } from '../../editor/actions';
 import type { Posture } from '../../lib/posture';
 import type { UiActionId } from '../../lib/ui-actions';
-import type { ViewMode } from '../TopBar';
+import type { ViewMode } from '../shell/TopBar';
 import { Glyph, type GlyphName } from '../glyphs/Glyph';
-import { SurfaceMaterial } from '../SurfaceMaterial';
+import { SurfaceMaterial } from '../ui/SurfaceMaterial';
 import { AiSheet } from './AiSheet';
 
 interface PhoneComposerProps {

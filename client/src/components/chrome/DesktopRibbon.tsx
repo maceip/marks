@@ -46,7 +46,7 @@ import {
 } from '../../editor/actions';
 import { inspectEditorContext, type EditorContextKind } from '../../editor/context';
 import type { UiActionId } from '../../lib/ui-actions';
-import type { ViewMode } from '../TopBar';
+import type { ViewMode } from '../shell/TopBar';
 import { Glyph, type GlyphName } from '../glyphs/Glyph';
 import { RibbonCommand, RibbonGroup } from './RibbonCommand';
 

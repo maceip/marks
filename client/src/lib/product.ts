@@ -2,8 +2,8 @@ export const PRODUCT_NAME = 'marks';
 
 /** Latest deterministic level-9 gzip receipt from `npm run check:ui-budgets`. */
 export const UI_PERFORMANCE_RECEIPT = {
-  appCriticalKb: '96.96',
-  marketingCriticalKb: '0.56',
+  appCriticalKb: '97.30',
+  marketingCriticalKb: '0.57',
 } as const;
 
 /**

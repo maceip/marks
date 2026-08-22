@@ -109,9 +109,13 @@ client/                     Vite + React + TypeScript
   editor/                   CodeMirror 6 setup, commands, theme
   pages/                    route screens: Home, Benchmark
   content/                  canonical documents (About opens in the editor)
+  components/shell/         app frame: titlebar, sidebar, dock
   components/chrome/        Word-inspired ribbon, phone composer
   components/workspace/     editor, preview, outline, status
+  components/overlays/      dialogs, toasts, context menu, HUD
+  components/identity/      keep-workspace and account sheets
   components/glyphs/        3D folded-glass command icons
+  components/ui/            primitives: mark, icons, modal, glass host
 esbt/                       temporary TypeScript ESBT browser adapter
 crates/marks-auth/          identity/authorization validators
 crates/marks-server/        the only HTTP/WebSocket process

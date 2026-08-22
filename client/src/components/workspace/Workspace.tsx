@@ -10,7 +10,7 @@ import '../../styles/document.css';
 import '../../styles/chrome.css';
 import { Outline } from './Outline';
 import type { CursorInfo } from './EditorPane';
-import type { ViewMode } from '../TopBar';
+import type { ViewMode } from '../shell/TopBar';
 
 const EditorPane = lazy(() =>
   import('./EditorPane').then((module) => ({ default: module.EditorPane })),

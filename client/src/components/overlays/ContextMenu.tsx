@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
-import { clampMenuPosition } from '../browser';
-import { modifierLabel } from '../browser/platform';
+import { clampMenuPosition } from '../../browser';
+import { modifierLabel } from '../../browser/platform';
 
 export interface ContextMenuAction {
   id: string;

@@ -1,18 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CollabSession } from '../collab/types';
-import { reviewRepository, type DocumentVersion, type ReviewComment } from '../data/review';
-import { DOCUMENT_TEMPLATES, type TemplateId } from '../demo/workspace';
-import type { UiPreferences } from '../hooks/useUiPreferences';
-import { formatRelativeTime } from '../lib/format';
-import { UI_ACTIONS, type UiActionId } from '../lib/ui-actions';
-import { surfaceRuntime } from '../surface/runtime';
-import { AccountSheet } from './identity/AccountSheet';
-import { KeepWorkspace } from './identity/KeepWorkspace';
-import { Icon, icons } from './Icon';
-import { SurfaceMaterial } from './SurfaceMaterial';
-import { Modal } from './ui/Modal';
-import { ROLE_COPY, SHARE_LOCAL_LINE } from '../lib/identity-copy';
-import '../styles/overlays.css';
+import type { CollabSession } from '../../collab/types';
+import { reviewRepository, type DocumentVersion, type ReviewComment } from '../../data/review';
+import { DOCUMENT_TEMPLATES, type TemplateId } from '../../demo/workspace';
+import type { UiPreferences } from '../../hooks/useUiPreferences';
+import { formatRelativeTime } from '../../lib/format';
+import { UI_ACTIONS, type UiActionId } from '../../lib/ui-actions';
+import { surfaceRuntime } from '../../surface/runtime';
+import { AccountSheet } from '../identity/AccountSheet';
+import { KeepWorkspace } from '../identity/KeepWorkspace';
+import { Icon, icons } from '../ui/Icon';
+import { SurfaceMaterial } from '../ui/SurfaceMaterial';
+import { Modal } from '../ui/Modal';
+import { ROLE_COPY, SHARE_LOCAL_LINE } from '../../lib/identity-copy';
+import '../../styles/overlays.css';
 
 export type AppDialog =
   | { type: 'templates' }

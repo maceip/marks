@@ -1,7 +1,7 @@
 import type { EditorView } from '@codemirror/view';
 import type { Posture } from '../../lib/posture';
 import type { UiActionId } from '../../lib/ui-actions';
-import type { ViewMode } from '../TopBar';
+import type { ViewMode } from '../shell/TopBar';
 import { DesktopRibbon } from './DesktopRibbon';
 import { MiniToolbar } from './MiniToolbar';
 import { PhoneComposer } from './PhoneComposer';

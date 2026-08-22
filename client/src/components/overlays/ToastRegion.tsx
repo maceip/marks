@@ -1,5 +1,5 @@
-import { Icon, icons } from './Icon';
-import { MarksMark } from './MarksMark';
+import { Icon, icons } from '../ui/Icon';
+import { MarksMark } from '../ui/MarksMark';
 
 export interface ToastMessage {
   id: string;

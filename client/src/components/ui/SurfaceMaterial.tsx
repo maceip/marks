@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { SurfaceMaterialOptions, SurfaceMaterialVariant } from '../surface/renderer';
+import type { SurfaceMaterialOptions, SurfaceMaterialVariant } from '../../surface/renderer';
 
 interface SurfaceMaterialProps {
   variant?: SurfaceMaterialVariant;
@@ -26,7 +26,7 @@ export function SurfaceMaterial({
     const options: SurfaceMaterialOptions = { variant, intensity };
 
     const start = () => {
-      void import('../surface/renderer').then(({ attachSurfaceMaterial }) => {
+      void import('../../surface/renderer').then(({ attachSurfaceMaterial }) => {
         if (disposed) return;
         detach = attachSurfaceMaterial(canvas, host, options);
       });

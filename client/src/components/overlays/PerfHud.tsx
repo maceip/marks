@@ -1,6 +1,6 @@
-import { formatBytes, formatCount, formatMs } from '../lib/format';
-import type { HudSnapshot } from '../lib/hud';
-import { Icon, icons } from './Icon';
+import { formatBytes, formatCount, formatMs } from '../../lib/format';
+import type { HudSnapshot } from '../../lib/hud';
+import { Icon, icons } from '../ui/Icon';
 
 interface PerfHudProps {
   snapshot: HudSnapshot;

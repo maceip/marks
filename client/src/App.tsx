@@ -3,21 +3,21 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { createMarksDocumentAccess } from './auth/room-access';
 import { loadScratchCredential } from './auth/scratch';
 import { loadUser } from './collab/user';
-import type { AppDialog, ReviewSurface } from './components/AppOverlays';
-import { ContextMenu } from './components/ContextMenu';
-import { Icon, icons } from './components/Icon';
-import { LiquidDock } from './components/LiquidDock';
-import { OpeningShell } from './components/OpeningShell';
-import { PerfHud } from './components/PerfHud';
-import { Sidebar } from './components/Sidebar';
+import type { AppDialog, ReviewSurface } from './components/overlays/AppOverlays';
+import { ContextMenu } from './components/overlays/ContextMenu';
+import { Icon, icons } from './components/ui/Icon';
+import { LiquidDock } from './components/shell/LiquidDock';
+import { OpeningShell } from './components/shell/OpeningShell';
+import { PerfHud } from './components/overlays/PerfHud';
+import { Sidebar } from './components/shell/Sidebar';
 import type { CursorInfo } from './components/workspace/EditorPane';
 import { Outline } from './components/workspace/Outline';
 import { StatusBar } from './components/workspace/StatusBar';
 import { ABOUT_DOCUMENT_ID } from './content/about';
 import { Home } from './pages/Home';
-import { TopBar, type ViewMode } from './components/TopBar';
-import { ToastRegion, type ToastMessage } from './components/ToastRegion';
-import { VoiceBar } from './components/VoiceBar';
+import { TopBar, type ViewMode } from './components/shell/TopBar';
+import { ToastRegion, type ToastMessage } from './components/overlays/ToastRegion';
+import { VoiceBar } from './components/overlays/VoiceBar';
 import type { LocalDocumentDraft, TemplateId } from './demo/workspace';
 import { useBrowserSurface } from './hooks/useBrowserSurface';
 import { useDocumentMeta } from './hooks/useDocumentMeta';
@@ -43,7 +43,7 @@ const Workspace = lazy(() =>
   import('./components/workspace/Workspace').then((module) => ({ default: module.Workspace })),
 );
 const AppOverlays = lazy(() =>
-  import('./components/AppOverlays').then((module) => ({ default: module.AppOverlays })),
+  import('./components/overlays/AppOverlays').then((module) => ({ default: module.AppOverlays })),
 );
 const AiSheet = lazy(() =>
   import('./components/chrome/AiSheet').then((module) => ({ default: module.AiSheet })),

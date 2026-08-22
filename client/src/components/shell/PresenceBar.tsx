@@ -1,5 +1,5 @@
-import type { Peer } from '../collab/types';
-import { colorVar, initials } from '../collab/user';
+import type { Peer } from '../../collab/types';
+import { colorVar, initials } from '../../collab/user';
 
 interface PresenceBarProps {
   peers: Peer[];

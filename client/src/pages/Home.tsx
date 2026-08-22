@@ -2,9 +2,9 @@ import type { DocumentMeta } from '../lib/api';
 import { formatCount, formatRelativeTime } from '../lib/format';
 import { ABOUT_DOCUMENT_ID, DOCUMENT_TEMPLATES, type TemplateId } from '../demo/workspace';
 import { UI_PERFORMANCE_RECEIPT } from '../lib/product';
-import { Icon, icons } from '../components/Icon';
-import { MarksMark } from '../components/MarksMark';
-import { SurfaceMaterial } from '../components/SurfaceMaterial';
+import { Icon, icons } from '../components/ui/Icon';
+import { MarksMark } from '../components/ui/MarksMark';
+import { SurfaceMaterial } from '../components/ui/SurfaceMaterial';
 import '../styles/home.css';
 
 interface HomeProps {

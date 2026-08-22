@@ -12,9 +12,12 @@ Marks has one web application implementation:
 - `client/src/main.tsx` is the only React root.
 - `client/src/App.tsx` is the only application shell and route compositor.
 - `client/src/pages/` owns route-level screens (`Home`, `Benchmark`).
-- `client/src/components/` owns reusable product surfaces:
-  `chrome/` for the ribbon and phone composer, `workspace/` for the document
-  panes, `glyphs/` for 3D command icons, and `ui/` for shared modal mechanics.
+- `client/src/components/` owns reusable product surfaces, grouped the way
+  current product apps group them:
+  `shell/` for the app frame, `chrome/` for the ribbon and phone composer,
+  `workspace/` for the document panes, `overlays/` for dialogs and toasts,
+  `identity/` for keep-workspace and account sheets, `glyphs/` for 3D command
+  icons, and `ui/` for shared primitives.
 - `client/src/content/` owns canonical documents that are themselves product
   surfaces. About Marks lives here and opens in the real editor.
 - `client/src/styles/` owns the single token and component-style stack.
@@ -255,8 +258,8 @@ Additional rules:
 
 From a clean `npm run build` followed by `npm run check:ui-budgets`:
 
-- Welcome bounce: **0.56 KB gzip** HTML only, then the real document editor.
-- App-home critical path: **96.96 KB gzip** total—0.83 KB HTML, 86.36 KB
+- Welcome bounce: **0.57 KB gzip** HTML only, then the real document editor.
+- App-home critical path: **97.30 KB gzip** total—0.83 KB HTML, 86.69 KB
   JavaScript, and 9.77 KB CSS.
 - App overlays remain a feature-paid 5.33 KB JavaScript and 3.51 KB CSS gzip by
   Vite's report; they are absent from initial home references.

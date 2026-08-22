@@ -1,5 +1,5 @@
 import type { Heading } from '../../markdown/types';
-import { Icon, icons } from '../Icon';
+import { Icon, icons } from '../ui/Icon';
 
 interface OutlineProps {
   headings: Heading[];
