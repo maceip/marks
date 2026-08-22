@@ -149,7 +149,7 @@ try {
   await a.page.keyboard.press('Control+Shift+M');
 
   /* ---------------------------------------------------- collaboration --- */
-  console.log('\ncollaboration (loro)');
+  console.log('\ncollaboration');
   const b = await open(docUrl);
   await b.page.waitForSelector('.marks-preview .marks-block', { timeout: 20_000 });
   await settle(b.page, 1500);
@@ -165,7 +165,7 @@ try {
   check("first peer receives the second peer's edits", aText.includes('Added by peer B'));
   check('previews converge', aText === bText);
   check('presence shows both peers', (await a.page.locator('.presence .avatar').count()) === 2);
-  check('remote cursor is drawn', (await a.page.locator('.cm-cursorLayer > *, .cm-ySelectionCaret').count()) > 0);
+  check('remote cursor is drawn', (await a.page.locator('.esbt-caret').count()) > 0);
   await shot(a.page, '03-collaboration');
 
   /* ---------------------------------------------------- undo ------------ */
@@ -293,42 +293,41 @@ try {
   await settle(b.page, 4500);
   check('offline edits sync on reconnect', (await previewText(b.page)).includes('Typed while offline'));
 
-  /* ---------------------------------------------------- yjs engine ------ */
-  console.log('\ncollaboration (yjs)');
+  /* ------------------------------------------------- second document ---- */
+  console.log('\nsecond document');
   const c = await open(`${BASE}/`);
   await c.page.waitForSelector('.new-doc');
-  await c.page.click('.split-toggle');
-  await c.page.locator('.menu-item', { hasText: 'Yjs' }).click();
+  await c.page.click('.new-doc .button.primary');
   await c.page.waitForSelector('.cm-content', { timeout: 20_000 });
   await settle(c.page, 2500);
 
-  const yjsUrl = c.page.url();
-  check('new document uses the chosen engine', (await c.page.locator('.topbar .engine-tag').innerText()).trim().toLowerCase() === 'yjs');
+  const secondUrl = c.page.url();
+  check('new document uses the esbt engine', (await c.page.locator('.topbar .engine-tag').innerText()).trim().toLowerCase() === 'esbt');
 
   await c.page.click('.cm-content');
-  await c.page.keyboard.type('# Yjs document\n\nFrom peer C. ');
+  await c.page.keyboard.type('# Second document\n\nFrom peer C. ');
   await settle(c.page, 1200);
 
-  const d = await open(yjsUrl);
+  const d = await open(secondUrl);
   await d.page.waitForSelector('.cm-content', { timeout: 20_000 });
   await settle(d.page, 2500);
-  check('yjs peer receives existing content', (await previewText(d.page)).includes('From peer C'));
+  check('cold-opening peer receives existing content', (await previewText(d.page)).includes('From peer C'));
 
   await d.page.click('.cm-content');
   await d.page.keyboard.press('Control+End');
   await d.page.keyboard.type('And peer D.');
   await settle(c.page, 1800);
-  check('yjs peers converge', (await previewText(c.page)) === (await previewText(d.page)));
-  check('yjs presence works', (await c.page.locator('.presence .avatar').count()) === 2);
+  check('second document peers converge', (await previewText(c.page)) === (await previewText(d.page)));
+  check('second document presence works', (await c.page.locator('.presence .avatar').count()) === 2);
 
   /* ---------------------------------------------------- server ---------- */
   console.log('\nserver');
-  const docId = yjsUrl.split('/d/')[1];
+  const docId = secondUrl.split('/d/')[1];
   const exported = await (await fetch(`${BASE}/api/documents/${docId}/export`)).text();
-  check('server exports the document as markdown', exported.includes('Yjs document') && exported.includes('From peer C'));
+  check('server exports the document as markdown', exported.includes('Second document') && exported.includes('From peer C'));
 
   const meta = await (await fetch(`${BASE}/api/documents/${docId}`)).json();
-  check('server derives the title from the first heading', meta.document.title === 'Yjs document', meta.document.title);
+  check('server derives the title from the first heading', meta.document.title === 'Second document', meta.document.title);
 
   const snapshot = await fetch(`${BASE}/api/documents/${docId}/snapshot`);
   check('snapshot endpoint serves CRDT state', snapshot.ok && Number(snapshot.headers.get('content-length') ?? 1) !== 0);
@@ -359,8 +358,9 @@ try {
   const afterDelete = await fetch(`${BASE}/api/documents/${doomedId}`);
   check('a deleted document stays deleted while its room is live', afterDelete.status === 404, `status ${afterDelete.status}`);
 
-  // Connecting the wrong protocol to an existing document would hand it an
-  // empty replica and let the first edit overwrite the stored state.
+  // The retired engines' paths must be refused: connecting one to an
+  // existing document would hand it an empty replica and let the first edit
+  // overwrite the stored state.
   const mismatch = await d.page.evaluate(
     (url) =>
       new Promise((resolve) => {
@@ -372,7 +372,7 @@ try {
       }),
     `${BASE.replace(/^http/, 'ws')}/collab/loro/${docId}`,
   );
-  check('mismatched engine is refused at the socket', mismatch === 'rejected', String(mismatch));
+  check('a retired engine path is refused at the socket', mismatch === 'rejected', String(mismatch));
 
   /* ---------------------------------------------------- errors ---------- */
   // The offline section deliberately cuts the network, so its failed requests
