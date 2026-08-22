@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { readDocumentMeta, writeDocumentMeta } from '../browser/catalog-cache';
+import { documentIsOpenable } from '../browser/document-support';
 import { getDocument, type DocumentMeta } from '../lib/api';
 
 export interface DocumentMetaState {
@@ -61,7 +62,7 @@ export function useDocumentMeta(docId: string | null): DocumentMetaState {
   return {
     meta,
     engine: meta?.engine ?? 'esbt',
-    supported: !meta || meta.engine === 'esbt',
+    supported: documentIsOpenable(meta),
     resolved,
   };
 }

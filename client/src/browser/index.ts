@@ -26,7 +26,8 @@ export {
   type CommentRecord,
 } from './comments.ts';
 export { TabChannel, tabChannelName, createTabId } from './tab-sync.ts';
-export { withPersistLock, persistLockName } from './persist-lock.ts';
+export { withPersistLock, writeSnapshotUnderLock, persistLockName } from './persist-lock.ts';
+export { documentIsOpenable } from './document-support.ts';
 export {
   readNetworkQuality,
   snapshotFetchTimeoutMs,

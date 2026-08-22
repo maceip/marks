@@ -5,18 +5,45 @@ import { hasWebLocks } from './platform.ts';
  *
  * Two tabs exporting independently will last-write-wins and drop whichever
  * replica saved first. Callers must export **inside** `work` (not before
- * requesting the lock). Holding `navigator.locks` around the export+write
- * means the second writer runs against a document that already merged the
- * first writer's updates (via TabChannel), so the stored snapshot is a
- * union, not a coin flip.
+ * requesting the lock). `writeSnapshotUnderLock` is the only helper that
+ * takes an exporter — its signature makes “export then lock” unrepresentable.
  *
- * Browsers without Web Locks just run the function. Losing a race there is
- * no worse than today's behaviour.
+ * Same-isolate callers (tests, overlapping saves in one tab) are queued in
+ * process. Cross-tab callers also take `navigator.locks` when the browser
+ * has Web Locks. Browsers without Web Locks still get the in-process queue;
+ * a second tab can still race, which is no worse than running unlocked.
  */
-export async function withPersistLock<T>(name: string, work: () => Promise<T>): Promise<T> {
-  if (!hasWebLocks()) return work();
 
-  return navigator.locks.request(name, { mode: 'exclusive' }, async () => work());
+const tails = new Map<string, Promise<unknown>>();
+
+function withProcessLock<T>(name: string, work: () => Promise<T>): Promise<T> {
+  const prev = tails.get(name) ?? Promise.resolve();
+  const run = prev.then(() => work());
+  tails.set(
+    name,
+    run.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return run;
+}
+
+export async function withPersistLock<T>(name: string, work: () => Promise<T>): Promise<T> {
+  return withProcessLock(name, async () => {
+    if (!hasWebLocks()) return work();
+    return navigator.locks.request(name, { mode: 'exclusive' }, async () => work());
+  });
+}
+
+export async function writeSnapshotUnderLock(
+  name: string,
+  exportBytes: () => Uint8Array,
+  write: (bytes: Uint8Array) => Promise<void>,
+): Promise<void> {
+  await withPersistLock(name, async () => {
+    await write(exportBytes());
+  });
 }
 
 export function persistLockName(engine: string, docId: string): string {

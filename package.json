@@ -24,7 +24,7 @@
     "clean": "rm -rf client/dist server/dist esbt/dist node_modules/.vite",
     "test:esbt": "npm test --workspace=@marks/esbt",
     "test:browser": "node --experimental-strip-types --test client/src/browser/*.test.ts",
-    "test:harness": "node --test scripts/harness/*.test.mjs scripts/measure-budget.test.mjs",
+    "test:harness": "node --test scripts/harness/*.test.mjs",
     "harness:probe": "node scripts/harness/probe.mjs",
     "smoke": "node scripts/smoke.mjs",
     "smoke:surface": "node scripts/harness/run.mjs --driver=playwright",

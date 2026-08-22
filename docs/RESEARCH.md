@@ -1,5 +1,9 @@
 # CRDT research survey, January 2025 – August 2026
 
+> **Current tree:** marks ships only ESBT (`@marks/esbt`). Loro, Yjs, and
+> Hocuspocus were removed in PR #6. The survey below is the historical record
+> that led here. The “Adopted” table is **not** the running stack.
+
 Why this project uses the algorithms and libraries it uses. Every claim below
 is attributed: numbers taken from a paper are labelled as such, and numbers we
 measured ourselves say so.
@@ -9,8 +13,8 @@ measured ourselves say so.
 The interesting work in this window is not a new sequence CRDT — it is the
 realisation that a text CRDT does not have to keep its structure resident at
 all. Eg-walker stores plain operations and materialises CRDT state only while
-merging. That idea is now shipping in a maintained library with a CodeMirror
-binding, which is why this project defaults to it.
+merging. That idea shipped in Loro during the survey window; marks later
+replaced Loro/Yjs with a first-party ESBT engine.
 
 | Adopted | For |
 | --- | --- |
