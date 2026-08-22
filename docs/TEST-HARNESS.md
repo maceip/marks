@@ -64,7 +64,7 @@ MARKS_URL=http://127.0.0.1:3000 npm run smoke:platforms
 
 **Portable surface** (`scripts/harness/suites/surface.mjs`) — create a document, first paint, scoped select-all, preview context menu, comment composer, voice button, theme toggle, offline status. This is the set that must stay green on all three platforms.
 
-**Playwright smoke** (`scripts/smoke.mjs`) — the above plus incremental preview, two Loro peers, per-user undo, Yjs peers, checkbox write-back, outline, scroll sync, snapshot/export REST, live-room delete, engine-mismatch refusal.
+**Playwright smoke** (`scripts/smoke.mjs`) — the above plus incremental preview, two ESBT peers, per-user undo, checkbox write-back, outline, scroll sync, snapshot/export REST, live-room delete, retired-engine refusal.
 
 ## Adding a check
 

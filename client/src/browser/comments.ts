@@ -4,7 +4,7 @@
  * The CRDT is the source of truth — comments live in a map on the same
  * document as the markdown, so they sync, work offline, and survive a
  * merge. Offsets still drift when people edit around them; we store a
- * quote plus optional engine-specific cursors so a comment can find its
+ * quote plus optional ESBT weight-stable anchors so a comment can find its
  * way back after an edit.
  */
 
