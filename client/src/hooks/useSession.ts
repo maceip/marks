@@ -6,6 +6,7 @@ import type {
   LocalUser,
   Peer,
 } from '../collab/types';
+import { UI_DATA_MODE } from '../lib/product';
 
 export interface SessionState {
   session: CollabSession | null;
@@ -51,10 +52,19 @@ export function useSession(
 
     // The documents shell should not pay for CodeMirror, the CRDT, or their
     // bindings. Load the editing engine only when a document is ready to open.
-    void import('../collab')
-      .then(({ createSession }) => {
+    const factory =
+      UI_DATA_MODE === 'local'
+        ? import('../demo/local-session').then(({ createLocalSession }) => () =>
+            createLocalSession(docId, identity),
+          )
+        : import('../collab').then(({ createSession }) => () =>
+            createSession({ docId, user: identity, access }),
+          );
+
+    void factory
+      .then((create) => {
         if (!active) return;
-        next = createSession({ docId, user: identity, access });
+        next = create();
         setSession(next);
         setStatus(next.status());
         setPeers(next.peers());

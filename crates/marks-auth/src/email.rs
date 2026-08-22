@@ -44,9 +44,22 @@ pub struct EmailChallengeRecord {
 pub struct EmailLocator([u8; 32]);
 
 impl EmailLocator {
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedEmailLocatorRecord {
+    pub locator_key_version: u32,
+    pub locator: EmailLocator,
+    pub principal_id: crate::PrincipalId,
+    pub issuer_policy_version: u32,
+    pub revoked_at_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

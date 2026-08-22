@@ -104,8 +104,10 @@ h4:hover .marks-anchor {
 
 .marks-preview blockquote {
   margin: 0 0 1.05em;
-  padding: 0.15em 1em;
-  border-left: 3px solid var(--border-strong);
+  padding: 0.75em 1em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
   color: var(--text-muted);
 }
 
@@ -290,7 +292,6 @@ h4:hover .marks-anchor {
   margin: 0 0 1.15em;
   padding: 0.85em 1.1em;
   border: 1px solid var(--border);
-  border-left-width: 3px;
   border-radius: var(--radius-sm);
   background: var(--surface-sunken);
 }
@@ -305,27 +306,27 @@ h4:hover .marks-anchor {
 }
 
 .marks-callout-info {
-  border-left-color: var(--info);
+  border-color: color-mix(in srgb, var(--info) 30%, var(--border));
   background: var(--info-soft);
 }
 
 .marks-callout-success {
-  border-left-color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 30%, var(--border));
   background: var(--success-soft);
 }
 
 .marks-callout-warning {
-  border-left-color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 30%, var(--border));
   background: var(--warning-soft);
 }
 
 .marks-callout-danger {
-  border-left-color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
   background: var(--danger-soft);
 }
 
 .marks-callout-note {
-  border-left-color: var(--text-faint);
+  border-color: var(--border-strong);
 }
 
 /* ------------------------------------------------------------ footnotes */

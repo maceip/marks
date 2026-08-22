@@ -1,7 +1,8 @@
 use crate::wire::{put_bytes, put_text, put_u8, put_u32, put_u64};
 use crate::{
-    ControllerId, DeviceCapabilities, DeviceId, PairingId, PrincipalId, ScratchId,
-    bearer_secret_hash, public_key_hash,
+    ControllerId, DeviceCapabilities, DeviceId, PairingId, PendingDeviceError, PendingDeviceRecord,
+    PrincipalId, ScratchAuthority, ScratchId, bearer_secret_hash, public_key_hash,
+    require_live_pending_device,
 };
 use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
 use serde::{Deserialize, Serialize};
@@ -151,10 +152,38 @@ pub enum PairingError {
     InvalidSignature,
     #[error("device grant does not match the pending pairing")]
     GrantMismatch,
+    #[error("pairing is not bound to this pending device")]
+    PendingDeviceMismatch,
 }
 
 pub fn pairing_secret_hash(secret: &[u8]) -> [u8; 32] {
     bearer_secret_hash(secret)
+}
+
+/// Bind a two-minute pairing to the authenticated scratch and its pending key.
+pub fn authorize_pairing_request(
+    scratch: &ScratchAuthority,
+    pending: &PendingDeviceRecord,
+    now_ms: u64,
+) -> Result<(), PairingError> {
+    require_live_pending_device(pending, &scratch.scratch_id, now_ms).map_err(|error| match error {
+        PendingDeviceError::Expired => PairingError::Expired,
+        _ => PairingError::PendingDeviceMismatch,
+    })
+}
+
+pub fn pairing_matches_pending(
+    pairing: &PairingRecord,
+    pending: &PendingDeviceRecord,
+) -> Result<(), PairingError> {
+    if pairing.scratch_id != pending.scratch_id
+        || pairing.pending_device_id != pending.id
+        || pairing.pending_device_public_key_hash != pending.public_key_hash
+    {
+        Err(PairingError::PendingDeviceMismatch)
+    } else {
+        Ok(())
+    }
 }
 
 /// Validate a phone-controller approval against the exact pending QR pairing.

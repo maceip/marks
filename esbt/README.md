@@ -8,8 +8,8 @@ and in Node. The canonical implementation lives in
 Rust/wasm reference; this workspace is its build inside marks.
 
 The API is the contract in [`docs/ESBT-INTEGRATION.md`](../docs/ESBT-INTEGRATION.md).
-Everything the contract names is implemented, plus the three additions the
-Loro/Yjs coverage audit forced (each documented in `src/api.ts`):
+Everything the contract names is implemented, plus the editor-facing additions
+documented in `src/api.ts`:
 
 - `EphemeralStore.keys()` — the server room gates its first presence frame on it
 - `UndoManagerOptions.mergeIntervalMs` — keystroke-burst undo grouping

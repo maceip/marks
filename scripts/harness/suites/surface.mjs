@@ -20,10 +20,10 @@ async function createDocument(session) {
       return;
     }
   } catch {
-    // Sidebar is off the DOM below 900px; EmptyState still has a create button.
+    // The persistent rail becomes an overlay below the desktop posture.
   }
-  await session.waitForSelector('.empty-actions .button.primary', { timeout: 15_000 });
-  await session.click('.empty-actions .button.primary');
+  await session.waitForSelector('.home-actions .button.primary', { timeout: 15_000 });
+  await session.click('.home-actions .button.primary');
 }
 
 export async function runSurface(session, { check }) {
@@ -39,7 +39,18 @@ export async function runSurface(session, { check }) {
   await session.wait(800);
 
   check('document renders blocks', (await session.count('.marks-preview .marks-block')) >= 1);
-  check('voice input is offered', (await session.count('button[aria-label="Voice input"]')) === 1);
+  const voiceCount = await session.count('button[aria-label="Voice input"]');
+  const voiceState = await session.evaluate(() => {
+    const button = document.querySelector('button[aria-label="Voice input"]');
+    return button
+      ? { disabled: button.hasAttribute('disabled'), title: button.getAttribute('title') ?? '' }
+      : null;
+  });
+  check(
+    'voice input is honest',
+    voiceCount === 1 && Boolean(voiceState) && (!voiceState.disabled || voiceState.title.includes('not supported')),
+    JSON.stringify(voiceState),
+  );
 
   await session.click('.preview-pane');
   await session.press('Control+A');
@@ -69,17 +80,21 @@ export async function runSurface(session, { check }) {
 
   await session.setOffline(true);
   await session.wait(1500);
-  const status = await session.textContent('.topbar .status');
-  check('offline is reported', String(status).includes('Offline'), String(status));
+  const status = await session.textContent('.titlebar .status');
+  check(
+    'connectivity state is honest',
+    String(status).includes('Offline') || String(status).includes('On this device'),
+    String(status),
+  );
   await session.setOffline(false);
 }
 
 export const SURFACE_CHECK_NAMES = [
   'opening shell does not stay up',
   'document renders blocks',
-  'voice input is offered',
+  'voice input is honest',
   'select-all in the preview stays inside the document',
   'preview right-click opens the marks menu',
   'theme toggles',
-  'offline is reported',
+  'connectivity state is honest',
 ];

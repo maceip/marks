@@ -16,6 +16,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Reject retired Node server workspace
+        run: |
+          if [ -f server/package.json ] || [ -d server/src ] || [ -f scripts/harness/ensure-server.mjs ]; then
+            echo "The Node server/ workspace is retired. Marks has one Rust process." >&2
+            echo "Do not reintroduce server/, or harness code that starts npm start." >&2
+            exit 1
+          fi
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:

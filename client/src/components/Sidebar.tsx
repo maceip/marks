@@ -2,6 +2,8 @@ import { Fragment, useEffect, useRef, useState } from 'react';
 import type { DocumentMeta } from '../lib/api';
 import { formatCount, formatRelativeTime } from '../lib/format';
 import { Icon, icons } from './Icon';
+import { MarksMark } from './MarksMark';
+import { SurfaceMaterial } from './SurfaceMaterial';
 
 interface SidebarProps {
   documents: DocumentMeta[];
@@ -84,16 +86,17 @@ export function Sidebar({
         />
       )}
       <aside
-        className={`sidebar${overlay ? ' sidebar-overlay' : ''}`}
+        className={`sidebar surface-material-host${overlay ? ' sidebar-overlay' : ''}`}
         aria-label="Documents"
         aria-modal={overlay || undefined}
         role={overlay ? 'dialog' : undefined}
         ref={panelRef}
       >
+        <SurfaceMaterial variant="panel" intensity={0.82} />
         <div className="sidebar-head">
           <div className="sidebar-brand-row">
             <div className="brand">
-              <Icon path={icons.bolt} size={18} />
+              <MarksMark size={23} />
               <span>marks</span>
             </div>
             {overlay && (
@@ -151,7 +154,7 @@ export function Sidebar({
                 title="Delete"
                 onClick={(event) => {
                   event.stopPropagation();
-                  if (confirm(`Delete “${doc.title}”? This cannot be undone.`)) onDelete(doc.id);
+                  onDelete(doc.id);
                 }}
               >
                 <Icon path={icons.trash} size={14} />

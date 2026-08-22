@@ -6,7 +6,7 @@
     {
       "name": "dev",
       "command": "npm run dev",
-      "description": "Runs the sync server (http://localhost:3000) and the Vite client dev server (http://localhost:5173) together. Open the client URL to use the app; it proxies /api and /collab to the server."
+      "description": "Runs the Vite client on http://localhost:5173. It proxies /v1 and /collab to MARKS_SERVER (default http://localhost:3000), which must be the Rust marks-server binary — not a Node workspace."
     },
     {
       "name": "playwright",
@@ -26,6 +26,6 @@
   ],
   "ports": [
     { "name": "client", "port": 5173 },
-    { "name": "server", "port": 3000 }
+    { "name": "marks-server", "port": 3000 }
   ]
 }

@@ -27,6 +27,7 @@ interface ToolbarProps {
   disabled?: boolean;
   onVoice?: () => void;
   voiceActive?: boolean;
+  voiceSupported?: boolean;
 }
 
 interface Action {
@@ -104,7 +105,7 @@ function shortcutLabel(shortcut?: string): string {
   return ` (${shortcut.replace('Mod', isMac ? '⌘' : 'Ctrl')})`;
 }
 
-export function Toolbar({ getView, section, disabled, onVoice, voiceActive }: ToolbarProps) {
+export function Toolbar({ getView, section, disabled, onVoice, voiceActive, voiceSupported }: ToolbarProps) {
   const groups = section === 'home' ? HOME_GROUPS : INSERT_GROUPS;
 
   const run = (command: StateCommand) => {
@@ -115,7 +116,7 @@ export function Toolbar({ getView, section, disabled, onVoice, voiceActive }: To
   };
 
   return (
-    <div className="toolbar ribbon-toolbar" role="toolbar" aria-label={`${section} commands`}>
+    <div className="toolbar ribbon-toolbar ribbon-deck-enter" role="toolbar" aria-label={`${section} commands`}>
       {groups.map((group) => (
         <div className="ribbon-command-group" key={group.label}>
           <div className="ribbon-command-row">
@@ -138,18 +139,18 @@ export function Toolbar({ getView, section, disabled, onVoice, voiceActive }: To
           <span className="ribbon-group-label">{group.label}</span>
         </div>
       ))}
-      {section === 'home' && onVoice && (
+      {section === 'home' && (
         <div className="ribbon-command-group">
           <div className="ribbon-command-row">
             <button
               type="button"
               className={`ribbon-command${voiceActive ? ' active' : ''}`}
-              title="Voice input (Ctrl+Shift+S)"
+              title={voiceSupported ? 'Voice input (Ctrl+Shift+S)' : 'Voice input is not supported by this browser'}
               aria-label="Voice input"
               aria-pressed={voiceActive}
-              disabled={disabled}
+              disabled={disabled || !voiceSupported || !onVoice}
               onMouseDown={(event) => event.preventDefault()}
-              onClick={onVoice}
+              onClick={() => onVoice?.()}
             >
               <Icon path={icons.mic} />
               <span className="ribbon-command-label">Dictate</span>

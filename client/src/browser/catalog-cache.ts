@@ -7,10 +7,9 @@ const metaKey = (id: string) => `marks:meta:${id}`;
 /**
  * Last-known document list and per-id metadata.
  *
- * Used so opening a legacy-engine document while offline is still refused
- * (the two encodings are incompatible) and so the sidebar still lists
- * documents the user already had. The network is always authoritative when
- * it answers; the cache is never shown as fresher than it is.
+ * Offline catalog for service mode. The network is always authoritative when
+ * it answers; the cache is never shown as fresher than it is. Non-ESBT engine
+ * tags stay closed through `documentIsOpenable`.
  */
 export async function readCatalog(): Promise<DocumentMeta[] | null> {
   try {

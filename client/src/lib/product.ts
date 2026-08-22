@@ -1,5 +1,19 @@
 export const PRODUCT_NAME = 'marks';
 
+/** Latest deterministic level-9 gzip receipt from `npm run check:ui-budgets`. */
+export const UI_PERFORMANCE_RECEIPT = {
+  appCriticalKb: '94.82',
+  marketingCriticalKb: '11.77',
+} as const;
+
+/**
+ * The complete UI runs against a deterministic local workspace by default.
+ * Set VITE_MARKS_DATA_MODE=service when the document service is ready to own
+ * metadata, admission, and persistence again.
+ */
+export const UI_DATA_MODE =
+  import.meta.env.VITE_MARKS_DATA_MODE === 'service' ? ('service' as const) : ('local' as const);
+
 export const ENGINE = {
   id: 'esbt' as const,
   label: 'ESBT',

@@ -264,7 +264,7 @@ try {
   console.log('\noffline');
   await a.context.setOffline(true);
   await settle(a.page, 1500);
-  check('offline is reported', (await a.page.locator('.topbar .status').first().innerText()).includes('Offline'));
+  check('offline is reported', (await a.page.locator('.titlebar .status').first().innerText()).includes('Offline'));
 
   await a.page.bringToFront();
   await a.page.click('.cm-content');
@@ -323,8 +323,8 @@ try {
   const snapshot = await fetch(`${BASE}/v1/documents/${docId}/snapshot`);
   check('snapshot endpoint serves CRDT state', snapshot.ok && Number(snapshot.headers.get('content-length') ?? 1) !== 0);
 
-  // Exporting has to read the live document: both engines persist on a
-  // debounce, so a download right after typing would otherwise lose the tail.
+  // Exporting has to read the live document: the room journals before
+  // acknowledging, so a download right after typing must include the tail.
   await d.page.click('.cm-content');
   await d.page.keyboard.press('Control+End');
   await d.page.keyboard.type(' Freshly typed.');

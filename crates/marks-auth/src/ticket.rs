@@ -1,11 +1,13 @@
 use crate::{
-    Actor, AuthenticatedSession, DeviceId, DocumentId, DocumentRole, PrincipalId, ScratchActor,
-    ScratchId, ScratchRecord, SessionId, SiteId, TicketId, bearer_secret_hash,
+    Actor, AuthenticatedSession, DeviceId, DocumentId, DocumentOwner, DocumentRecord, DocumentRole,
+    EsbtSiteId, PrincipalId, ScratchActor, ScratchId, ScratchRecord, SessionId, TicketId,
+    bearer_secret_hash, require_live_document, require_scratch_document,
 };
 use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 const TICKET_SECRET_BYTES: usize = 32;
+pub const DOCUMENT_TICKET_TTL_MS: u64 = 30_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DocumentTicketRecord {
@@ -15,7 +17,7 @@ pub struct DocumentTicketRecord {
     pub session_id: SessionId,
     pub device_id: DeviceId,
     pub document_id: DocumentId,
-    pub site_id: SiteId,
+    pub esbt_site: EsbtSiteId,
     pub role: DocumentRole,
     pub authorization_epoch: u64,
     pub expires_at_ms: u64,
@@ -29,7 +31,7 @@ pub struct ScratchDocumentTicketRecord {
     pub secret_hash: [u8; 32],
     pub scratch_id: ScratchId,
     pub document_id: DocumentId,
-    pub site_id: SiteId,
+    pub esbt_site: EsbtSiteId,
     pub authorization_epoch: u64,
     pub expires_at_ms: u64,
     pub consumed_at_ms: Option<u64>,
@@ -54,6 +56,8 @@ pub enum DocumentTicketError {
     DocumentMismatch,
     #[error("document ticket is not bound to this ESBT replica")]
     SiteMismatch,
+    #[error("document is deleted or not owned by this authority")]
+    DocumentInactive,
     #[error("document authorization changed after this ticket was issued")]
     AuthorizationStale,
     #[error("scratch document ticket is not bound to this scratch workspace")]
@@ -70,7 +74,7 @@ pub fn redeem_scratch_document_ticket(
     presented_secret: &[u8],
     scratch: &ScratchRecord,
     expected_document_id: &DocumentId,
-    expected_site_id: &SiteId,
+    expected_esbt_site: &EsbtSiteId,
     expected_authorization_epoch: u64,
     now_ms: u64,
 ) -> Result<ScratchActor, DocumentTicketError> {
@@ -104,7 +108,7 @@ pub fn redeem_scratch_document_ticket(
     if &ticket.document_id != expected_document_id {
         return Err(DocumentTicketError::DocumentMismatch);
     }
-    if &ticket.site_id != expected_site_id {
+    if &ticket.esbt_site != expected_esbt_site {
         return Err(DocumentTicketError::SiteMismatch);
     }
     if ticket.authorization_epoch != expected_authorization_epoch {
@@ -114,13 +118,91 @@ pub fn redeem_scratch_document_ticket(
     Ok(ScratchActor {
         scratch_id: ticket.scratch_id.clone(),
         document_id: ticket.document_id.clone(),
-        site_id: ticket.site_id.clone(),
+        esbt_site: ticket.esbt_site,
         authorization_epoch: ticket.authorization_epoch,
     })
 }
 
 pub fn ticket_secret_hash(secret: &[u8]) -> [u8; 32] {
     bearer_secret_hash(secret)
+}
+
+fn require_client_site(esbt_site: EsbtSiteId) -> Result<EsbtSiteId, DocumentTicketError> {
+    if esbt_site == EsbtSiteId::SERVER {
+        Err(DocumentTicketError::SiteMismatch)
+    } else {
+        Ok(esbt_site)
+    }
+}
+
+fn require_ticket_secret(secret: &[u8]) -> Result<[u8; 32], DocumentTicketError> {
+    if secret.len() != TICKET_SECRET_BYTES {
+        return Err(DocumentTicketError::InvalidSecret);
+    }
+    Ok(ticket_secret_hash(secret))
+}
+
+/// Mint a 30-second principal ticket after the caller has resolved the role.
+pub fn issue_document_ticket(
+    id: TicketId,
+    secret: &[u8],
+    session: &AuthenticatedSession,
+    document: &DocumentRecord,
+    role: DocumentRole,
+    esbt_site: EsbtSiteId,
+    now_ms: u64,
+) -> Result<DocumentTicketRecord, DocumentTicketError> {
+    require_live_document(document).map_err(|_| DocumentTicketError::DocumentInactive)?;
+    if matches!(document.owner, DocumentOwner::Scratch(_)) {
+        return Err(DocumentTicketError::DocumentInactive);
+    }
+    if now_ms >= session.expires_at_ms() {
+        return Err(DocumentTicketError::SessionInactive);
+    }
+    Ok(DocumentTicketRecord {
+        id,
+        secret_hash: require_ticket_secret(secret)?,
+        principal_id: session.principal_id().clone(),
+        session_id: session.id().clone(),
+        device_id: session.device_id().clone(),
+        document_id: document.id.clone(),
+        esbt_site: require_client_site(esbt_site)?,
+        role,
+        authorization_epoch: document.authorization_epoch,
+        expires_at_ms: now_ms.saturating_add(DOCUMENT_TICKET_TTL_MS),
+        consumed_at_ms: None,
+        revoked_at_ms: None,
+    })
+}
+
+/// Mint a 30-second scratch ticket for a still-unclaimed private document.
+pub fn issue_scratch_document_ticket(
+    id: TicketId,
+    secret: &[u8],
+    scratch: &ScratchRecord,
+    document: &DocumentRecord,
+    esbt_site: EsbtSiteId,
+    now_ms: u64,
+) -> Result<ScratchDocumentTicketRecord, DocumentTicketError> {
+    require_scratch_document(document, &scratch.id)
+        .map_err(|_| DocumentTicketError::DocumentInactive)?;
+    if scratch.revoked_at_ms.is_some()
+        || scratch.claimed_by.is_some()
+        || now_ms >= scratch.expires_at_ms
+    {
+        return Err(DocumentTicketError::ScratchInactive);
+    }
+    Ok(ScratchDocumentTicketRecord {
+        id,
+        secret_hash: require_ticket_secret(secret)?,
+        scratch_id: scratch.id.clone(),
+        document_id: document.id.clone(),
+        esbt_site: require_client_site(esbt_site)?,
+        authorization_epoch: document.authorization_epoch,
+        expires_at_ms: now_ms.saturating_add(DOCUMENT_TICKET_TTL_MS),
+        consumed_at_ms: None,
+        revoked_at_ms: None,
+    })
 }
 
 /// Redeem a one-use document ticket into the actor attached to a WebSocket.
@@ -131,7 +213,7 @@ pub fn redeem_document_ticket(
     presented_secret: &[u8],
     session: &AuthenticatedSession,
     expected_document_id: &DocumentId,
-    expected_site_id: &SiteId,
+    expected_esbt_site: &EsbtSiteId,
     expected_authorization_epoch: u64,
     now_ms: u64,
 ) -> Result<Actor, DocumentTicketError> {
@@ -165,7 +247,7 @@ pub fn redeem_document_ticket(
     if &ticket.document_id != expected_document_id {
         return Err(DocumentTicketError::DocumentMismatch);
     }
-    if &ticket.site_id != expected_site_id {
+    if &ticket.esbt_site != expected_esbt_site {
         return Err(DocumentTicketError::SiteMismatch);
     }
     if ticket.authorization_epoch != expected_authorization_epoch {
@@ -177,7 +259,7 @@ pub fn redeem_document_ticket(
         session_id: ticket.session_id.clone(),
         device_id: ticket.device_id.clone(),
         document_id: ticket.document_id.clone(),
-        site_id: ticket.site_id.clone(),
+        esbt_site: ticket.esbt_site,
         role: ticket.role,
         authorization_epoch: ticket.authorization_epoch,
     })
@@ -203,7 +285,7 @@ mod tests {
                 session_id: session_id.clone(),
                 device_id: device_id.clone(),
                 document_id: DocumentId::new("document_12345").unwrap(),
-                site_id: SiteId::new("site_123456789").unwrap(),
+                esbt_site: EsbtSiteId::new(2).unwrap(),
                 role: DocumentRole::Editor,
                 authorization_epoch: 4,
                 expires_at_ms: 10_000,
@@ -248,7 +330,7 @@ mod tests {
             &secret,
             &session,
             &ticket.document_id,
-            &ticket.site_id,
+            &ticket.esbt_site,
             ticket.authorization_epoch,
             9_000,
         )
@@ -256,7 +338,7 @@ mod tests {
 
         assert_eq!(actor.principal_id, ticket.principal_id);
         assert_eq!(actor.document_id, ticket.document_id);
-        assert_eq!(actor.site_id, ticket.site_id);
+        assert_eq!(actor.esbt_site, ticket.esbt_site);
         assert_eq!(actor.role, DocumentRole::Editor);
     }
 
@@ -270,7 +352,7 @@ mod tests {
                 &secret,
                 &session,
                 &replayed_ticket.document_id,
-                &replayed_ticket.site_id,
+                &replayed_ticket.esbt_site,
                 replayed_ticket.authorization_epoch,
                 9_000,
             ),
@@ -284,7 +366,7 @@ mod tests {
                 &secret,
                 &session,
                 &DocumentId::new("document_other1").unwrap(),
-                &ticket.site_id,
+                &ticket.esbt_site,
                 ticket.authorization_epoch,
                 9_000,
             ),
@@ -296,7 +378,7 @@ mod tests {
                 &secret,
                 &session,
                 &ticket.document_id,
-                &SiteId::new("site_other_1234").unwrap(),
+                &EsbtSiteId::new(9).unwrap(),
                 ticket.authorization_epoch,
                 9_000,
             ),
@@ -318,7 +400,7 @@ mod tests {
                 &secret,
                 &other_session,
                 &ticket.document_id,
-                &ticket.site_id,
+                &ticket.esbt_site,
                 ticket.authorization_epoch,
                 9_000,
             ),
@@ -335,7 +417,7 @@ mod tests {
                 &secret,
                 &session,
                 &ticket.document_id,
-                &ticket.site_id,
+                &ticket.esbt_site,
                 ticket.authorization_epoch + 1,
                 9_000,
             ),
@@ -351,6 +433,8 @@ mod tests {
             capability_hash: [0; 32],
             expires_at_ms: 20_000,
             claimed_by: None,
+            claimed_at_ms: None,
+            finalize_expires_at_ms: None,
             revoked_at_ms: None,
         };
         let ticket = ScratchDocumentTicketRecord {
@@ -358,7 +442,7 @@ mod tests {
             secret_hash: ticket_secret_hash(&secret),
             scratch_id: scratch.id.clone(),
             document_id: DocumentId::new("document_12345").unwrap(),
-            site_id: SiteId::new("site_123456789").unwrap(),
+            esbt_site: EsbtSiteId::new(2).unwrap(),
             authorization_epoch: 2,
             expires_at_ms: 10_000,
             consumed_at_ms: None,
@@ -370,7 +454,7 @@ mod tests {
             &secret,
             &scratch,
             &ticket.document_id,
-            &ticket.site_id,
+            &ticket.esbt_site,
             ticket.authorization_epoch,
             9_000,
         )
@@ -387,6 +471,8 @@ mod tests {
             capability_hash: [0; 32],
             expires_at_ms: 20_000,
             claimed_by: Some(PrincipalId::new("principal_1234").unwrap()),
+            claimed_at_ms: Some(8_000),
+            finalize_expires_at_ms: Some(8_000 + crate::SCRATCH_FINALIZE_WINDOW_MS),
             revoked_at_ms: None,
         };
         let ticket = ScratchDocumentTicketRecord {
@@ -394,7 +480,7 @@ mod tests {
             secret_hash: ticket_secret_hash(&secret),
             scratch_id,
             document_id: DocumentId::new("document_12345").unwrap(),
-            site_id: SiteId::new("site_123456789").unwrap(),
+            esbt_site: EsbtSiteId::new(2).unwrap(),
             authorization_epoch: 2,
             expires_at_ms: 10_000,
             consumed_at_ms: None,
@@ -407,11 +493,56 @@ mod tests {
                 &secret,
                 &scratch,
                 &ticket.document_id,
-                &ticket.site_id,
+                &ticket.esbt_site,
                 ticket.authorization_epoch,
                 9_000,
             ),
             Err(DocumentTicketError::ScratchInactive)
+        );
+    }
+
+    #[test]
+    fn issued_principal_ticket_redeems_to_the_same_actor() {
+        let (existing, session, secret) = ticket();
+        let document = DocumentRecord {
+            id: existing.document_id.clone(),
+            owner: DocumentOwner::Principal(existing.principal_id.clone()),
+            authorization_epoch: existing.authorization_epoch,
+            deleted_at_ms: None,
+        };
+        let issued = issue_document_ticket(
+            existing.id.clone(),
+            &secret,
+            &session,
+            &document,
+            DocumentRole::Editor,
+            existing.esbt_site,
+            9_000,
+        )
+        .unwrap();
+        let actor = redeem_document_ticket(
+            &issued,
+            &secret,
+            &session,
+            &issued.document_id,
+            &issued.esbt_site,
+            issued.authorization_epoch,
+            9_500,
+        )
+        .unwrap();
+        assert_eq!(actor.role, DocumentRole::Editor);
+        assert_eq!(actor.esbt_site.as_u32(), 2);
+        assert_eq!(
+            issue_document_ticket(
+                existing.id,
+                &secret,
+                &session,
+                &document,
+                DocumentRole::Editor,
+                EsbtSiteId::SERVER,
+                9_000,
+            ),
+            Err(DocumentTicketError::SiteMismatch)
         );
     }
 }

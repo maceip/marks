@@ -2,9 +2,9 @@
 
 Collaborative Markdown editing designed to stay responsive on large documents.
 
-A HackMD-style split editor — source on the left, live preview on the right —
-where every keystroke lands in a local CRDT replica first, and the preview
-repaints only the blocks you actually changed.
+A full document workspace — source on the left, live preview on the right, and
+a Word-like command ribbon around it — where every keystroke lands in a local
+session first and the preview repaints only the blocks you actually changed.
 
 ![Split view](docs/screenshots/split-light.png)
 
@@ -42,10 +42,10 @@ npm run dev          # browser client on :5173
 cargo test --workspace
 ```
 
-The Vite client proxies `/v1` and `/collab` to `MARKS_SERVER`, which defaults
-to `http://localhost:3000`. The disposable Node backend has been removed; a
-connected local session therefore also needs the production Rust server once
-that binary lands. The browser artifact itself builds with:
+The complete UI runs in local workspace mode by default: documents, templates,
+editing, preview, comments, history, dialogs, preferences, and exports work
+without a server. The Vite client still proxies `/v1` and `/collab` to
+`MARKS_SERVER` for the future service adapter. The browser artifact builds with:
 
 ```bash
 npm run build
@@ -57,6 +57,7 @@ npm run preview      # static preview only; no API or collaboration backend
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `MARKS_SERVER` | `http://localhost:3000` | Rust API/WebSocket target used by the Vite development proxy |
+| `VITE_MARKS_DATA_MODE` | `local` | Set to `service` when building against a runnable document service |
 
 ## Editing
 
@@ -67,6 +68,10 @@ people to expect:
 - **Synchronised scrolling** mapped by source line, not by percentage
 - **Formatting toolbar** and shortcuts — bold, italic, strikethrough, highlight,
   headings, links, lists, task lists, quotes, tables, code blocks
+- **Adaptive command ribbon** — File, Home, Insert, Review, and View decks;
+  collapsible on desktop/foldables and fixed to the safe-area bottom on phones
+- **Local comments and version history** — complete interaction scaffolding
+  behind replaceable review/session adapters
 - **Live outline** built from the document's headings (`Ctrl`/`Cmd` + `Shift` + `O`)
 - **Clickable task lists** — ticking a box in the preview edits the source
 - **Tables, footnotes, definition lists, abbreviations, sub/sup, marks, emoji**
@@ -77,7 +82,8 @@ people to expect:
 - **Offline editing**, with local persistence, multi-tab replica sync, and automatic resync
 - **Voice input** where the browser exposes SpeechRecognition
 - **Document-scoped copy / paste / select-all / right-click**, including HTML→markdown paste
-- **Light and dark themes**, and a layout that works on a phone
+- **Light/dark themes, compact density, reduced glass and reduced motion**, with
+  explicit phone, foldable, tablet, and desktop postures
 - **Export** to `.md`; the Rust server will add revocable,
   permission-checked share links
 
@@ -86,6 +92,7 @@ people to expect:
 ```
 client/                     Vite + React + TypeScript
   auth/                     scratch/device primitives and room admission
+  data/                     one document adapter; local workspace or Rust /v1
   browser/                  clipboard, context menu, voice, tab sync, cache
   collab/                   CollabSession interface, the ESBT engine,
                             presence decorations for CodeMirror
@@ -94,7 +101,8 @@ client/                     Vite + React + TypeScript
   editor/                   CodeMirror 6 setup, commands, theme
   components/ pages/        UI
 esbt/                       temporary TypeScript ESBT browser adapter
-crates/marks-auth/          in-progress identity/authorization primitives
+crates/marks-auth/          identity/authorization validators
+crates/marks-server/        the only HTTP/WebSocket process (not landed yet)
 ```
 
 The next backend artifact is one Rust `marks-server` process owning HTTP,
@@ -129,10 +137,11 @@ preserved the `CollabSession` seam while the editor was being built, but it is
 not a second production engine. The authoritative implementation is the Rust
 core in [maceip/ESBT-web](https://github.com/maceip/ESBT-web); v1 will use that
 same core natively in the room server and through Wasm in the browser after its
-undo, local-journal, and native/Wasm conformance gates pass. Comments are
-intentionally absent until authenticated metadata storage and a
-commenter-specific authorization path exist. The binding and release boundary
-is [docs/V1-SCOPE.md](docs/V1-SCOPE.md).
+undo, local-journal, and native/Wasm conformance gates pass. Comments and
+version history are fully usable in local prototype mode. Remote comment
+storage, commenter authorization, and cross-user history are still absent
+until the authenticated metadata service lands. The binding and release
+boundary is [docs/V1-SCOPE.md](docs/V1-SCOPE.md).
 
 **Benchmark engine** in the sidebar runs an editing trace against it, in a
 worker, in your browser. One run of the 25,000-edit trace in Node on one
@@ -194,17 +203,18 @@ npm run measure          # latency on a large generated document
 browsers or the REST surface. It is retained as the acceptance suite for the
 Rust server and is not runnable against a static Vite preview.
 
-`npm run smoke:platforms` runs the same document-glass checks (select-all,
-context menu, voice affordance, theme, offline status) on all three
-local platforms. How each platform is found, and which Chrome binary they
+`npm run smoke:platforms` runs the same document-glass checks (rendering,
+select-all, context menu, honest voice availability, theme, and connectivity
+copy) on all three local platforms. How each platform is found, and which Chrome binary they
 launch, is in [docs/TEST-HARNESS.md](docs/TEST-HARNESS.md).
 
-Connected suites need a build and an independently running Rust server:
+The portable surface suite can run against the default local Vite app. The
+connected two-peer/REST suite still needs a service-mode build and an
+independently running Rust server:
 
 ```bash
-npm run build
+VITE_MARKS_DATA_MODE=service npm run build
 MARKS_URL=http://127.0.0.1:3000 npm run smoke
-MARKS_URL=http://127.0.0.1:3000 npm run smoke:platforms
 ```
 
 ## Known limits
@@ -224,6 +234,9 @@ MARKS_URL=http://127.0.0.1:3000 npm run smoke:platforms
   without a one-use room ticket. No runtime claim is made until the Rust server
   consumes the identity system's narrow admission result and proves a validated
   principal/session/document/site/role binding end to end.
+- Local UI mode is an interaction and persistence scaffold, not evidence of
+  remote admission, invitations, multi-peer convergence, or durable service
+  history. Those claims must be proven again in service mode.
 
 ## Built on
 
