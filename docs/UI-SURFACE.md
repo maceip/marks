@@ -256,8 +256,8 @@ Additional rules:
 From a clean `npm run build` followed by `npm run check:ui-budgets`:
 
 - Welcome bounce: **0.56 KB gzip** HTML only, then the real document editor.
-- App-home critical path: **96.77 KB gzip** total—0.83 KB HTML, 86.22 KB
-  JavaScript, and 9.72 KB CSS.
+- App-home critical path: **96.96 KB gzip** total—0.83 KB HTML, 86.36 KB
+  JavaScript, and 9.77 KB CSS.
 - App overlays remain a feature-paid 5.33 KB JavaScript and 3.51 KB CSS gzip by
   Vite's report; they are absent from initial home references.
 - Plain Markdown worker: **72.62 KB gzip** measured at level 9. Syntax
