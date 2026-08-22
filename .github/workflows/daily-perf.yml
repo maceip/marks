@@ -1,0 +1,71 @@
+name: Daily Performance and Smoke Tests
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HOST: 127.0.0.1
+      PORT: 3000
+      MARKS_URL: http://127.0.0.1:3000
+      MARKS_DATA_DIR: /tmp/marks-daily-perf
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js v22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Build application
+        run: npm run build
+
+      - name: Start server
+        run: |
+          mkdir -p "$MARKS_DATA_DIR"
+          npm start > "$RUNNER_TEMP/marks-server.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/marks-server.pid"
+
+      - name: Wait for server
+        run: |
+          bash scripts/wait-for-server.sh \
+            "$MARKS_URL" \
+            "$(cat "$RUNNER_TEMP/marks-server.pid")" \
+            60 \
+            "$RUNNER_TEMP/marks-server.log"
+
+      - name: Run performance measure test (pushing CRDT)
+        run: >
+          npm run measure --
+          --budget-first-ms 45000
+          --budget-p50 400
+          --budget-p95 900
+          --budget-dirty 2
+          --budget-dom 8
+
+      - name: Run smoke tests (offline resync and peers)
+        run: npm run smoke
+
+      - name: Server log on failure
+        if: failure()
+        run: |
+          if [ -f "$RUNNER_TEMP/marks-server.log" ]; then
+            cat "$RUNNER_TEMP/marks-server.log"
+          fi
