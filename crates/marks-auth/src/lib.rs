@@ -75,16 +75,17 @@ pub use id::{
     ScratchId, SessionId, TicketId, allocate_esbt_site,
 };
 pub use pairing::{
-    AuthorizedBootstrap, AuthorizedPairing, ControllerBootstrap, ControllerRecord, DeviceGrant,
-    PairingError, PairingRecord, authorize_controller_bootstrap, authorize_pairing,
-    authorize_pairing_request, pairing_matches_pending, pairing_secret_hash,
+    AuthorizedBootstrap, AuthorizedFinalize, AuthorizedPairing, ControllerBootstrap,
+    ControllerRecord, DeviceGrant, PairingError, PairingRecord, authorize_controller_bootstrap,
+    authorize_pairing, authorize_pairing_finalize, authorize_pairing_request,
+    mark_pairing_consumed, pairing_matches_pending, pairing_secret_hash,
 };
 pub use pending::{
     PendingDeviceError, PendingDeviceRecord, bind_pending_device, require_live_pending_device,
 };
 pub use promotion::{
     PromotionError, ScratchClaim, SelectedPrincipal, authorize_locator_attach,
-    claimed_scratch_matches, select_principal_for_bootstrap, select_principal_for_controller_grant,
+    claimed_scratch_matches, select_principal_for_controller_grant,
     select_principal_for_email_locator, select_scratch_claim,
 };
 pub use scratch::{

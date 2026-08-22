@@ -1,12 +1,12 @@
+use crate::crypto::bearer_matches;
 use crate::wire::{put_bytes, put_text, put_u8, put_u32, put_u64};
 use crate::{
-    ControllerId, DeviceCapabilities, DeviceId, PairingId, PendingDeviceError, PendingDeviceRecord,
-    PrincipalId, ScratchAuthority, ScratchId, bearer_secret_hash, public_key_hash,
-    require_live_pending_device,
+    ClaimedScratchAuthority, ControllerId, DeviceCapabilities, DeviceId, PairingId,
+    PendingDeviceError, PendingDeviceRecord, PrincipalId, ScratchAuthority, ScratchId,
+    bearer_secret_hash, public_key_hash, require_live_pending_device,
 };
 use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
 use serde::{Deserialize, Serialize};
-use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 const DEVICE_GRANT_DOMAIN: &[u8] = b"marks-device-grant-v1\0";
@@ -34,6 +34,7 @@ pub struct PairingRecord {
     pub secret_hash: [u8; 32],
     pub expires_at_ms: u64,
     pub consumed_at_ms: Option<u64>,
+    pub approved_principal_id: Option<PrincipalId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,10 +155,37 @@ pub enum PairingError {
     GrantMismatch,
     #[error("pairing is not bound to this pending device")]
     PendingDeviceMismatch,
+    #[error("pairing has not been approved for this claimed scratch")]
+    FinalizeMismatch,
 }
 
 pub fn pairing_secret_hash(secret: &[u8]) -> [u8; 32] {
     bearer_secret_hash(secret)
+}
+
+fn require_fresh_pairing_secret(
+    pairing: &PairingRecord,
+    presented_secret: &[u8],
+    proof_issued_at_ms: u64,
+    proof_expires_at_ms: u64,
+    now_ms: u64,
+) -> Result<(), PairingError> {
+    if pairing.consumed_at_ms.is_some() {
+        return Err(PairingError::Consumed);
+    }
+    if now_ms >= pairing.expires_at_ms || now_ms >= proof_expires_at_ms {
+        return Err(PairingError::Expired);
+    }
+    if proof_issued_at_ms > now_ms.saturating_add(MAX_CLOCK_SKEW_MS) {
+        return Err(PairingError::IssuedInFuture);
+    }
+    if proof_expires_at_ms > pairing.expires_at_ms {
+        return Err(PairingError::GrantOutlivesPairing);
+    }
+    if !bearer_matches(presented_secret, PAIRING_SECRET_BYTES, &pairing.secret_hash) {
+        return Err(PairingError::InvalidSecret);
+    }
+    Ok(())
 }
 
 /// Bind a two-minute pairing to the authenticated scratch and its pending key.
@@ -201,27 +229,13 @@ pub fn authorize_pairing(
     if grant.version != 1 {
         return Err(PairingError::UnsupportedVersion);
     }
-    if pairing.consumed_at_ms.is_some() {
-        return Err(PairingError::Consumed);
-    }
-    if now_ms >= pairing.expires_at_ms || now_ms >= grant.expires_at_ms {
-        return Err(PairingError::Expired);
-    }
-    if grant.issued_at_ms > now_ms.saturating_add(MAX_CLOCK_SKEW_MS) {
-        return Err(PairingError::IssuedInFuture);
-    }
-    if grant.expires_at_ms > pairing.expires_at_ms {
-        return Err(PairingError::GrantOutlivesPairing);
-    }
-    if presented_secret.len() != PAIRING_SECRET_BYTES
-        || pairing
-            .secret_hash
-            .ct_eq(&pairing_secret_hash(presented_secret))
-            .unwrap_u8()
-            != 1
-    {
-        return Err(PairingError::InvalidSecret);
-    }
+    require_fresh_pairing_secret(
+        pairing,
+        presented_secret,
+        grant.issued_at_ms,
+        grant.expires_at_ms,
+        now_ms,
+    )?;
     if controller.revoked_at_ms.is_some() {
         return Err(PairingError::ControllerRevoked);
     }
@@ -274,27 +288,13 @@ pub fn authorize_controller_bootstrap(
     if bootstrap.version != 1 {
         return Err(PairingError::UnsupportedVersion);
     }
-    if pairing.consumed_at_ms.is_some() {
-        return Err(PairingError::Consumed);
-    }
-    if now_ms >= pairing.expires_at_ms || now_ms >= bootstrap.expires_at_ms {
-        return Err(PairingError::Expired);
-    }
-    if bootstrap.issued_at_ms > now_ms.saturating_add(MAX_CLOCK_SKEW_MS) {
-        return Err(PairingError::IssuedInFuture);
-    }
-    if bootstrap.expires_at_ms > pairing.expires_at_ms {
-        return Err(PairingError::GrantOutlivesPairing);
-    }
-    if presented_secret.len() != PAIRING_SECRET_BYTES
-        || pairing
-            .secret_hash
-            .ct_eq(&pairing_secret_hash(presented_secret))
-            .unwrap_u8()
-            != 1
-    {
-        return Err(PairingError::InvalidSecret);
-    }
+    require_fresh_pairing_secret(
+        pairing,
+        presented_secret,
+        bootstrap.issued_at_ms,
+        bootstrap.expires_at_ms,
+        now_ms,
+    )?;
     if bootstrap.pairing_id != pairing.id
         || bootstrap.scratch_id != pairing.scratch_id
         || bootstrap.pending_device_id != pairing.pending_device_id
@@ -320,6 +320,58 @@ pub fn authorize_controller_bootstrap(
         pending_device_id: bootstrap.pending_device_id.clone(),
         scratch_id: bootstrap.scratch_id.clone(),
     })
+}
+
+/// Record that a pairing was approved for one principal. Finalize reads this
+/// binding; a second consume is rejected.
+pub fn mark_pairing_consumed(
+    pairing: &PairingRecord,
+    principal_id: PrincipalId,
+    now_ms: u64,
+) -> Result<PairingRecord, PairingError> {
+    if pairing.consumed_at_ms.is_some() {
+        return Err(PairingError::Consumed);
+    }
+    if now_ms >= pairing.expires_at_ms {
+        return Err(PairingError::Expired);
+    }
+    Ok(PairingRecord {
+        consumed_at_ms: Some(now_ms),
+        approved_principal_id: Some(principal_id),
+        ..pairing.clone()
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuthorizedFinalize {
+    pub principal_id: PrincipalId,
+    pub pending_device_id: DeviceId,
+    pub scratch_id: ScratchId,
+}
+
+/// The claimed scratch tab may mint its first session only for the pairing
+/// that just promoted it, and only onto that pending device.
+pub fn authorize_pairing_finalize(
+    pairing: &PairingRecord,
+    pending: &PendingDeviceRecord,
+    claimed: &ClaimedScratchAuthority,
+) -> Result<AuthorizedFinalize, PairingError> {
+    pairing_matches_pending(pairing, pending)?;
+    if pairing.consumed_at_ms.is_none() {
+        return Err(PairingError::FinalizeMismatch);
+    }
+    match &pairing.approved_principal_id {
+        Some(principal)
+            if principal == &claimed.principal_id && claimed.scratch_id == pairing.scratch_id =>
+        {
+            Ok(AuthorizedFinalize {
+                principal_id: claimed.principal_id.clone(),
+                pending_device_id: pairing.pending_device_id.clone(),
+                scratch_id: pairing.scratch_id.clone(),
+            })
+        }
+        _ => Err(PairingError::FinalizeMismatch),
+    }
 }
 
 #[cfg(test)]
@@ -380,6 +432,7 @@ mod tests {
             secret_hash: pairing_secret_hash(&secret),
             expires_at_ms: 20_000,
             consumed_at_ms: None,
+            approved_principal_id: None,
         };
         let grant = DeviceGrant {
             version: 1,

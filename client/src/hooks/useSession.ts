@@ -25,7 +25,7 @@ export interface SessionState {
 export function useSession(
   docId: string | null,
   user: LocalUser,
-  access: DocumentAccessProvider,
+  access: DocumentAccessProvider | null,
 ): SessionState {
   const [session, setSession] = useState<CollabSession | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
@@ -57,9 +57,12 @@ export function useSession(
         ? import('../demo/local-session').then(({ createLocalSession }) => () =>
             createLocalSession(docId, identity),
           )
-        : import('../collab').then(({ createSession }) => () =>
-            createSession({ docId, user: identity, access }),
-          );
+        : import('../collab').then(({ createSession }) => {
+            if (!access) {
+              throw new Error('service mode requires a document admission provider');
+            }
+            return () => createSession({ docId, user: identity, access });
+          });
 
     void factory
       .then((create) => {

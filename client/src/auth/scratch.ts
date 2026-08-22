@@ -1,7 +1,6 @@
-import { decodeBase64Url, encodeBase64Url } from './protocol.ts';
+import { decodeBase64Url, encodeBase64Url, OPAQUE_ID_PATTERN } from './protocol.ts';
 
 const STORAGE_KEY = 'marks.auth.scratch.v1';
-const ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 
 export interface ScratchCredential {
   version: 1;
@@ -52,7 +51,7 @@ export function createOpaqueId(prefix: string): string {
 function validateScratchCredential(credential: ScratchCredential): void {
   if (
     credential.version !== 1 ||
-    !ID_PATTERN.test(credential.scratchId) ||
+    !OPAQUE_ID_PATTERN.test(credential.scratchId) ||
     !Number.isSafeInteger(credential.expiresAtMs) ||
     credential.expiresAtMs <= 0 ||
     decodeBase64Url(credential.capability).byteLength !== 32

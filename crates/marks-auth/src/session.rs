@@ -1,4 +1,5 @@
-use crate::{DeviceRecord, PrincipalId, SessionId, bearer_secret_hash};
+use crate::crypto::bearer_matches;
+use crate::{DeviceId, DeviceRecord, PrincipalId, SessionId, bearer_secret_hash};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use thiserror::Error;
@@ -11,7 +12,7 @@ const SESSION_SECRET_BYTES: usize = 32;
 pub struct SessionRecord {
     pub id: SessionId,
     pub principal_id: PrincipalId,
-    pub device_id: crate::DeviceId,
+    pub device_id: DeviceId,
     pub secret_hash: [u8; 32],
     pub expires_at_ms: u64,
     pub revoked_at_ms: Option<u64>,
@@ -24,7 +25,7 @@ pub struct SessionRecord {
 pub struct AuthenticatedSession {
     id: SessionId,
     principal_id: PrincipalId,
-    device_id: crate::DeviceId,
+    device_id: DeviceId,
     expires_at_ms: u64,
 }
 
@@ -37,7 +38,7 @@ impl AuthenticatedSession {
         &self.principal_id
     }
 
-    pub fn device_id(&self) -> &crate::DeviceId {
+    pub fn device_id(&self) -> &DeviceId {
         &self.device_id
     }
 
@@ -95,13 +96,7 @@ pub fn validate_session(
     device: &DeviceRecord,
     now_ms: u64,
 ) -> Result<AuthenticatedSession, SessionError> {
-    if presented_secret.len() != SESSION_SECRET_BYTES
-        || session
-            .secret_hash
-            .ct_eq(&session_secret_hash(presented_secret))
-            .unwrap_u8()
-            != 1
-    {
+    if !bearer_matches(presented_secret, SESSION_SECRET_BYTES, &session.secret_hash) {
         return Err(SessionError::InvalidSecret);
     }
     if session.revoked_at_ms.is_some() {

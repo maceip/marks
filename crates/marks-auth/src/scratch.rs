@@ -1,5 +1,5 @@
+use crate::crypto::bearer_matches;
 use crate::{PrincipalId, ScratchId, bearer_secret_hash};
-use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 const CAPABILITY_BYTES: usize = 32;
@@ -46,16 +46,14 @@ fn validate_capability(
     scratch: &ScratchRecord,
     presented_capability: &[u8],
 ) -> Result<(), ScratchError> {
-    if presented_capability.len() != CAPABILITY_BYTES
-        || scratch
-            .capability_hash
-            .ct_eq(&scratch_capability_hash(presented_capability))
-            .unwrap_u8()
-            != 1
-    {
-        Err(ScratchError::InvalidCapability)
-    } else {
+    if bearer_matches(
+        presented_capability,
+        CAPABILITY_BYTES,
+        &scratch.capability_hash,
+    ) {
         Ok(())
+    } else {
+        Err(ScratchError::InvalidCapability)
     }
 }
 

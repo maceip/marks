@@ -71,7 +71,7 @@ test('scratch authority is explicit on snapshot and admission requests', async (
   await access.fetchSnapshot('document_1234', new AbortController().signal);
   const ticket = await access.admit('document_1234', 'site_12345678', new AbortController().signal);
 
-  assert.equal(calls[0].input, '/v1/documents/document_1234/snapshot?shallow=1');
+  assert.equal(calls[0].input, '/v1/scratch/documents/document_1234/snapshot?shallow=1');
   assert.equal(calls[1].input, '/v1/scratch/documents/document_1234/session');
   for (const call of calls) {
     assert.equal(

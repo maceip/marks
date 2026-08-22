@@ -27,10 +27,6 @@ pub enum PromotionError {
     LocatorOwnedByOtherPrincipal,
 }
 
-pub fn select_principal_for_bootstrap() -> SelectedPrincipal {
-    SelectedPrincipal::Create
-}
-
 pub fn select_principal_for_controller_grant(
     controller: &ControllerRecord,
 ) -> Result<SelectedPrincipal, PromotionError> {
@@ -111,8 +107,6 @@ mod tests {
 
     #[test]
     fn phone_and_evt_collision_rules_do_not_merge_accounts() {
-        assert_eq!(select_principal_for_bootstrap(), SelectedPrincipal::Create);
-
         let controller = ControllerRecord {
             id: ControllerId::new("controller_123").unwrap(),
             principal_id: PrincipalId::new("principal_1234").unwrap(),
