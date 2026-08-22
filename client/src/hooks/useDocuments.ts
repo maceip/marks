@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { forgetDocumentMeta, readCatalog, writeCatalog } from '../browser/catalog-cache';
-import type { EngineName } from '../collab/types';
 import * as api from '../lib/api';
 
 const POLL_INTERVAL_MS = 8_000;
@@ -11,7 +10,7 @@ export interface DocumentsState {
   error: string | null;
   stale: boolean;
   refresh: () => Promise<void>;
-  create: (engine: EngineName) => Promise<api.DocumentMeta>;
+  create: () => Promise<api.DocumentMeta>;
   remove: (id: string) => Promise<void>;
 }
 
@@ -68,14 +67,11 @@ export function useDocuments(): DocumentsState {
     };
   }, [refresh]);
 
-  const create = useCallback(
-    async (engine: EngineName) => {
-      const { document: created } = await api.createDocument(engine);
-      await refresh();
-      return created;
-    },
-    [refresh],
-  );
+  const create = useCallback(async () => {
+    const { document: created } = await api.createDocument();
+    await refresh();
+    return created;
+  }, [refresh]);
 
   const remove = useCallback(
     async (id: string) => {

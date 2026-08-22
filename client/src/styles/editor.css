@@ -1,14 +1,10 @@
 /*
- * Remote cursors and selections.
- *
- * The two bindings render presence differently: loro-codemirror draws
- * `.loro-cursor` / `.loro-selection` elements in CodeMirror layers and passes
- * the peer's name through a `--name` custom property, while y-codemirror.next
- * uses decorations with inline colours from awareness state. Both end up
- * looking the same here.
+ * Remote cursors and selections, rendered by the ESBT presence extension
+ * (`collab/presence.ts`) as CodeMirror decorations: a zero-width caret
+ * widget carrying the peer's name in `data-name`, and a mark decoration
+ * over their selection. Colours come from the `.marks-user{n}` classes.
  */
-.loro-cursor,
-.cm-ySelectionCaret {
+.esbt-caret {
   position: relative;
   border-left: 2px solid var(--cursor-color, var(--accent));
   border-right: none;
@@ -16,9 +12,8 @@
   box-sizing: border-box;
 }
 
-.loro-cursor::after,
-.cm-ySelectionInfo {
-  content: var(--name, '');
+.esbt-caret::after {
+  content: attr(data-name);
   position: absolute;
   top: -1.4em;
   left: -2px;
@@ -39,13 +34,11 @@
 }
 
 /* Names stay out of the way until you look for them. */
-.cm-editor:hover .loro-cursor::after,
-.cm-editor:hover .cm-ySelectionInfo {
+.cm-editor:hover .esbt-caret::after {
   opacity: 1;
 }
 
-.loro-selection,
-.cm-ySelection {
+.esbt-selection {
   background-color: color-mix(in srgb, var(--cursor-color, var(--accent)) 24%, transparent);
   border-radius: 2px;
 }

@@ -1,9 +1,12 @@
-import type { EngineName } from '../collab/types';
-
 export interface DocumentMeta {
   id: string;
   title: string;
-  engine: EngineName;
+  /**
+   * `esbt` for every document this client can open. Rows created by the
+   * retired Loro/Yjs engines keep their original value; they are listed but
+   * refused, since their binary formats need runtimes marks no longer ships.
+   */
+  engine: string;
   chars: number;
   created_at: number;
   updated_at: number;
@@ -26,8 +29,8 @@ export function getDocument(id: string): Promise<{ document: DocumentMeta; conne
   return request(`/api/documents/${id}`);
 }
 
-export function createDocument(engine: EngineName): Promise<{ document: DocumentMeta }> {
-  return request('/api/documents', { method: 'POST', body: JSON.stringify({ engine }) });
+export function createDocument(): Promise<{ document: DocumentMeta }> {
+  return request('/api/documents', { method: 'POST', body: JSON.stringify({}) });
 }
 
 export function deleteDocument(id: string): Promise<{ deleted: boolean }> {

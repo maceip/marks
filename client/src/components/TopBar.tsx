@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { ConnectionStatus, EngineName, Peer } from '../collab/types';
+import type { ConnectionStatus, Peer } from '../collab/types';
 import { exportUrl } from '../lib/api';
 import { Icon, icons } from './Icon';
 import { PresenceBar } from './PresenceBar';
@@ -9,7 +9,7 @@ export type ViewMode = 'edit' | 'split' | 'preview';
 interface TopBarProps {
   title: string;
   docId: string | null;
-  engine: EngineName;
+  engine: string;
   status: ConnectionStatus;
   peers: Peer[];
   mode: ViewMode;

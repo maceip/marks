@@ -1,9 +1,8 @@
-import { ENGINES } from '../collab';
-import type { EngineName } from '../collab/types';
+import { ENGINE } from '../collab';
 import { Icon, icons } from './Icon';
 
 interface EmptyStateProps {
-  onCreate: (engine: EngineName) => void;
+  onCreate: () => void;
   onOpenBenchmark: () => void;
 }
 
@@ -19,31 +18,22 @@ export function EmptyState({ onCreate, onOpenBenchmark }: EmptyStateProps) {
         </p>
 
         <div className="empty-actions">
-          {ENGINES.map((engine, index) => (
-            <button
-              key={engine.id}
-              type="button"
-              className={`button ${index === 0 ? 'primary' : 'subtle'}`}
-              onClick={() => onCreate(engine.id)}
-            >
-              <Icon path={icons.plus} />
-              New {engine.label} document
-            </button>
-          ))}
+          <button type="button" className="button primary" onClick={onCreate}>
+            <Icon path={icons.plus} />
+            New document
+          </button>
         </div>
 
         <dl className="empty-engines">
-          {ENGINES.map((engine) => (
-            <div key={engine.id}>
-              <dt className={`engine-tag engine-${engine.id}`}>{engine.label}</dt>
-              <dd>{engine.blurb}</dd>
-            </div>
-          ))}
+          <div>
+            <dt className={`engine-tag engine-${ENGINE.id}`}>{ENGINE.label}</dt>
+            <dd>{ENGINE.blurb}</dd>
+          </div>
         </dl>
 
         <button type="button" className="link-button" onClick={onOpenBenchmark}>
           <Icon path={icons.gauge} size={14} />
-          Measure both engines in your browser
+          Measure the engine in your browser
         </button>
       </div>
     </div>

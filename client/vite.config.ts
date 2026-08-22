@@ -12,10 +12,6 @@ export default defineConfig({
       '/collab': { target: API_TARGET.replace(/^http/, 'ws'), ws: true },
     },
   },
-  // loro-crdt ships wasm-bindgen glue whose WebAssembly instance breaks when
-  // esbuild pre-bundles it in dev, throwing "Cannot read properties of
-  // undefined (reading 'memory')" at startup. Serve it unbundled instead.
-  optimizeDeps: { exclude: ['loro-crdt'] },
   worker: { format: 'es' },
   build: {
     target: 'es2022',

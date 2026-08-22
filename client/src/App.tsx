@@ -1,7 +1,6 @@
 import type { EditorView } from '@codemirror/view';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { loadUser } from './collab';
-import type { EngineName } from './collab/types';
 import { CommentsDrawer } from './components/CommentsDrawer';
 import { ContextMenu } from './components/ContextMenu';
 import { EmptyState } from './components/EmptyState';
@@ -55,8 +54,11 @@ export function App() {
 
   const documents = useDocuments();
   const docId = route.name === 'document' ? route.id : null;
-  const { meta, engine, resolved } = useDocumentMeta(docId);
-  const { session, status, peers, comments } = useSession(resolved ? docId : null, engine, user);
+  const { meta, engine, supported, resolved } = useDocumentMeta(docId);
+  const { session, status, peers, comments } = useSession(
+    resolved && supported ? docId : null,
+    user,
+  );
 
   const scrollSync = useMemo(() => new ScrollSync(), []);
   const tracker = useRef(new LatencyTracker(240));
@@ -134,13 +136,10 @@ export function App() {
     [navigate],
   );
 
-  const createDocument = useCallback(
-    async (nextEngine: EngineName) => {
-      const created = await documents.create(nextEngine);
-      openDocument(created.id);
-    },
-    [documents, openDocument],
-  );
+  const createDocument = useCallback(async () => {
+    const created = await documents.create();
+    openDocument(created.id);
+  }, [documents, openDocument]);
 
   const removeDocument = useCallback(
     async (id: string) => {
@@ -195,7 +194,7 @@ export function App() {
           loading={documents.loading}
           stale={documents.stale}
           onOpen={openDocument}
-          onCreate={(nextEngine) => void createDocument(nextEngine)}
+          onCreate={() => void createDocument()}
           onDelete={(id) => void removeDocument(id)}
           onOpenBenchmark={() => navigate({ name: 'benchmark' })}
         />
@@ -227,6 +226,17 @@ export function App() {
           <Suspense fallback={<div className="empty-state">Loading benchmark…</div>}>
             <Benchmark onBack={() => navigate({ name: 'home' })} />
           </Suspense>
+        ) : docId && resolved && !supported ? (
+          <div className="empty-state">
+            <div className="empty-card">
+              <h2>Legacy document</h2>
+              <p>
+                This document was created with the retired <code>{engine}</code> engine and its
+                stored bytes cannot be opened by the ESBT engine. Create a new document and paste
+                its content across from an older export.
+              </p>
+            </div>
+          </div>
         ) : session ? (
           <div
             className="workspace-shell"
@@ -260,7 +270,7 @@ export function App() {
           <OpeningShell cached={Boolean(meta)} offline={surface.network === 'offline'} />
         ) : (
           <EmptyState
-            onCreate={(nextEngine) => void createDocument(nextEngine)}
+            onCreate={() => void createDocument()}
             onOpenBenchmark={() => navigate({ name: 'benchmark' })}
           />
         )}
