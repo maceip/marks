@@ -268,3 +268,7 @@ The research behind the CRDT choices, with papers and implementations from
 January 2025 to August 2026, is in [docs/RESEARCH.md](docs/RESEARCH.md). The
 browser-surface review — right-click, clipboard, voice, caching,
 multi-tab, slow/offline — is in [docs/BROWSER-SURFACE.md](docs/BROWSER-SURFACE.md).
+The UI presentation contract is [docs/UI-SURFACE.md](docs/UI-SURFACE.md). The
+HTTP, cookie, and room-admission interfaces the frontend must implement
+against `marks-server` are in
+[docs/UI-SERVICE-CONTRACT.md](docs/UI-SERVICE-CONTRACT.md).
