@@ -1,3 +1,5 @@
+import { applyServiceCallerHeaders, ensureServiceCaller } from '../auth/caller';
+
 export interface DocumentMeta {
   id: string;
   title: string;
@@ -9,11 +11,27 @@ export interface DocumentMeta {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const caller = await ensureServiceCaller();
+  const headers = new Headers({ 'Content-Type': 'application/json', ...init?.headers });
+  applyServiceCallerHeaders(headers, caller);
   const response = await fetch(path, {
     ...init,
     credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
+    headers,
   });
+  if (response.status === 401 && caller.kind === 'scratch') {
+    const retried = await ensureServiceCaller({ forceProbe: true });
+    if (retried.kind === 'session') {
+      applyServiceCallerHeaders(headers, retried);
+      const retry = await fetch(path, {
+        ...init,
+        credentials: 'same-origin',
+        headers,
+      });
+      if (!retry.ok) throw new Error(`${init?.method ?? 'GET'} ${path} failed: ${retry.status}`);
+      return (await retry.json()) as T;
+    }
+  }
   if (!response.ok) throw new Error(`${init?.method ?? 'GET'} ${path} failed: ${response.status}`);
   return (await response.json()) as T;
 }
