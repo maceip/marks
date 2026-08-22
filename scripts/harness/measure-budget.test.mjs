@@ -34,7 +34,7 @@ test('parseHud reads p50/p95 and dirty-block counts from the HUD', () => {
 test('evaluateBudgets fails a reading that exceeds its cap', () => {
   const result = evaluateBudgets(
     { firstRenderMs: 12_000, p50: 55, p95: 114, dirty: 1, domOps: 3 },
-    { budgetFirstMs: 45_000, budgetP50: 40, budgetP95: 900, budgetDirty: 2, budgetDom: 8 },
+    { budgetFirstMs: 20_000, budgetP50: 40, budgetP95: 300, budgetDirty: 2, budgetDom: 8 },
   );
   assert.equal(result.ok, false);
   assert.equal(result.failures.length, 1);
