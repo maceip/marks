@@ -17,7 +17,7 @@ Open this page in a second tab and start typing — edits converge instantly.
   replay of their edit history.
 
 Press \`Ctrl\`/\`Cmd\` + \`\\\` to toggle the preview, or open **Benchmark** in the
-sidebar to measure the CRDT engines yourself.
+sidebar to measure the CRDT engine yourself.
 
 ## Everything markdown
 

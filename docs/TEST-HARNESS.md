@@ -47,7 +47,7 @@ npm run test:harness               # chrome-discovery, measure budgets, wait-for
 
 # app must already be running
 npm run measure                    # large-doc preview latency (print only)
-npm run measure -- --budget-p50 400 --budget-p95 900 --budget-first-ms 45000
+npm run measure -- --budget-p50 150 --budget-p95 300 --budget-first-ms 20000
 npm run smoke                      # Playwright two-peer / REST / engines
 npm run smoke:surface              # portable glass checks, Playwright
 npm run smoke:puppeteer

@@ -54,14 +54,17 @@ jobs:
       - name: Run performance measure test (pushing CRDT)
         run: >
           npm run measure --
-          --budget-first-ms 45000
-          --budget-p50 400
-          --budget-p95 900
+          --budget-first-ms 20000
+          --budget-p50 150
+          --budget-p95 300
           --budget-dirty 2
           --budget-dom 8
 
       - name: Run smoke tests (offline resync and peers)
         run: npm run smoke
+
+      - name: Run portable surface on Playwright, Puppeteer, and agent-browser
+        run: npm run smoke:platforms
 
       - name: Server log on failure
         if: failure()
