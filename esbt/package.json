@@ -5,11 +5,14 @@
   "type": "module",
   "description": "ESBT sequence CRDT — the only CRDT engine in marks (doc + sync + merge, per-peer undo, presence).",
   "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "types": "./src/index.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
+      "types": "./src/index.ts",
+      "import": {
+        "types": "./src/index.ts",
+        "default": "./dist/index.js"
+      },
       "default": "./dist/index.js"
     }
   },
@@ -19,8 +22,8 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "test": "npm run build && node --test dist/contract.test.js",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "test": "npm run build && node --test dist/contract.test.js && node --test assert-modules.test.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json && node --test assert-modules.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

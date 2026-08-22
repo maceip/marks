@@ -14,7 +14,10 @@ import type {
   VersionVectorStatic,
 } from './api.js';
 import type { EphemeralStoreStatic } from './ephemeral.js';
-import { EphemeralStore, EsbtDoc, UndoManager, VersionVector } from './index.js';
+import { EsbtDoc } from './doc.js';
+import { EphemeralStore } from './ephemeral.js';
+import { UndoManager } from './undo.js';
+import { VersionVector } from './vector.js';
 
 const esbtDoc: EsbtDocStatic = EsbtDoc;
 const versionVector: VersionVectorStatic = VersionVector;
