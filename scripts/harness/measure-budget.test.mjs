@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { evaluateBudgets, parseHud, parseMeasureArgs } from './measure-budget.mjs';
+import { evaluateBudgets, parseHud, parseMeasureArgs } from '../measure-budget.mjs';
 
 const HUD = `
 Performance

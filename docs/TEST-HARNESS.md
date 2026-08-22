@@ -43,7 +43,7 @@ Override any of this with `CHROMIUM_PATH`, `CHROME_PATH`, `PUPPETEER_EXECUTABLE_
 ```bash
 npm run harness:probe              # discover platforms (no browser)
 npm run harness:probe -- --launch  # plus a userAgent check on each driver
-npm run test:harness               # chrome-discovery unit tests
+npm run test:harness               # chrome-discovery, measure budgets, wait-for-server
 
 # app must already be running
 npm run measure                    # large-doc preview latency (print only)
