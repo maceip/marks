@@ -6,7 +6,11 @@ describe('about document', () => {
   it('is a crafted Marks page, not a second website', () => {
     assert.equal(ABOUT_DOCUMENT_ID, 'about-marks');
     assert.match(ABOUT_DOCUMENT, /^# About Marks/m);
+    assert.match(ABOUT_DOCUMENT, /thought speed/);
     assert.match(ABOUT_DOCUMENT, /The page you are reading is not a brochure/);
+    assert.match(ABOUT_DOCUMENT, /Immediate by design/);
+    assert.match(ABOUT_DOCUMENT, /Rich without the weight/);
+    assert.match(ABOUT_DOCUMENT, /Made for every posture/);
   });
 
   it('explains the product, accounts, and the machinery', () => {

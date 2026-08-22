@@ -5,13 +5,27 @@ export const ABOUT_DOCUMENT_TITLE = 'About Marks';
 
 export const ABOUT_DOCUMENT = `# About Marks
 
-Marks is a collaborative writing surface for Markdown. The page you are reading is not a brochure beside the product. It is a Marks document: source on one side, the designed page on the other, the same ribbon and preview every other page uses.
+Marks is collaborative Markdown at thought speed. The page you are reading is not a brochure beside the product. It is a Marks document: source on one side, the designed page on the other, the same ribbon and preview every other page uses.
 
-The promise is simple. A keystroke should never wait for a network. The source should stay portable. The interface should feel like a quiet desktop suite that happens to live in the browser.
+The promise is simple. A keystroke never waits for a network. The source stays portable. The interface feels like a quiet desktop suite that happens to live in the browser.
 
 :::info
 This workspace is local to your browser until you choose to keep it. You can edit this page. Duplicate it if you want a copy that will not be refreshed.
 :::
+
+## Built around the work
+
+Fast is not a mode. It is the rule every feature has to survive.
+
+1. **Immediate by design.** Your local replica accepts the edit first. Collaboration, persistence, and preview follow without blocking the cursor.
+2. **Rich without the weight.** Math, diagrams, syntax, comments, and history arrive when the document asks for them — not before the first paint.
+3. **Made for every posture.** A full ribbon on desktop, a focused composer on phones, and real two-pane editing on unfolded devices.
+
+| Receipt | Meaning |
+| --- | --- |
+| 0 | Network waits on a keystroke |
+| 1 | Dirty block repainted for a typical edit |
+| .md | The source stays portable and yours |
 
 ## What you are looking at
 

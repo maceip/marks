@@ -217,9 +217,21 @@ function seedWorkspace(): DocumentMeta[] {
 }
 
 function ensureAboutDocument(documents: DocumentMeta[]): DocumentMeta[] {
-  if (documents.some((document) => document.id === ABOUT_DOCUMENT_ID)) return documents;
-  const now = Date.now();
   localStorage.setItem(textKey(ABOUT_DOCUMENT_ID), ABOUT_DOCUMENT);
+  const existing = documents.find((document) => document.id === ABOUT_DOCUMENT_ID);
+  if (existing) {
+    if (existing.title === ABOUT_DOCUMENT_TITLE && existing.chars === ABOUT_DOCUMENT.length) {
+      return documents;
+    }
+    const next = documents.map((document) =>
+      document.id === ABOUT_DOCUMENT_ID
+        ? { ...document, title: ABOUT_DOCUMENT_TITLE, chars: ABOUT_DOCUMENT.length }
+        : document,
+    );
+    saveDocuments(next);
+    return next;
+  }
+  const now = Date.now();
   const about: DocumentMeta = {
     id: ABOUT_DOCUMENT_ID,
     title: ABOUT_DOCUMENT_TITLE,
