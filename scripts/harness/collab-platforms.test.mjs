@@ -131,8 +131,13 @@ describe('three-platform collisions and edits', { timeout: 180_000 }, () => {
         await sessions[name].click('.cm-content');
         await sessions[name].evaluate((label) => {
           const content = document.querySelector('.cm-content');
-          const view = content?.cmView?.view;
-          if (!view) throw new Error(`no CodeMirror view for ${label}`);
+          const view = content?.cmTile?.root?.view ?? content?.cmView?.view;
+          if (!view) {
+            const keys = content
+              ? Object.getOwnPropertyNames(content).filter((key) => /cm/i.test(key))
+              : [];
+            throw new Error(`no CodeMirror view for ${label}; keys=${keys.join(',')}`);
+          }
           const text = view.state.doc.toString();
           const idx = text.indexOf(label);
           if (idx < 0) throw new Error(`missing doc text for ${label}: ${text.slice(0, 200)}`);
