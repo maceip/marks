@@ -11,7 +11,12 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
+    env:
+      HOST: 127.0.0.1
+      PORT: 3000
+      MARKS_URL: http://127.0.0.1:3000
+      MARKS_DATA_DIR: /tmp/marks-ci
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -34,5 +39,32 @@ jobs:
       - name: Browser unit tests
         run: npm run test:browser
 
-      - name: Harness unit tests
+      - name: Build application
+        run: npm run build
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Start server
+        run: |
+          mkdir -p "$MARKS_DATA_DIR"
+          npm start > "$RUNNER_TEMP/marks-server.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/marks-server.pid"
+
+      - name: Wait for server
+        run: |
+          bash scripts/wait-for-server.sh \
+            "$MARKS_URL" \
+            "$(cat "$RUNNER_TEMP/marks-server.pid")" \
+            60 \
+            "$RUNNER_TEMP/marks-server.log"
+
+      - name: Harness tests
         run: npm run test:harness
+
+      - name: Server log on failure
+        if: failure()
+        run: |
+          if [ -f "$RUNNER_TEMP/marks-server.log" ]; then
+            cat "$RUNNER_TEMP/marks-server.log"
+          fi

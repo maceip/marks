@@ -43,7 +43,7 @@ Override any of this with `CHROMIUM_PATH`, `CHROME_PATH`, `PUPPETEER_EXECUTABLE_
 ```bash
 npm run harness:probe              # discover platforms (no browser)
 npm run harness:probe -- --launch  # plus a userAgent check on each driver
-npm run test:harness               # chrome-discovery, measure budgets, wait-for-server
+npm run test:harness               # chrome-discovery, budgets, wait-for-server, three-browser collab
 
 # app must already be running
 npm run measure                    # large-doc preview latency (print only)
@@ -69,6 +69,8 @@ MARKS_URL=http://127.0.0.1:3000 npm run smoke:platforms
 **Playwright smoke** (`scripts/smoke.mjs`) — the above plus incremental preview, two ESBT peers, per-user undo, checkbox write-back, outline, scroll sync, snapshot/export REST, live-room delete, retired-engine refusal.
 
 **Measure** (`scripts/measure.mjs`) — types a ~60 KB document, then 60 keystrokes in the middle, and prints the HUD. `--budget-*` flags (used by `.github/workflows/daily-perf.yml`) fail the process when first-render, p50/p95, dirty blocks, or DOM ops exceed a cap. The wait for the app in that workflow is `scripts/wait-for-server.sh`: it times out and also fails if the server PID exits before `/` answers.
+
+**Three-platform collab** (`scripts/harness/collab-platforms.test.mjs`, via `npm run test:harness`) — Playwright, Puppeteer, and agent-browser open the same document, insert distinct markers at the same time, and each test asserts that one browser's preview contains every marker. Each test writes `collab_<driver>.png` (under `/opt/cursor/artifacts` when that directory exists). The suite uses `MARKS_URL` or an already-running server, and starts one only if nothing answers.
 
 ## Adding a check
 

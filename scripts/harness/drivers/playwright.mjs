@@ -72,6 +72,10 @@ export function wrap({ browser, context, page, base, chrome }) {
     async setOffline(offline) {
       await context.setOffline(Boolean(offline));
     },
+    async screenshot(path, { fullPage = true } = {}) {
+      await page.screenshot({ path, fullPage });
+      return path;
+    },
     async close() {
       await browser.close();
     },
