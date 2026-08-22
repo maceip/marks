@@ -130,15 +130,18 @@ describe('three-platform collisions and edits', { timeout: 180_000 }, () => {
       DRIVER_NAMES.map(async (name) => {
         await sessions[name].click('.cm-content');
         await sessions[name].evaluate((label) => {
-          const lines = [...document.querySelectorAll('.cm-content .cm-line')];
-          const line = lines.find((el) => (el.textContent ?? '').includes(label));
-          if (!line) throw new Error(`missing editor line for ${label}`);
-          const range = document.createRange();
-          range.selectNodeContents(line);
-          range.collapse(false);
-          const selection = window.getSelection();
-          selection?.removeAllRanges();
-          selection?.addRange(range);
+          const content = document.querySelector('.cm-content');
+          const view = content?.cmView?.view;
+          if (!view) throw new Error(`no CodeMirror view for ${label}`);
+          const text = view.state.doc.toString();
+          const idx = text.indexOf(label);
+          if (idx < 0) throw new Error(`missing doc text for ${label}: ${text.slice(0, 200)}`);
+          const pos = idx + label.length;
+          view.focus();
+          view.dispatch({
+            selection: { anchor: pos, head: pos },
+            scrollIntoView: true,
+          });
         }, slots[name]);
         await sessions[name].insertText(` ${MARKERS[name]}`);
       }),
