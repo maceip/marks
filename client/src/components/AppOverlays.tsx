@@ -6,9 +6,12 @@ import type { UiPreferences } from '../hooks/useUiPreferences';
 import { formatRelativeTime } from '../lib/format';
 import { UI_ACTIONS, type UiActionId } from '../lib/ui-actions';
 import { surfaceRuntime } from '../surface/runtime';
+import { AccountSheet } from './identity/AccountSheet';
+import { KeepWorkspace } from './identity/KeepWorkspace';
 import { Icon, icons } from './Icon';
 import { SurfaceMaterial } from './SurfaceMaterial';
 import { Modal } from './ui/Modal';
+import { ROLE_COPY, SHARE_LOCAL_LINE } from '../lib/identity-copy';
 import '../styles/overlays.css';
 
 export type AppDialog =
@@ -17,7 +20,9 @@ export type AppDialog =
   | { type: 'delete'; documentId: string; title: string }
   | { type: 'share'; documentId: string; title: string }
   | { type: 'preferences' }
-  | { type: 'command-palette' };
+  | { type: 'command-palette' }
+  | { type: 'keep-workspace' }
+  | { type: 'account' };
 
 export type ReviewSurface =
   | { type: 'comments'; documentId: string; title: string }
@@ -170,7 +175,7 @@ function ShareDialog({
         <Icon path={icons.check} size={15} />
         <span>
           <strong>Local workspace</strong>
-          Access changes are staged in the interface; no invitation is transmitted.
+          {SHARE_LOCAL_LINE}
         </span>
       </div>
 
@@ -199,9 +204,9 @@ function ShareDialog({
             onChange={(event) => setEmail(event.target.value)}
           />
           <select aria-label="Access level" value={access} onChange={(event) => setAccess(event.target.value as typeof access)}>
-            <option value="editor">Can edit</option>
-            <option value="commenter">Can comment</option>
-            <option value="viewer">Can view</option>
+            <option value="editor">{ROLE_COPY.editor.label}</option>
+            <option value="commenter">{ROLE_COPY.commenter.label}</option>
+            <option value="viewer">{ROLE_COPY.viewer.label}</option>
           </select>
           <button type="submit" className="button" disabled={!email.includes('@')}>Stage</button>
         </div>
@@ -210,14 +215,14 @@ function ShareDialog({
       <div className="access-list">
         <div className="access-person">
           <span className="avatar avatar-self">Y</span>
-          <span><strong>You</strong><small>Owner · this browser</small></span>
-          <span>Owner</span>
+          <span><strong>You</strong><small>{ROLE_COPY.owner.detail}</small></span>
+          <span>{ROLE_COPY.owner.label}</span>
         </div>
         {staged.map((person) => (
           <div className="access-person" key={person.email}>
             <span className="avatar">{person.email[0].toUpperCase()}</span>
             <span><strong>{person.email}</strong><small>Staged locally</small></span>
-            <span>{person.access === 'editor' ? 'Can edit' : person.access === 'commenter' ? 'Can comment' : 'Can view'}</span>
+            <span>{ROLE_COPY[person.access].label}</span>
           </div>
         ))}
       </div>
@@ -519,9 +524,26 @@ export function AppOverlays(props: AppOverlaysProps) {
     content = <DeleteDialog dialog={renderedDialog} onDelete={props.onDelete} />;
   } else if (renderedDialog?.type === 'share') {
     title = 'Share document';
-    description = 'The complete access UI, backed by local prototype state.';
+    description = 'Owner, editor, commenter, viewer. Scratch cannot share.';
     size = 'large';
     content = <ShareDialog key={renderedDialog.documentId} dialog={renderedDialog} onNotify={props.onNotify} />;
+  } else if (renderedDialog?.type === 'keep-workspace') {
+    title = 'Keep this workspace';
+    description = 'A scratch tab is not a person.';
+    content = (
+      <KeepWorkspace
+        onNotify={props.onNotify}
+      />
+    );
+  } else if (renderedDialog?.type === 'account') {
+    title = 'Account and devices';
+    description = 'Phone controller, this browser, and honest scratch.';
+    content = (
+      <AccountSheet
+        onNotify={props.onNotify}
+        onKeep={() => props.onAction('keep-workspace')}
+      />
+    );
   } else if (renderedDialog?.type === 'preferences') {
     title = 'Appearance';
     description = 'Make Marks feel right without making it heavier.';

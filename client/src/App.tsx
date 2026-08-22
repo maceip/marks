@@ -377,6 +377,12 @@ export function App() {
           openDocument(ABOUT_DOCUMENT_ID);
           if (!phone) setMode('split');
           break;
+        case 'keep-workspace':
+          openDialog({ type: 'keep-workspace' });
+          break;
+        case 'account':
+          openDialog({ type: 'account' });
+          break;
         case 'find': {
           const view = viewRef.current;
           if (view) void import('./editor/actions').then(({ openFind }) => openFind(view));
@@ -597,6 +603,7 @@ export function App() {
             onOpenTemplates={() => openDialog({ type: 'templates' })}
             onOpenBenchmark={openBenchmark}
             onOpenPreferences={() => openDialog({ type: 'preferences' })}
+            onKeepWorkspace={() => openDialog({ type: 'keep-workspace' })}
           />
         )}
 

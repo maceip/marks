@@ -126,6 +126,16 @@ export function TopBar(props: TopBarProps) {
               {props.localMode ? 'On this device' : STATUS_LABEL[props.status]}
             </span>
           )}
+
+          {props.localMode && !props.posture.phone && (
+            <button
+              type="button"
+              className="identity-chip"
+              onClick={() => props.onAction('keep-workspace')}
+            >
+              Temporary
+            </button>
+          )}
         </div>
 
           <div className="topbar-right">
@@ -194,6 +204,8 @@ export function TopBar(props: TopBarProps) {
             </button>
             {moreOpen && (
               <div className="popover-menu" role="menu">
+                <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('keep-workspace'); }}><Icon path={icons.share} /> Keep workspace</button>
+                <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('account'); }}><Icon path={icons.settings} /> Account</button>
                 <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('preferences'); }}><Icon path={icons.settings} /> Appearance</button>
                 <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('benchmark'); }}><Icon path={icons.gauge} /> Performance</button>
                 <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('about'); }}><Icon path={icons.bolt} /> About marks</button>

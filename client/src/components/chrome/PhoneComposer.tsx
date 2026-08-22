@@ -67,6 +67,8 @@ const INSERT: Array<{ glyph: GlyphName; label: string; run: 'command' | 'file' |
 
 const MORE: Array<{ glyph: GlyphName; label: string; action: UiActionId | 'find' | 'outline' }> = [
   { glyph: 'plus', label: 'New page', action: 'new' },
+  { glyph: 'share', label: 'Keep', action: 'keep-workspace' },
+  { glyph: 'settings', label: 'Account', action: 'account' },
   { glyph: 'template', label: 'Templates', action: 'templates' },
   { glyph: 'pencil', label: 'Rename', action: 'rename' },
   { glyph: 'download', label: 'Export', action: 'download' },

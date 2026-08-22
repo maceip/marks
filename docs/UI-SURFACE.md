@@ -69,6 +69,12 @@ The welcome URL exists so a public deployment can keep a stable marketing
 address. The page people read is a Marks document: source, preview, ribbon,
 and the same Markdown that describes the product, accounts, and machinery.
 
+Identity chrome (Temporary chip, Keep workspace, Account and devices, and
+Share roles) is presentation-complete in local mode. It uses the same tokens
+on desktop, phone, and fold. It does not claim a pairing ticket, a sent
+invitation, or a signed-in principal. The HTTP contract lives in
+[`UI-SERVICE-CONTRACT.md`](UI-SERVICE-CONTRACT.md).
+
 ## Replaceable data plumbing
 
 The complete visible product runs without the backing service. Local mode is

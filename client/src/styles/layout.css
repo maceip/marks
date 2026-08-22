@@ -340,6 +340,20 @@
   color: var(--text);
 }
 
+.identity-chip {
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--brand-amber) 40%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand-amber) 14%, transparent);
+  color: var(--brand-amber);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
 .ribbon-body {
   display: grid;
   grid-template-rows: 27px minmax(0, 1fr);

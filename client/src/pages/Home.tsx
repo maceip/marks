@@ -16,6 +16,7 @@ interface HomeProps {
   onOpenTemplates: () => void;
   onOpenBenchmark: () => void;
   onOpenPreferences: () => void;
+  onKeepWorkspace: () => void;
 }
 
 export function Home({
@@ -27,6 +28,7 @@ export function Home({
   onOpenTemplates,
   onOpenBenchmark,
   onOpenPreferences,
+  onKeepWorkspace,
 }: HomeProps) {
   const recent = documents.slice(0, 4);
 
@@ -47,6 +49,9 @@ export function Home({
             </button>
             <button type="button" className="button" onClick={onOpenTemplates}>
               <Icon path={icons.template} /> Browse templates
+            </button>
+            <button type="button" className="button" onClick={onKeepWorkspace}>
+              Keep this workspace
             </button>
           </div>
         </div>
