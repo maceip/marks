@@ -36,7 +36,7 @@ export function useRoute(): [Route, (route: Route, options?: { replace?: boolean
   const navigate = useCallback((next: Route, options?: { replace?: boolean }) => {
     const path = routeToPath(next);
     if (path !== location.pathname) {
-      history[options?.replace ? 'replaceState' : 'pushState']({}, '', path);
+      history[options?.replace ? 'replaceState' : 'pushState']({}, '', `${path}${location.search}`);
     }
     setRoute(next);
   }, []);
