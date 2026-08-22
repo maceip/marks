@@ -651,7 +651,9 @@ pure, database-independent validators and typed authenticated results:
 - one-use scratch ticket redemption into a non-principal `ScratchActor`;
 - the complete document role matrix.
 
-The implemented browser boundary is `client/src/auth`. It currently provides:
+The browser implementer contract — paths, JSON, cookies, and what the UI
+still owes — is [`UI-SERVICE-CONTRACT.md`](UI-SERVICE-CONTRACT.md). The
+implemented browser boundary is `client/src/auth`. It currently provides:
 
 - non-extractable P-256 device keys and Rust-compatible canonical signatures;
 - tab-scoped scratch capability storage and high-entropy pairing fragments;

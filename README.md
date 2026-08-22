@@ -206,13 +206,20 @@ npm run test:esbt        # 41 CRDT engine contract tests, including fuzzed conve
 npm run test:browser     # clipboard, context-menu, select-all, tab isolation
 npm run test:markdown    # document-global preview invalidation
 npm run test:auth        # browser/Rust canonical auth wire and scratch helpers
-npm run test:harness     # chrome discovery, measure budgets, wait-for-server
-cargo test --workspace  # Marks-owned Rust authn/authz validators
+npm run test:harness     # helper units only: chrome discovery, budget parsers, wait-for-server
+cargo test --workspace   # marks-auth validators plus marks-server HTTP/room integration
+npm run check:ui-budgets # gzip critical-path budgets after npm run build
 npm run harness:probe    # print Playwright / Puppeteer / agent-browser + Chrome paths
 npm run smoke            # Playwright two-peer / REST smoke
 npm run smoke:platforms  # portable glass checks on Playwright, Puppeteer, agent-browser
 npm run measure          # latency on a large generated document
 ```
+
+GitHub Actions (`.github/workflows/ci.yml`) runs the commands above that do not
+need a browser or a running server, on the Rust version in `rust-toolchain.toml`
+(the same pin as `workspace.package.rust-version`). It does **not** run
+`smoke` / `smoke:platforms` / `measure`. A green CI check is not proof of
+multi-peer collaboration or service-mode admission.
 
 `npm run smoke` is Playwright-only and checks the things that need two real
 browsers or the REST surface. It is retained as the acceptance suite for the
@@ -268,3 +275,7 @@ The research behind the CRDT choices, with papers and implementations from
 January 2025 to August 2026, is in [docs/RESEARCH.md](docs/RESEARCH.md). The
 browser-surface review — right-click, clipboard, voice, caching,
 multi-tab, slow/offline — is in [docs/BROWSER-SURFACE.md](docs/BROWSER-SURFACE.md).
+The UI presentation contract is [docs/UI-SURFACE.md](docs/UI-SURFACE.md). The
+HTTP, cookie, and room-admission interfaces the frontend must implement
+against `marks-server` are in
+[docs/UI-SERVICE-CONTRACT.md](docs/UI-SERVICE-CONTRACT.md).

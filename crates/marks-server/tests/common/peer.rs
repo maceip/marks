@@ -1,6 +1,9 @@
 //! A test collaborator: a real ESBT-web Rust replica speaking the Marks room
 //! protocol over a real WebSocket — exactly what a future native/Wasm client
 //! does.
+//!
+//! Shared across integration crates; some helpers are unused in a given crate.
+#![allow(dead_code)]
 
 use base64ct::{Base64UrlUnpadded, Encoding};
 use futures_util::{SinkExt, StreamExt};
@@ -131,10 +134,10 @@ impl Peer {
                         // Reply only when this replica actually holds ops the
                         // server lacks. Read-only sockets never send updates;
                         // the room closes writers it has not authorized.
-                        if !version.covers(&self.doc.version()) {
-                            if let Ok(missing) = self.doc.export_update(&version) {
-                                self.send(MSG_UPDATE, &missing).await;
-                            }
+                        if !version.covers(&self.doc.version())
+                            && let Ok(missing) = self.doc.export_update(&version)
+                        {
+                            self.send(MSG_UPDATE, &missing).await;
                         }
                         PeerEvent::Other
                     }

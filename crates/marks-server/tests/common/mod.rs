@@ -1,5 +1,8 @@
 //! Integration harness: a real marks-server on a real TCP listener with a
 //! temporary SQLite database, plus browser-equivalent crypto helpers.
+//!
+//! Shared across integration crates; some helpers are unused in a given crate.
+#![allow(dead_code)]
 
 pub mod peer;
 

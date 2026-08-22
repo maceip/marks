@@ -1,0 +1,7 @@
+# Keep local rustup and GitHub Actions on the same compiler as
+# workspace.package.rust-version. Do not point CI at floating `stable` —
+# that made 1.88-green trees fail on 1.98 Clippy style lints.
+[toolchain]
+channel = "1.88.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

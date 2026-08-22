@@ -141,7 +141,9 @@ async fn two_peers_converge_offline_delta_and_restart_recovery() {
 
     // Snapshot endpoint serves engine bytes a fresh replica can import.
     let snapshot = http
-        .get(format!("{base}/v1/documents/{document_id}/snapshot"))
+        .get(format!(
+            "{base}/v1/scratch/documents/{document_id}/snapshot"
+        ))
         .header("Authorization", &auth)
         .send()
         .await

@@ -79,9 +79,10 @@ impl Db {
 /// Ordered, transactional migrations. Constraints here are protocol
 /// requirements from `docs/AUTHN-AUTHZ-PROTOCOL.md` §9, not implementation
 /// convenience.
-const MIGRATIONS: &[(i64, &str)] = &[(
-    1,
-    "
+const MIGRATIONS: &[(i64, &str)] = &[
+    (
+        1,
+        "
     CREATE TABLE principals (
         id TEXT PRIMARY KEY,
         created_at INTEGER NOT NULL,
@@ -275,4 +276,13 @@ const MIGRATIONS: &[(i64, &str)] = &[(
         PRIMARY KEY(document_id, site, seq)
     );
     ",
-)];
+    ),
+    (
+        2,
+        "
+    -- Device challenges snapshot the enrolled key epoch at mint time so a
+    -- rotation between challenge and proof cannot mint a session.
+    ALTER TABLE auth_challenges ADD COLUMN key_epoch INTEGER;
+    ",
+    ),
+];
