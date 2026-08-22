@@ -1,3 +1,4 @@
+import type { VersionVector as VersionVectorContract } from './api.js';
 import { Reader, TAG_VV, Writer, readVersion, writeVersion } from './codec.js';
 import type { SiteId } from './weight.js';
 
@@ -6,7 +7,7 @@ import type { SiteId } from './weight.js';
  * integrated), not the paper's insertion counter `c`. Encoded size grows
  * with the number of sites that ever wrote, never with document length.
  */
-export class VersionVector {
+export class VersionVector implements VersionVectorContract {
   readonly next: Map<SiteId, number>;
 
   constructor(next: Map<SiteId, number> = new Map()) {
