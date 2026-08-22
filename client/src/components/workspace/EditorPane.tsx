@@ -1,8 +1,8 @@
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { useLayoutEffect, useRef } from 'react';
-import type { CollabSession } from '../collab/types';
-import { createEditorExtensions } from '../editor/setup';
+import type { CollabSession } from '../../collab/types';
+import { createEditorExtensions } from '../../editor/setup';
 
 export interface CursorInfo {
   line: number;

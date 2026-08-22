@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
-import type { CollabSession } from '../collab/types';
-import { PreviewRenderer, type PreviewStats } from '../markdown/preview';
-import type { Heading } from '../markdown/types';
+import type { CollabSession } from '../../collab/types';
+import { PreviewRenderer, type PreviewStats } from '../../markdown/preview';
+import type { Heading } from '../../markdown/types';
 
 interface PreviewPaneProps {
   session: CollabSession;

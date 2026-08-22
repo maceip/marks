@@ -5,15 +5,16 @@ import { loadScratchCredential } from './auth/scratch';
 import { loadUser } from './collab/user';
 import type { AppDialog, ReviewSurface } from './components/AppOverlays';
 import { ContextMenu } from './components/ContextMenu';
-import type { CursorInfo } from './components/EditorPane';
-import { HomeSurface } from './components/HomeSurface';
 import { Icon, icons } from './components/Icon';
 import { LiquidDock } from './components/LiquidDock';
 import { OpeningShell } from './components/OpeningShell';
-import { Outline } from './components/Outline';
 import { PerfHud } from './components/PerfHud';
 import { Sidebar } from './components/Sidebar';
-import { StatusBar } from './components/StatusBar';
+import type { CursorInfo } from './components/workspace/EditorPane';
+import { Outline } from './components/workspace/Outline';
+import { StatusBar } from './components/workspace/StatusBar';
+import { ABOUT_DOCUMENT_ID } from './content/about';
+import { Home } from './pages/Home';
 import { TopBar, type ViewMode } from './components/TopBar';
 import { ToastRegion, type ToastMessage } from './components/ToastRegion';
 import { VoiceBar } from './components/VoiceBar';
@@ -39,7 +40,7 @@ const Benchmark = lazy(() =>
   import('./pages/Benchmark').then((module) => ({ default: module.Benchmark })),
 );
 const Workspace = lazy(() =>
-  import('./components/Workspace').then((module) => ({ default: module.Workspace })),
+  import('./components/workspace/Workspace').then((module) => ({ default: module.Workspace })),
 );
 const AppOverlays = lazy(() =>
   import('./components/AppOverlays').then((module) => ({ default: module.AppOverlays })),
@@ -373,7 +374,8 @@ export function App() {
           openBenchmark();
           break;
         case 'about':
-          location.assign('/welcome/');
+          openDocument(ABOUT_DOCUMENT_ID);
+          if (!phone) setMode('split');
           break;
         case 'find': {
           const view = viewRef.current;
@@ -394,7 +396,9 @@ export function App() {
       openBenchmark,
       openDialog,
       outlineOpen,
+      openDocument,
       overlayNavigation,
+      phone,
       reviewSurface,
       session,
       sidebarOpen,
@@ -472,8 +476,8 @@ export function App() {
   }, [route.name]);
 
   return (
-    <div className={`app route-${route.name}${sidebarOpen && !focusMode ? ' with-sidebar' : ''}${focusMode ? ' focus-mode' : ''}${ribbonCollapsed ? ' ribbon-collapsed' : ''}`} data-shell={posture.shell}>
-      {sidebarOpen && !focusMode && (
+    <div className={`app route-${route.name}${sidebarOpen && !focusMode && !posture.foldable ? ' with-sidebar' : ''}${focusMode ? ' focus-mode' : ''}${ribbonCollapsed ? ' ribbon-collapsed' : ''}`} data-shell={posture.shell} data-doc={docId ?? undefined}>
+      {sidebarOpen && !focusMode && !posture.foldable && (
         <Sidebar
           documents={documents.documents}
           activeId={docId}
@@ -489,6 +493,7 @@ export function App() {
             if (document) openDialog({ type: 'delete', documentId: id, title: document.title });
           }}
           onOpenBenchmark={openBenchmark}
+          onOpenAbout={() => openDocument(ABOUT_DOCUMENT_ID)}
         />
       )}
 
@@ -583,7 +588,7 @@ export function App() {
         ) : docId ? (
           <OpeningShell cached={Boolean(meta)} offline={surface.network === 'offline'} />
         ) : (
-          <HomeSurface
+          <Home
             documents={documents.documents}
             loading={documents.loading}
             onCreate={() => void createDocument()}

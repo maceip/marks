@@ -1,13 +1,13 @@
 import type { DocumentMeta } from '../lib/api';
 import { formatCount, formatRelativeTime } from '../lib/format';
-import { DOCUMENT_TEMPLATES, type TemplateId } from '../demo/workspace';
+import { ABOUT_DOCUMENT_ID, DOCUMENT_TEMPLATES, type TemplateId } from '../demo/workspace';
 import { UI_PERFORMANCE_RECEIPT } from '../lib/product';
-import { Icon, icons } from './Icon';
-import { MarksMark } from './MarksMark';
-import { SurfaceMaterial } from './SurfaceMaterial';
+import { Icon, icons } from '../components/Icon';
+import { MarksMark } from '../components/MarksMark';
+import { SurfaceMaterial } from '../components/SurfaceMaterial';
 import '../styles/home.css';
 
-interface HomeSurfaceProps {
+interface HomeProps {
   documents: DocumentMeta[];
   loading: boolean;
   onCreate: () => void;
@@ -18,7 +18,7 @@ interface HomeSurfaceProps {
   onOpenPreferences: () => void;
 }
 
-export function HomeSurface({
+export function Home({
   documents,
   loading,
   onCreate,
@@ -27,7 +27,7 @@ export function HomeSurface({
   onOpenTemplates,
   onOpenBenchmark,
   onOpenPreferences,
-}: HomeSurfaceProps) {
+}: HomeProps) {
   const recent = documents.slice(0, 4);
 
   return (
@@ -104,7 +104,10 @@ export function HomeSurface({
 
       <footer className="home-footer-card">
         <span><Icon path={icons.check} size={14} /> <strong>UI prototype mode</strong> · real local persistence, replaceable data adapters</span>
-        <button type="button" onClick={onOpenPreferences}><Icon path={icons.settings} size={14} /> Appearance</button>
+        <div className="home-footer-actions">
+          <button type="button" onClick={() => onOpen(ABOUT_DOCUMENT_ID)}>About Marks</button>
+          <button type="button" onClick={onOpenPreferences}><Icon path={icons.settings} size={14} /> Appearance</button>
+        </div>
       </footer>
     </div>
   );

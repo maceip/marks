@@ -1,6 +1,6 @@
-import type { NetworkQuality } from '../browser';
-import type { ConnectionStatus } from '../collab/types';
-import { formatCount, formatMs, readingTime } from '../lib/format';
+import type { NetworkQuality } from '../../browser';
+import type { ConnectionStatus } from '../../collab/types';
+import { formatCount, formatMs, readingTime } from '../../lib/format';
 import type { CursorInfo } from './EditorPane';
 
 interface StatusBarProps {

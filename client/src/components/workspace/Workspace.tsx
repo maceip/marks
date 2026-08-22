@@ -1,16 +1,16 @@
 import type { EditorView } from '@codemirror/view';
 import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState } from 'react';
-import type { CollabSession } from '../collab/types';
-import type { Posture } from '../lib/posture';
-import type { UiActionId } from '../lib/ui-actions';
-import type { ScrollSync } from '../lib/scroll-sync';
-import type { PreviewStats } from '../markdown/preview';
-import type { Heading } from '../markdown/types';
-import '../styles/document.css';
-import '../styles/chrome.css';
+import type { CollabSession } from '../../collab/types';
+import type { Posture } from '../../lib/posture';
+import type { UiActionId } from '../../lib/ui-actions';
+import type { ScrollSync } from '../../lib/scroll-sync';
+import type { PreviewStats } from '../../markdown/preview';
+import type { Heading } from '../../markdown/types';
+import '../../styles/document.css';
+import '../../styles/chrome.css';
 import { Outline } from './Outline';
 import type { CursorInfo } from './EditorPane';
-import type { ViewMode } from './TopBar';
+import type { ViewMode } from '../TopBar';
 
 const EditorPane = lazy(() =>
   import('./EditorPane').then((module) => ({ default: module.EditorPane })),
@@ -19,7 +19,7 @@ const PreviewPane = lazy(() =>
   import('./PreviewPane').then((module) => ({ default: module.PreviewPane })),
 );
 const AiSheet = lazy(() =>
-  import('./chrome/AiSheet').then((module) => ({ default: module.AiSheet })),
+  import('../chrome/AiSheet').then((module) => ({ default: module.AiSheet })),
 );
 
 interface WorkspaceProps {

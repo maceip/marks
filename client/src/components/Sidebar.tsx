@@ -17,6 +17,7 @@ interface SidebarProps {
   onCreate: () => void;
   onDelete: (id: string) => void;
   onOpenBenchmark: () => void;
+  onOpenAbout: () => void;
 }
 
 export function Sidebar({
@@ -31,6 +32,7 @@ export function Sidebar({
   onCreate,
   onDelete,
   onOpenBenchmark,
+  onOpenAbout,
 }: SidebarProps) {
   const [query, setQuery] = useState('');
   const panelRef = useRef<HTMLElement>(null);
@@ -168,7 +170,9 @@ export function Sidebar({
             <Icon path={icons.gauge} />
             Benchmark
           </button>
-          <a href="/welcome/">About marks</a>
+          <a href="/d/about-marks" onClick={(event) => { event.preventDefault(); onOpenAbout(); }}>
+            About marks
+          </a>
         </div>
       </aside>
     </Fragment>

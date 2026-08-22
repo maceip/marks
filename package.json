@@ -22,7 +22,7 @@
     "clean": "rm -rf client/dist esbt/dist node_modules/.vite",
     "test:esbt": "npm test --workspace=@marks/esbt",
     "test:browser": "node --experimental-strip-types --test client/src/browser/*.test.ts",
-    "test:surface": "node --experimental-strip-types --test client/src/lib/posture.test.ts client/src/lib/ai-compose.test.ts client/src/editor/*.test.ts",
+    "test:surface": "node --experimental-strip-types --test client/src/lib/posture.test.ts client/src/lib/ai-compose.test.ts client/src/editor/*.test.ts client/src/hooks/useRoute.test.ts client/src/content/about.test.ts",
     "test:markdown": "node --experimental-strip-types --test client/src/markdown/*.test.ts",
     "test:auth": "node --experimental-strip-types --test client/src/auth/*.test.ts",
     "test:harness": "node --test scripts/harness/*.test.mjs",

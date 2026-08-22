@@ -11,17 +11,19 @@ Marks has one web application implementation:
 
 - `client/src/main.tsx` is the only React root.
 - `client/src/App.tsx` is the only application shell and route compositor.
-- `client/src/components/` owns reusable product surfaces. Shared modal
-  mechanics live under `components/ui/`; they are not a second design system.
+- `client/src/pages/` owns route-level screens (`Home`, `Benchmark`).
+- `client/src/components/` owns reusable product surfaces:
+  `chrome/` for the ribbon and phone composer, `workspace/` for the document
+  panes, `glyphs/` for 3D command icons, and `ui/` for shared modal mechanics.
+- `client/src/content/` owns canonical documents that are themselves product
+  surfaces. About Marks lives here and opens in the real editor.
 - `client/src/styles/` owns the single token and component-style stack.
 - `client/index.html` is the application entry.
 
-`client/welcome/index.html` is the only exception to the single-entry rule. It
-is a deliberately static-first marketing document, not an alternate app: it
-has no React root, editor, session, data model, or duplicate component tree.
-Keeping it independent prevents the public page from paying the application
-runtime cost. The benchmark is a lazy route inside the canonical app, not a
-third browser implementation.
+`client/welcome/index.html` is a bounce page, not a second website. It has no
+React root, editor, or duplicate design system. It immediately opens
+`/d/about-marks`, which is the same document workspace every other page uses.
+The benchmark is a lazy route inside the canonical app.
 
 Do not introduce another `web`, `webapp`, `frontend`, `ui`, React root, app
 shell, token set, or document editor. New UI work should extend the canonical
@@ -58,14 +60,14 @@ directional references, not source code or pixel-exact specifications.
 
 | Surface | Entry | Loading rule | Owner |
 | --- | --- | --- | --- |
-| Workspace home | `/` | App shell, local catalog, and home CSS only | `App` + `HomeSurface` |
-| Document | `/d/:id` | Session, CodeMirror, workspace, preview, and review overlays load on demand | `App` + `TopBar` + `Workspace` |
-| Benchmark | `/bench` | Benchmark view, CSS, and worker load only on this route | `Benchmark` |
-| Marketing | `/welcome/` | Independent static HTML/CSS plus a sub-1 KB interaction script | `welcome/index.html` + `marketing.ts` |
+| Workspace home | `/` | App shell, local catalog, and home CSS only | `App` + `pages/Home` |
+| Document | `/d/:id` | Session, CodeMirror, workspace, preview, and review overlays load on demand | `App` + `TopBar` + `components/workspace` |
+| Benchmark | `/bench` | Benchmark view, CSS, and worker load only on this route | `pages/Benchmark` |
+| About / welcome | `/welcome/` → `/d/about-marks` | Tiny HTML bounce, then the real document editor | `content/about.ts` + document chrome |
 
-The marketing entry exists so a public deployment can map its domain root to
-`welcome/index.html` without changing the application router or forcing public
-visitors to download React or the editor.
+The welcome URL exists so a public deployment can keep a stable marketing
+address. The page people read is a Marks document: source, preview, ribbon,
+and the same Markdown that describes the product, accounts, and machinery.
 
 ## Replaceable data plumbing
 
@@ -222,8 +224,8 @@ not raw artifact size:
 
 | Entry or phase | Budget |
 | --- | ---: |
-| Marketing JavaScript | <= 5 KB |
-| Marketing critical HTML + CSS + JS | <= 25 KB |
+| Welcome bounce JavaScript | <= 5 KB |
+| Welcome bounce HTML + CSS + JS | <= 25 KB |
 | App-shell JavaScript before a document opens | <= 100 KB |
 | App-shell CSS | <= 10 KB |
 | Work done by the HUD with no live session | 0 intervals |
@@ -231,7 +233,7 @@ not raw artifact size:
 Additional rules:
 
 - CodeMirror, ESBT session code, KaTeX styles, and preview code do not enter the
-  home or marketing critical path.
+  home critical path. The welcome bounce stays HTML-only.
 - Local and service sessions load only after a document route asks for one.
 - Review dialogs/drawers load only after the first overlay interaction.
 - Mermaid and language/diagram implementations load only when document content
@@ -247,10 +249,9 @@ Additional rules:
 
 From a clean `npm run build` followed by `npm run check:ui-budgets`:
 
-- Marketing critical path: **8.86 KB gzip** total—3.08 KB HTML, 0.54 KB
-  JavaScript, and 5.25 KB CSS.
-- App-home critical path: **91.80 KB gzip** total—0.76 KB HTML, 82.11 KB
-  JavaScript, and 8.92 KB CSS.
+- Welcome bounce: **0.56 KB gzip** HTML only, then the real document editor.
+- App-home critical path: **96.77 KB gzip** total—0.83 KB HTML, 86.22 KB
+  JavaScript, and 9.72 KB CSS.
 - App overlays remain a feature-paid 5.33 KB JavaScript and 3.51 KB CSS gzip by
   Vite's report; they are absent from initial home references.
 - Plain Markdown worker: **72.62 KB gzip** measured at level 9. Syntax
@@ -279,7 +280,7 @@ network timing on the eventual deployment and CDN.
 
 Before a UI handoff, verify at minimum:
 
-- marketing and workspace home at `1440x900` and `390x844`;
+- About Marks (`/welcome/` → `/d/about-marks`) and workspace home at `1440x900` and `390x844`;
 - document ribbon at `1440x900`, `390x844`, `853x1280`, and `1280x853`;
 - persistent desktop rail and modal tablet/phone drawer behavior;
 - File, Home, Insert, Draw, AI, Review, and View ribbon decks plus contextual

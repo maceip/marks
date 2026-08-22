@@ -107,7 +107,11 @@ client/                     Vite + React + TypeScript
   markdown/                 markdown-it setup, block diffing, DOM patching
   workers/                  markdown.worker.ts, bench.worker.ts
   editor/                   CodeMirror 6 setup, commands, theme
-  components/ pages/        UI
+  pages/                    route screens: Home, Benchmark
+  content/                  canonical documents (About opens in the editor)
+  components/chrome/        Word-inspired ribbon, phone composer
+  components/workspace/     editor, preview, outline, status
+  components/glyphs/        3D folded-glass command icons
 esbt/                       temporary TypeScript ESBT browser adapter
 crates/marks-auth/          identity/authorization validators
 crates/marks-server/        the only HTTP/WebSocket process
