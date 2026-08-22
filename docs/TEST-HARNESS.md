@@ -46,6 +46,8 @@ npm run harness:probe -- --launch  # plus a userAgent check on each driver
 npm run test:harness               # chrome-discovery unit tests
 
 # app must already be running
+npm run measure                    # large-doc preview latency (print only)
+npm run measure -- --budget-p50 400 --budget-p95 900 --budget-first-ms 45000
 npm run smoke                      # Playwright two-peer / REST / engines
 npm run smoke:surface              # portable glass checks, Playwright
 npm run smoke:puppeteer
@@ -65,6 +67,8 @@ MARKS_URL=http://127.0.0.1:3000 npm run smoke:platforms
 **Portable surface** (`scripts/harness/suites/surface.mjs`) — create a document, first paint, scoped select-all, preview context menu, comment composer, voice button, theme toggle, offline status. This is the set that must stay green on all three platforms.
 
 **Playwright smoke** (`scripts/smoke.mjs`) — the above plus incremental preview, two ESBT peers, per-user undo, checkbox write-back, outline, scroll sync, snapshot/export REST, live-room delete, retired-engine refusal.
+
+**Measure** (`scripts/measure.mjs`) — types a ~60 KB document, then 60 keystrokes in the middle, and prints the HUD. `--budget-*` flags (used by `.github/workflows/daily-perf.yml`) fail the process when first-render, p50/p95, dirty blocks, or DOM ops exceed a cap. The wait for the app in that workflow is `scripts/wait-for-server.sh`: it times out and also fails if the server PID exits before `/` answers.
 
 ## Adding a check
 
