@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { forgetDocumentMeta, readCatalog, writeCatalog } from '../browser/catalog-cache';
 import { documentRepository, type LocalDocumentDraft } from '../data/documents';
 import type { DocumentMeta } from '../lib/api';
+import { copyForUnknownFailure, ServiceError } from '../lib/service-errors';
 
 const POLL_INTERVAL_MS = 8_000;
 
@@ -39,7 +40,10 @@ export function useDocuments(enabled = true): DocumentsState {
       setStale(false);
       if (documentRepository.mode === 'service') void writeCatalog(next);
     } catch (cause) {
-      if (mounted.current) setError(cause instanceof Error ? cause.message : 'Request failed');
+      if (mounted.current) {
+        const copy = cause instanceof ServiceError ? cause.copy : copyForUnknownFailure();
+        setError(copy.detail);
+      }
     } finally {
       if (mounted.current) setLoading(false);
     }

@@ -12,6 +12,8 @@ describe('parseRoute', () => {
   it('keeps document and benchmark routes', () => {
     assert.deepEqual(parseRoute('/d/about-marks'), { name: 'document', id: 'about-marks' });
     assert.deepEqual(parseRoute('/bench'), { name: 'benchmark' });
+    assert.deepEqual(parseRoute('/link'), { name: 'link' });
+    assert.deepEqual(parseRoute('/link/'), { name: 'link' });
     assert.deepEqual(parseRoute('/'), { name: 'home' });
   });
 

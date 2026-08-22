@@ -11,7 +11,8 @@ import { KeepWorkspace } from '../identity/KeepWorkspace';
 import { Icon, icons } from '../ui/Icon';
 import { SurfaceMaterial } from '../ui/SurfaceMaterial';
 import { Modal } from '../ui/Modal';
-import { ROLE_COPY, SHARE_LOCAL_LINE } from '../../lib/identity-copy';
+import { PairingInspect } from '../identity/PairingInspect';
+import { ShareDialog } from '../identity/ShareDialog';
 import '../../styles/overlays.css';
 
 export type AppDialog =
@@ -22,7 +23,8 @@ export type AppDialog =
   | { type: 'preferences' }
   | { type: 'command-palette' }
   | { type: 'keep-workspace' }
-  | { type: 'account' };
+  | { type: 'account' }
+  | { type: 'pairing-inspect' };
 
 export type ReviewSurface =
   | { type: 'comments'; documentId: string; title: string }
@@ -143,94 +145,6 @@ function DeleteDialog({
       <div className="dialog-actions">
         <button type="button" className="button danger-button" data-autofocus onClick={() => onDelete(dialog.documentId)}>
           Delete document
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function ShareDialog({
-  dialog,
-  onNotify,
-}: {
-  dialog: Extract<AppDialog, { type: 'share' }>;
-  onNotify: AppOverlaysProps['onNotify'];
-}) {
-  const [email, setEmail] = useState('');
-  const [access, setAccess] = useState<'editor' | 'commenter' | 'viewer'>('editor');
-  const [staged, setStaged] = useState<Array<{ email: string; access: typeof access }>>([]);
-
-  const copyLink = async () => {
-    try {
-      await navigator.clipboard.writeText(location.href);
-      onNotify('Link copied', 'This local prototype link is ready to paste.', 'success');
-    } catch {
-      onNotify('Copy was blocked', 'Select the address from the browser bar instead.', 'danger');
-    }
-  };
-
-  return (
-    <div className="share-dialog">
-      <div className="local-notice">
-        <Icon path={icons.check} size={15} />
-        <span>
-          <strong>Local workspace</strong>
-          {SHARE_LOCAL_LINE}
-        </span>
-      </div>
-
-      <form
-        className="share-invite"
-        onSubmit={(event) => {
-          event.preventDefault();
-          const value = email.trim();
-          if (!value || !value.includes('@')) return;
-          setStaged((current) => [
-            ...current.filter((person) => person.email !== value),
-            { email: value, access },
-          ]);
-          setEmail('');
-          onNotify('Invite staged locally', `${value} was added to the prototype access list.`, 'success');
-        }}
-      >
-        <label htmlFor="share-email">People with access</label>
-        <div className="share-input-row">
-          <input
-            id="share-email"
-            data-autofocus
-            type="email"
-            placeholder="name@example.com"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-          />
-          <select aria-label="Access level" value={access} onChange={(event) => setAccess(event.target.value as typeof access)}>
-            <option value="editor">{ROLE_COPY.editor.label}</option>
-            <option value="commenter">{ROLE_COPY.commenter.label}</option>
-            <option value="viewer">{ROLE_COPY.viewer.label}</option>
-          </select>
-          <button type="submit" className="button" disabled={!email.includes('@')}>Stage</button>
-        </div>
-      </form>
-
-      <div className="access-list">
-        <div className="access-person">
-          <span className="avatar avatar-self">Y</span>
-          <span><strong>You</strong><small>{ROLE_COPY.owner.detail}</small></span>
-          <span>{ROLE_COPY.owner.label}</span>
-        </div>
-        {staged.map((person) => (
-          <div className="access-person" key={person.email}>
-            <span className="avatar">{person.email[0].toUpperCase()}</span>
-            <span><strong>{person.email}</strong><small>Staged locally</small></span>
-            <span>{ROLE_COPY[person.access].label}</span>
-          </div>
-        ))}
-      </div>
-
-      <div className="share-link-row">
-        <span><strong>{dialog.title}</strong><small>Only available in this browser today</small></span>
-        <button type="button" className="button primary" onClick={() => void copyLink()}>
-          <Icon path={icons.link} /> Copy link
         </button>
       </div>
     </div>
@@ -526,13 +440,14 @@ export function AppOverlays(props: AppOverlaysProps) {
     title = 'Share document';
     description = 'Owner, editor, commenter, viewer. Scratch cannot share.';
     size = 'large';
-    content = <ShareDialog key={renderedDialog.documentId} dialog={renderedDialog} onNotify={props.onNotify} />;
+    content = <ShareDialog key={renderedDialog.documentId} title={renderedDialog.title} onNotify={props.onNotify} />;
   } else if (renderedDialog?.type === 'keep-workspace') {
     title = 'Keep this workspace';
     description = 'A scratch tab is not a person.';
     content = (
       <KeepWorkspace
         onNotify={props.onNotify}
+        onOpenPhone={() => props.onAction('pairing')}
       />
     );
   } else if (renderedDialog?.type === 'account') {
@@ -548,6 +463,10 @@ export function AppOverlays(props: AppOverlaysProps) {
     title = 'Appearance';
     description = 'Make Marks feel right without making it heavier.';
     content = <PreferencesDialog theme={props.theme} preferences={props.preferences} onTheme={props.onTheme} onPreferences={props.onPreferences} />;
+  } else if (renderedDialog?.type === 'pairing-inspect') {
+    title = 'Phone confirmation';
+    description = 'Inspect, first phone, or approve. The secret stays in the fragment.';
+    content = <PairingInspect state="waiting" onNotify={props.onNotify} />;
   } else if (renderedDialog?.type === 'command-palette') {
     title = 'What do you want to do?';
     size = 'large';

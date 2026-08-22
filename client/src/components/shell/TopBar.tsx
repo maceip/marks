@@ -9,7 +9,7 @@ import { PresenceBar } from './PresenceBar';
 import { SurfaceMaterial } from '../ui/SurfaceMaterial';
 
 export type ViewMode = 'edit' | 'split' | 'preview';
-export type SurfaceRoute = 'home' | 'document' | 'benchmark';
+export type SurfaceRoute = 'home' | 'document' | 'benchmark' | 'link';
 
 const DocumentChrome = lazy(() =>
   import('../chrome/DocumentChrome').then((module) => ({ default: module.DocumentChrome })),
@@ -127,7 +127,7 @@ export function TopBar(props: TopBarProps) {
             </span>
           )}
 
-          {props.localMode && !props.posture.phone && (
+          {props.localMode && (
             <button
               type="button"
               className="identity-chip"
@@ -206,6 +206,8 @@ export function TopBar(props: TopBarProps) {
               <div className="popover-menu" role="menu">
                 <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('keep-workspace'); }}><Icon path={icons.share} /> Keep workspace</button>
                 <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('account'); }}><Icon path={icons.settings} /> Account</button>
+                <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('pairing'); }}><Icon path={icons.link} /> Phone confirmation</button>
+                <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('logout'); }}><Icon path={icons.close} /> Sign out</button>
                 <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('preferences'); }}><Icon path={icons.settings} /> Appearance</button>
                 <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('benchmark'); }}><Icon path={icons.gauge} /> Performance</button>
                 <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('about'); }}><Icon path={icons.bolt} /> About marks</button>
@@ -239,6 +241,7 @@ export function TopBar(props: TopBarProps) {
             voiceActive={props.voiceActive}
             voiceSupported={props.voiceSupported}
             onNotify={props.onNotify}
+            localMode={props.localMode}
           />
         </Suspense>
       )}

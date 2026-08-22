@@ -432,6 +432,36 @@
   position: contents;
 }
 
+.phone-identity {
+  position: fixed;
+  left: 8px;
+  right: 8px;
+  top: calc(52px + env(safe-area-inset-top));
+  z-index: 53;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--brand-amber) 40%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand-amber) 12%, var(--glass));
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+}
+
+.phone-identity span {
+  flex: none;
+  color: var(--brand-amber);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .phone-format-chips {
   position: fixed;
   right: 8px;
@@ -559,7 +589,8 @@
 }
 
 .phone-composer.keyboard-open .phone-nav span,
-.phone-composer.keyboard-open .phone-format-chips { display: none; }
+.phone-composer.keyboard-open .phone-format-chips,
+.phone-composer.keyboard-open .phone-identity { display: none; }
 .phone-composer.keyboard-open .phone-nav {
   min-height: calc(48px + env(safe-area-inset-bottom));
 }

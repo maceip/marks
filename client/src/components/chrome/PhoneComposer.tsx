@@ -39,6 +39,7 @@ interface PhoneComposerProps {
   voiceActive?: boolean;
   voiceSupported?: boolean;
   onNotify?: (title: string, detail?: string, tone?: 'neutral' | 'success' | 'danger') => void;
+  localMode?: boolean;
 }
 
 type PhoneSheet = 'insert' | 'ai' | 'more' | null;
@@ -69,6 +70,8 @@ const MORE: Array<{ glyph: GlyphName; label: string; action: UiActionId | 'find'
   { glyph: 'plus', label: 'New page', action: 'new' },
   { glyph: 'share', label: 'Keep', action: 'keep-workspace' },
   { glyph: 'settings', label: 'Account', action: 'account' },
+  { glyph: 'link', label: 'Pairing', action: 'pairing' },
+  { glyph: 'clear', label: 'Sign out', action: 'logout' },
   { glyph: 'template', label: 'Templates', action: 'templates' },
   { glyph: 'pencil', label: 'Rename', action: 'rename' },
   { glyph: 'download', label: 'Export', action: 'download' },
@@ -96,6 +99,12 @@ export function PhoneComposer(props: PhoneComposerProps) {
 
   return (
     <div className={`phone-composer${props.posture.keyboardOpen ? ' keyboard-open' : ''}`}>
+      {props.localMode && (
+        <button type="button" className="phone-identity" onClick={() => props.onAction('keep-workspace')}>
+          <span>Temporary</span>
+          Closing this tab is unrecoverable until you keep it.
+        </button>
+      )}
       {writing && (
         <div className="phone-format-chips" role="toolbar" aria-label="Quick format">
           {FORMAT.map((item) => (

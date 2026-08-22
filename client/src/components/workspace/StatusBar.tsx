@@ -1,6 +1,7 @@
 import type { NetworkQuality } from '../../browser';
 import type { ConnectionStatus } from '../../collab/types';
 import { formatCount, formatMs, readingTime } from '../../lib/format';
+import { RECONNECT_LINE } from '../../lib/identity-copy';
 import type { CursorInfo } from './EditorPane';
 
 interface StatusBarProps {
@@ -47,7 +48,10 @@ export function StatusBar({
         </span>
         <span>{peers === 1 ? 'only you' : `${peers} people`}</span>
         {network === 'slow' && <span title="The network is constrained; edits stay local until it catches up">slow network</span>}
-        <span className={`status status-${status}`}>
+        <span
+          className={`status status-${status}`}
+          title={RECONNECT_LINE}
+        >
           <span className="status-dot" />
           {localMode ? 'local' : status}
         </span>

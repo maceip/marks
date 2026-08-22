@@ -3,12 +3,14 @@ import { useCallback, useEffect, useState } from 'react';
 export type Route =
   | { name: 'home' }
   | { name: 'document'; id: string }
-  | { name: 'benchmark' };
+  | { name: 'benchmark' }
+  | { name: 'link' };
 
 export function parseRoute(pathname: string): Route {
   const document = /^\/d\/([\w-]{1,64})$/.exec(pathname);
   if (document) return { name: 'document', id: document[1] };
   if (pathname === '/bench') return { name: 'benchmark' };
+  if (pathname === '/link' || pathname === '/link/') return { name: 'link' };
   if (pathname === '/welcome' || pathname === '/welcome/') {
     return { name: 'document', id: 'about-marks' };
   }
@@ -21,6 +23,8 @@ export function routeToPath(route: Route): string {
       return `/d/${route.id}`;
     case 'benchmark':
       return '/bench';
+    case 'link':
+      return '/link';
     default:
       return '/';
   }

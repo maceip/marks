@@ -16,6 +16,8 @@ export type UiActionId =
   | 'about'
   | 'keep-workspace'
   | 'account'
+  | 'pairing'
+  | 'logout'
   | 'find'
   | 'ai-compose';
 
@@ -45,6 +47,8 @@ export const UI_ACTIONS: UiActionDescriptor[] = [
   { id: 'about', label: 'About Marks', description: 'Open the product story in the editor', group: 'Navigate' },
   { id: 'keep-workspace', label: 'Keep this workspace', description: 'See how a temporary tab becomes a durable principal', group: 'Workspace' },
   { id: 'account', label: 'Account and devices', description: 'Scratch, phone controller, and this browser', group: 'Workspace' },
+  { id: 'pairing', label: 'Phone confirmation', description: 'Open the /link pairing surface', group: 'Workspace' },
+  { id: 'logout', label: 'Sign out', description: 'Revoke the session cookie when one exists', group: 'Workspace' },
   { id: 'find', label: 'Find in document', description: 'Open the editor search panel', group: 'Workspace', shortcut: '⌘F' },
   { id: 'ai-compose', label: 'AI compose', description: 'Rewrite, outline, or continue this page locally', group: 'Workspace' },
 ];

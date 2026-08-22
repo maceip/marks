@@ -72,9 +72,11 @@ The welcome URL exists so a public deployment can keep a stable marketing
 address. The page people read is a Marks document: source, preview, ribbon,
 and the same Markdown that describes the product, accounts, and machinery.
 
-Identity chrome (Temporary chip, Keep workspace, Account and devices, and
-Share roles) is presentation-complete in local mode. It uses the same tokens
-on desktop, phone, and fold. It does not claim a pairing ticket, a sent
+Identity chrome is presentation-complete in local mode on desktop, phone, and
+fold: Temporary chip, Keep workspace with an on-brand QR of `/link`, phone
+confirmation, Account devices/controllers/sessions, Share principal and link
+grants, mapped service-error toasts, and reconnect copy. It uses the same
+tokens as the desktop app. It does not claim a pairing ticket, a sent
 invitation, or a signed-in principal. The HTTP contract lives in
 [`UI-SERVICE-CONTRACT.md`](UI-SERVICE-CONTRACT.md).
 
@@ -259,8 +261,8 @@ Additional rules:
 From a clean `npm run build` followed by `npm run check:ui-budgets`:
 
 - Welcome bounce: **0.57 KB gzip** HTML only, then the real document editor.
-- App-home critical path: **97.30 KB gzip** total—0.83 KB HTML, 86.69 KB
-  JavaScript, and 9.77 KB CSS.
+- App-home critical path: **99.12 KB gzip** total—0.83 KB HTML, 88.51 KB
+  JavaScript, and 9.78 KB CSS.
 - App overlays remain a feature-paid 5.33 KB JavaScript and 3.51 KB CSS gzip by
   Vite's report; they are absent from initial home references.
 - Plain Markdown worker: **72.62 KB gzip** measured at level 9. Syntax

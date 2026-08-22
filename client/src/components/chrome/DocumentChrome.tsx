@@ -29,6 +29,7 @@ export interface DocumentChromeProps {
   voiceActive?: boolean;
   voiceSupported?: boolean;
   onNotify?: (title: string, detail?: string, tone?: 'neutral' | 'success' | 'danger') => void;
+  localMode?: boolean;
 }
 
 export function DocumentChrome(props: DocumentChromeProps) {
@@ -50,6 +51,7 @@ export function DocumentChrome(props: DocumentChromeProps) {
         voiceActive={props.voiceActive}
         voiceSupported={props.voiceSupported}
         onNotify={props.onNotify}
+        localMode={props.localMode}
       />
     );
   }

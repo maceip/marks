@@ -37,11 +37,12 @@ export function Home({
       <section className="home-hero surface-material-host">
         <SurfaceMaterial variant="hero" intensity={0.92} />
         <div className="home-hero-copy">
-          <span className="home-kicker"><MarksMark size={16} /> Local workspace</span>
+          <span className="home-kicker"><MarksMark size={16} /> Temporary workspace</span>
           <h2>Pick up the thought.<br />The interface is already ready.</h2>
           <p>
-            Create, edit, preview, review, and export from a real local document model. The service
-            adapter can arrive later without changing the visible product.
+            First paint has no registration form. This tab is a scratch workspace. Create, edit,
+            preview, review, and export from a real local document model. Closing the tab before
+            you keep it is unrecoverable.
           </p>
           <div className="home-actions">
             <button type="button" className="button primary" onClick={onCreate}>

@@ -15,6 +15,9 @@ import { Outline } from './components/workspace/Outline';
 import { StatusBar } from './components/workspace/StatusBar';
 import { ABOUT_DOCUMENT_ID } from './content/about';
 import { Home } from './pages/Home';
+import { LOGOUT_LOCAL_LINE } from './lib/identity-copy';
+import { readPairingHash } from './lib/pairing-link';
+import { SERVICE_ERROR_COPY } from './lib/service-errors';
 import { TopBar, type ViewMode } from './components/shell/TopBar';
 import { ToastRegion, type ToastMessage } from './components/overlays/ToastRegion';
 import { VoiceBar } from './components/overlays/VoiceBar';
@@ -47,6 +50,9 @@ const AppOverlays = lazy(() =>
 );
 const AiSheet = lazy(() =>
   import('./components/chrome/AiSheet').then((module) => ({ default: module.AiSheet })),
+);
+const LinkPage = lazy(() =>
+  import('./pages/Link').then((module) => ({ default: module.LinkPage })),
 );
 
 /** How often the HUD and word counts refresh. Editing never waits on this. */
@@ -94,6 +100,7 @@ export function App() {
   const [reviewSurface, setReviewSurface] = useState<ReviewSurface | null>(null);
   const [overlaysMounted, setOverlaysMounted] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [pairing, setPairing] = useState(() => readPairingHash(location.hash));
 
   const documents = useDocuments(route.name !== 'benchmark');
   const docId = route.name === 'document' ? route.id : null;
@@ -220,6 +227,19 @@ export function App() {
     setOverlaysMounted(true);
     setDialog(next);
   }, []);
+
+  useEffect(() => {
+    const sync = () => {
+      const next = readPairingHash(location.hash);
+      setPairing(next);
+      if (next === 'invalid') {
+        notify(SERVICE_ERROR_COPY[401].title, SERVICE_ERROR_COPY[401].detail, SERVICE_ERROR_COPY[401].tone);
+      }
+    };
+    sync();
+    window.addEventListener('hashchange', sync);
+    return () => window.removeEventListener('hashchange', sync);
+  }, [notify]);
 
   const openDocument = useCallback(
     (id: string) => {
@@ -383,6 +403,12 @@ export function App() {
         case 'account':
           openDialog({ type: 'account' });
           break;
+        case 'pairing':
+          navigate({ name: 'link' });
+          break;
+        case 'logout':
+          notify(SERVICE_ERROR_COPY[401].title, LOGOUT_LOCAL_LINE, 'neutral');
+          break;
         case 'find': {
           const view = viewRef.current;
           if (view) void import('./editor/actions').then(({ openFind }) => openFind(view));
@@ -402,6 +428,7 @@ export function App() {
       openBenchmark,
       openDialog,
       outlineOpen,
+      navigate,
       openDocument,
       overlayNavigation,
       phone,
@@ -468,9 +495,11 @@ export function App() {
     document.title =
       route.name === 'benchmark'
         ? 'Benchmark · marks'
-        : route.name === 'document'
-          ? `${title} · marks`
-          : 'marks — collaborative writing at thought speed';
+        : route.name === 'link'
+          ? 'Phone confirmation · marks'
+          : route.name === 'document'
+            ? `${title} · marks`
+            : 'marks — collaborative writing at thought speed';
   }, [title, route.name]);
 
   useEffect(() => {
@@ -505,7 +534,7 @@ export function App() {
 
       <main className={`main route-${route.name}`}>
         <TopBar
-          title={route.name === 'benchmark' ? 'Engine benchmark' : title}
+          title={route.name === 'benchmark' ? 'Engine benchmark' : route.name === 'link' ? 'Phone confirmation' : title}
           docId={docId}
           route={route.name}
           documentReady={Boolean(session && hydrated)}
@@ -541,6 +570,14 @@ export function App() {
         {route.name === 'benchmark' ? (
           <Suspense fallback={<div className="empty-state">Loading benchmark…</div>}>
             <Benchmark onBack={() => navigate({ name: 'home' })} />
+          </Suspense>
+        ) : route.name === 'link' ? (
+          <Suspense fallback={<div className="empty-state">Opening phone confirmation…</div>}>
+            <LinkPage
+              pairing={pairing}
+              onNotify={notify}
+              onKeep={() => openDialog({ type: 'keep-workspace' })}
+            />
           </Suspense>
         ) : docId && resolved && !supported ? (
           <div className="empty-state">
