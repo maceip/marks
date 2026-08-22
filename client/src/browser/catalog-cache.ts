@@ -7,7 +7,7 @@ const metaKey = (id: string) => `marks:meta:${id}`;
 /**
  * Last-known document list and per-id metadata.
  *
- * Used so opening a Yjs document while offline does not fall back to Loro
+ * Used so opening a legacy-engine document while offline is still refused
  * (the two encodings are incompatible) and so the sidebar still lists
  * documents the user already had. The network is always authoritative when
  * it answers; the cache is never shown as fresher than it is.

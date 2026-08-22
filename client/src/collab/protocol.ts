@@ -1,5 +1,5 @@
 /**
- * Wire protocol for the Loro sync rooms.
+ * Wire protocol for the ESBT sync rooms.
  * Keep this file in sync with `server/src/protocol.ts`.
  */
 export const MSG_UPDATE = 0x01;
