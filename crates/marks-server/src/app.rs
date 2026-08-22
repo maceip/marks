@@ -94,6 +94,10 @@ pub fn router(app: Arc<App>) -> Router {
             get(routes::documents::snapshot),
         )
         .route(
+            "/v1/scratch/documents/{id}/snapshot",
+            get(routes::documents::snapshot),
+        )
+        .route(
             "/v1/documents/{id}/session",
             post(routes::documents::principal_room_session),
         )

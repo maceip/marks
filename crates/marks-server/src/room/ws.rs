@@ -93,9 +93,8 @@ fn admit(
                     &stored.record,
                     &ticket_secret,
                     &cookie.session,
-                    &document_id,
+                    &document.record,
                     &stored.record.esbt_site,
-                    document.record.authorization_epoch,
                     now,
                 )
                 .map_err(|_| ApiError::unauthenticated())?;
@@ -108,9 +107,8 @@ fn admit(
                     &stored.record,
                     &ticket_secret,
                     &scratch,
-                    &document_id,
+                    &document.record,
                     &stored.record.esbt_site,
-                    document.record.authorization_epoch,
                     now,
                 )
                 .map_err(|_| ApiError::unauthenticated())?;

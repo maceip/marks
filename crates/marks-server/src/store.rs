@@ -4,10 +4,10 @@
 
 use crate::error::{ApiError, ApiResult};
 use marks_auth::{
-    ControllerId, ControllerRecord, DeviceCapabilities, DeviceId, DocumentAclRecord, DocumentId,
-    DocumentOwner, DocumentRecord, DocumentRole, EsbtSiteId, PairingId, PairingRecord,
-    PendingDeviceRecord, PrincipalId, PrincipalRecord, ScratchId, ScratchRecord, SessionId,
-    SessionRecord, TicketId,
+    ChallengeId, ControllerId, ControllerRecord, DeviceCapabilities, DeviceChallengeRecord,
+    DeviceId, DocumentAclRecord, DocumentId, DocumentOwner, DocumentRecord, DocumentRole,
+    EsbtSiteId, PairingId, PairingRecord, PendingDeviceRecord, PrincipalId, PrincipalRecord,
+    ScratchId, ScratchRecord, SessionId, SessionRecord, TicketId,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -212,12 +212,7 @@ pub fn load_session(conn: &Connection, id: &SessionId) -> ApiResult<Option<Store
     .transpose()
 }
 
-pub struct StoredPairing {
-    pub record: PairingRecord,
-    pub approved_principal_id: Option<PrincipalId>,
-}
-
-pub fn load_pairing(conn: &Connection, id: &PairingId) -> ApiResult<Option<StoredPairing>> {
+pub fn load_pairing(conn: &Connection, id: &PairingId) -> ApiResult<Option<PairingRecord>> {
     conn.query_row(
         "SELECT id, scratch_id, pending_device_id, pending_device_public_key_hash, secret_hash,
                 expires_at, consumed_at, approved_principal_id
@@ -239,19 +234,55 @@ pub fn load_pairing(conn: &Connection, id: &PairingId) -> ApiResult<Option<Store
     .optional()?
     .map(
         |(id, scratch, pending, key_hash, secret_hash, expires_at, consumed_at, approved)| {
-            Ok(StoredPairing {
-                record: PairingRecord {
-                    id: PairingId::new(id).map_err(|_| ApiError::internal())?,
-                    scratch_id: ScratchId::new(scratch).map_err(|_| ApiError::internal())?,
-                    pending_device_id: DeviceId::new(pending).map_err(|_| ApiError::internal())?,
-                    pending_device_public_key_hash: hash32(key_hash)?,
-                    secret_hash: hash32(secret_hash)?,
-                    expires_at_ms: from_ms(expires_at),
-                    consumed_at_ms: opt_ms(consumed_at),
-                },
+            Ok(PairingRecord {
+                id: PairingId::new(id).map_err(|_| ApiError::internal())?,
+                scratch_id: ScratchId::new(scratch).map_err(|_| ApiError::internal())?,
+                pending_device_id: DeviceId::new(pending).map_err(|_| ApiError::internal())?,
+                pending_device_public_key_hash: hash32(key_hash)?,
+                secret_hash: hash32(secret_hash)?,
+                expires_at_ms: from_ms(expires_at),
+                consumed_at_ms: opt_ms(consumed_at),
                 approved_principal_id: approved
                     .map(|value| PrincipalId::new(value).map_err(|_| ApiError::internal()))
                     .transpose()?,
+            })
+        },
+    )
+    .transpose()
+}
+
+pub fn load_device_challenge(
+    conn: &Connection,
+    id: &ChallengeId,
+) -> ApiResult<Option<DeviceChallengeRecord>> {
+    conn.query_row(
+        "SELECT id, device_id, nonce_hash, audience, key_epoch, expires_at, consumed_at
+         FROM auth_challenges WHERE id = ?1 AND kind = 'device'",
+        params![id.as_str()],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<i64>>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, Option<i64>>(6)?,
+            ))
+        },
+    )
+    .optional()?
+    .map(
+        |(id, device, nonce_hash, audience, key_epoch, expires_at, consumed_at)| {
+            Ok(DeviceChallengeRecord {
+                id: ChallengeId::new(id).map_err(|_| ApiError::internal())?,
+                device_id: DeviceId::new(device.ok_or_else(ApiError::unauthenticated)?)
+                    .map_err(|_| ApiError::internal())?,
+                challenge_hash: hash32(nonce_hash)?,
+                audience,
+                key_epoch: from_ms(key_epoch.ok_or_else(ApiError::unauthenticated)?),
+                expires_at_ms: from_ms(expires_at),
+                consumed_at_ms: opt_ms(consumed_at),
             })
         },
     )

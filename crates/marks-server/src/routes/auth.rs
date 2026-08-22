@@ -6,6 +6,7 @@
 use crate::app::App;
 use crate::error::{ApiError, ApiResult};
 use crate::guard;
+use crate::identity;
 use crate::ids::{new_id, new_secret, now_ms};
 use crate::room::Control;
 use crate::store;
@@ -16,12 +17,13 @@ use axum::response::{IntoResponse, Response};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use marks_auth::{
     ChallengeId, ControllerBootstrap, DeviceCapabilities, DeviceGrant, DeviceId,
-    DeviceSessionProof, PairingId, PrincipalId, SCRATCH_FINALIZE_WINDOW_MS, SESSION_COOKIE_NAME,
-    ScratchId, SessionId, VerifiedEmailEvidence, authorize_controller_bootstrap,
-    authorize_device_session, authorize_email_promotion, authorize_pairing,
-    authorize_pairing_request, authorize_revoke_device, bearer_secret_hash, bind_pending_device,
-    claimed_scratch_matches, encode_bearer_secret, pairing_matches_pending, pairing_secret_hash,
-    scratch_capability_hash, select_principal_for_email_locator, session_csrf_token,
+    DeviceSessionProof, PairingId, PrincipalId, SESSION_COOKIE_NAME, ScratchId, SessionId,
+    VerifiedEmailEvidence, authorize_controller_bootstrap, authorize_device_session,
+    authorize_email_promotion, authorize_locator_attach, authorize_pairing,
+    authorize_pairing_finalize, authorize_pairing_inspect, authorize_pairing_request,
+    authorize_revoke_device, bearer_secret_hash, bind_pending_device, encode_bearer_secret,
+    pairing_matches_pending, pairing_secret_hash, scratch_capability_hash,
+    select_principal_for_controller_grant, select_principal_for_email_locator, session_csrf_token,
     session_secret_hash, validate_claimed_scratch_capability,
 };
 use rusqlite::{Connection, params};
@@ -304,19 +306,15 @@ pub async fn pairing_inspect(
     let secret = b64_32(&body.secret).map_err(|_| ApiError::unauthenticated())?;
     let now = now_ms();
     let details = app.db.read(|conn| {
-        let stored =
+        let pairing =
             store::load_pairing(conn, &pairing_id)?.ok_or_else(ApiError::unauthenticated)?;
-        if stored.record.secret_hash != pairing_secret_hash(&secret)
-            || stored.record.consumed_at_ms.is_some()
-            || now >= stored.record.expires_at_ms
-        {
-            return Err(ApiError::unauthenticated());
-        }
+        authorize_pairing_inspect(&pairing, &secret, now)
+            .map_err(|_| ApiError::unauthenticated())?;
         Ok(json!({
             "origin": app.config.origin,
-            "pendingDeviceId": stored.record.pending_device_id.as_str(),
-            "pendingDevicePublicKeyHash": b64(&stored.record.pending_device_public_key_hash),
-            "expiresAtMs": stored.record.expires_at_ms,
+            "pendingDeviceId": pairing.pending_device_id.as_str(),
+            "pendingDevicePublicKeyHash": b64(&pairing.pending_device_public_key_hash),
+            "expiresAtMs": pairing.expires_at_ms,
         }))
     })?;
     Ok(Json(details).into_response())
@@ -380,55 +378,6 @@ impl BootstrapStatement {
     }
 }
 
-/// Claim every live scratch document for a principal: change owner, bump the
-/// authorization epoch, revoke outstanding scratch tickets, and hand the
-/// scratch's replica sites to the promoted browser device.
-fn claim_scratch_documents(
-    conn: &Connection,
-    scratch_id: &ScratchId,
-    principal_id: &PrincipalId,
-    browser_device_id: &DeviceId,
-    now: u64,
-) -> ApiResult<Vec<(String, u64)>> {
-    let mut statement =
-        conn.prepare("SELECT id FROM documents WHERE scratch_id = ?1 AND deleted_at IS NULL")?;
-    let ids: Vec<String> = statement
-        .query_map(params![scratch_id.as_str()], |row| row.get(0))?
-        .collect::<Result<_, _>>()?;
-    let mut changed = Vec::new();
-    for id in ids {
-        conn.execute(
-            "UPDATE documents
-             SET scratch_id = NULL, owner_principal_id = ?2, auth_epoch = auth_epoch + 1
-             WHERE id = ?1",
-            params![id, principal_id.as_str()],
-        )?;
-        let epoch: i64 = conn.query_row(
-            "SELECT auth_epoch FROM documents WHERE id = ?1",
-            params![id],
-            |row| row.get(0),
-        )?;
-        conn.execute(
-            "UPDATE document_tickets SET revoked_at = ?2
-             WHERE document_id = ?1 AND consumed_at IS NULL AND revoked_at IS NULL",
-            params![id, store::ms(now)],
-        )?;
-        conn.execute(
-            "UPDATE document_sites
-             SET authority_kind = 'principal', principal_id = ?2, device_id = ?3, scratch_id = NULL
-             WHERE document_id = ?1 AND scratch_id = ?4",
-            params![
-                id,
-                principal_id.as_str(),
-                browser_device_id.as_str(),
-                scratch_id.as_str()
-            ],
-        )?;
-        changed.push((id, store::from_ms(epoch)));
-    }
-    Ok(changed)
-}
-
 fn insert_device(
     conn: &Connection,
     device_id: &DeviceId,
@@ -471,24 +420,15 @@ pub async fn pairing_bootstrap(
     let now = now_ms();
 
     let (principal_id, session, controller_device_id, changed) = app.db.tx(|conn| {
-        let stored =
+        let pairing =
             store::load_pairing(conn, &pairing_id)?.ok_or_else(ApiError::unauthenticated)?;
-        let scratch = store::load_scratch(conn, &stored.record.scratch_id)?
+        let pending = store::load_pending_device(conn, &pairing.scratch_id)?
             .ok_or_else(ApiError::unauthenticated)?;
-        let pending = store::load_pending_device(conn, &stored.record.scratch_id)?
-            .ok_or_else(ApiError::unauthenticated)?;
-        pairing_matches_pending(&stored.record, &pending)
+        pairing_matches_pending(&pairing, &pending).map_err(|_| ApiError::unauthenticated())?;
+        marks_auth::require_live_pending_device(&pending, &pairing.scratch_id, now)
             .map_err(|_| ApiError::unauthenticated())?;
-        marks_auth::require_live_pending_device(&pending, &stored.record.scratch_id, now)
-            .map_err(|_| ApiError::unauthenticated())?;
-        if scratch.claimed_by.is_some()
-            || scratch.revoked_at_ms.is_some()
-            || now >= scratch.expires_at_ms
-        {
-            return Err(ApiError::conflict());
-        }
         let authorized = authorize_controller_bootstrap(
-            &stored.record,
+            &pairing,
             &secret,
             &bootstrap,
             &controller_public_key,
@@ -530,32 +470,15 @@ pub async fn pairing_bootstrap(
             DeviceCapabilities::MEMBER,
             now,
         )?;
-        let changed = claim_scratch_documents(
+        let changed = identity::claim_scratch_documents(
             conn,
             &authorized.scratch_id,
             &principal_id,
             &authorized.pending_device_id,
             now,
         )?;
-        conn.execute(
-            "UPDATE scratch_workspaces
-             SET claimed_by = ?2, claimed_at = ?3, finalize_expires_at = ?4
-             WHERE id = ?1 AND claimed_by IS NULL",
-            params![
-                authorized.scratch_id.as_str(),
-                principal_id.as_str(),
-                store::ms(now),
-                store::ms(now.saturating_add(SCRATCH_FINALIZE_WINDOW_MS)),
-            ],
-        )?;
-        let consumed = conn.execute(
-            "UPDATE pairings SET consumed_at = ?2, approved_principal_id = ?3
-             WHERE id = ?1 AND consumed_at IS NULL",
-            params![pairing_id.as_str(), store::ms(now), principal_id.as_str()],
-        )?;
-        if consumed != 1 {
-            return Err(ApiError::conflict());
-        }
+        identity::persist_scratch_claim(conn, &authorized.scratch_id, &principal_id, now)?;
+        identity::consume_pairing(conn, &pairing, principal_id.clone(), now)?;
         // The phone authenticated with its controller signature; give its
         // device the first rotating session.
         let session = insert_session(
@@ -665,37 +588,22 @@ pub async fn pairing_approve(
     let now = now_ms();
 
     let changed = app.db.tx(|conn| {
-        let stored =
+        let pairing =
             store::load_pairing(conn, &pairing_id)?.ok_or_else(ApiError::unauthenticated)?;
-        let scratch = store::load_scratch(conn, &stored.record.scratch_id)?
+        let pending = store::load_pending_device(conn, &pairing.scratch_id)?
             .ok_or_else(ApiError::unauthenticated)?;
-        let pending = store::load_pending_device(conn, &stored.record.scratch_id)?
-            .ok_or_else(ApiError::unauthenticated)?;
-        pairing_matches_pending(&stored.record, &pending)
+        pairing_matches_pending(&pairing, &pending).map_err(|_| ApiError::unauthenticated())?;
+        marks_auth::require_live_pending_device(&pending, &pairing.scratch_id, now)
             .map_err(|_| ApiError::unauthenticated())?;
-        marks_auth::require_live_pending_device(&pending, &stored.record.scratch_id, now)
-            .map_err(|_| ApiError::unauthenticated())?;
-        if scratch.claimed_by.is_some()
-            || scratch.revoked_at_ms.is_some()
-            || now >= scratch.expires_at_ms
-        {
-            return Err(ApiError::conflict());
-        }
         let controller = store::load_controller_for_device(
             conn,
             cookie.session.principal_id(),
             cookie.session.device_id(),
         )?
         .ok_or_else(ApiError::forbidden)?;
-        let authorized = authorize_pairing(
-            &stored.record,
-            &secret,
-            &controller,
-            &grant,
-            &signature,
-            now,
-        )
-        .map_err(|_| ApiError::unauthenticated())?;
+        select_principal_for_controller_grant(&controller).map_err(|_| ApiError::forbidden())?;
+        let authorized = authorize_pairing(&pairing, &secret, &controller, &grant, &signature, now)
+            .map_err(|_| ApiError::unauthenticated())?;
 
         insert_device(
             conn,
@@ -705,36 +613,20 @@ pub async fn pairing_approve(
             authorized.capabilities,
             now,
         )?;
-        let changed = claim_scratch_documents(
+        let changed = identity::claim_scratch_documents(
             conn,
             &authorized.scratch_id,
             &authorized.principal_id,
             &authorized.pending_device_id,
             now,
         )?;
-        conn.execute(
-            "UPDATE scratch_workspaces
-             SET claimed_by = ?2, claimed_at = ?3, finalize_expires_at = ?4
-             WHERE id = ?1 AND claimed_by IS NULL",
-            params![
-                authorized.scratch_id.as_str(),
-                authorized.principal_id.as_str(),
-                store::ms(now),
-                store::ms(now.saturating_add(SCRATCH_FINALIZE_WINDOW_MS)),
-            ],
+        identity::persist_scratch_claim(
+            conn,
+            &authorized.scratch_id,
+            &authorized.principal_id,
+            now,
         )?;
-        let consumed = conn.execute(
-            "UPDATE pairings SET consumed_at = ?2, approved_principal_id = ?3
-             WHERE id = ?1 AND consumed_at IS NULL",
-            params![
-                pairing_id.as_str(),
-                store::ms(now),
-                authorized.principal_id.as_str(),
-            ],
-        )?;
-        if consumed != 1 {
-            return Err(ApiError::conflict());
-        }
+        identity::consume_pairing(conn, &pairing, authorized.principal_id, now)?;
         Ok(changed)
     })?;
 
@@ -762,25 +654,21 @@ pub async fn pairing_finalize(
             store::load_scratch(conn, &scratch_id)?.ok_or_else(ApiError::unauthenticated)?;
         let claimed = validate_claimed_scratch_capability(&scratch, &capability, now)
             .map_err(|_| ApiError::unauthenticated())?;
-        claimed_scratch_matches(&scratch, &claimed.principal_id)
-            .map_err(|_| ApiError::unauthenticated())?;
-        let stored =
+        let pairing =
             store::load_pairing(conn, &pairing_id)?.ok_or_else(ApiError::unauthenticated)?;
-        if stored.record.scratch_id != scratch_id
-            || stored.record.consumed_at_ms.is_none()
-            || stored.approved_principal_id.as_ref() != Some(&claimed.principal_id)
-        {
-            return Err(ApiError::unauthenticated());
-        }
+        let pending =
+            store::load_pending_device(conn, &scratch_id)?.ok_or_else(ApiError::unauthenticated)?;
+        let finalized = authorize_pairing_finalize(&pairing, &pending, &claimed)
+            .map_err(|_| ApiError::unauthenticated())?;
         // The pending browser device must now be an enrolled, live device on
         // exactly that principal.
-        let device = store::load_device(conn, &stored.record.pending_device_id)?
+        let device = store::load_device(conn, &finalized.pending_device_id)?
             .ok_or_else(ApiError::unauthenticated)?;
-        if device.principal_id != claimed.principal_id || device.revoked_at_ms.is_some() {
+        if device.principal_id != finalized.principal_id || device.revoked_at_ms.is_some() {
             return Err(ApiError::unauthenticated());
         }
-        let session = insert_session(conn, &app, &claimed.principal_id, &device.id, now)?;
-        Ok((claimed.principal_id, device.id, session))
+        let session = insert_session(conn, &app, &finalized.principal_id, &device.id, now)?;
+        Ok((finalized.principal_id, device.id, session))
     })?;
 
     let body = session_json(&session, &principal_id, &device_id)?;
@@ -816,27 +704,28 @@ pub async fn device_challenge(
     let expires_at = now.saturating_add(app.config.challenge_ttl_ms);
     let device_id = DeviceId::new(body.device_id).ok();
     if let Some(device_id) = &device_id {
-        let live = app.db.read(|conn| {
-            Ok(store::load_device(conn, device_id)?
-                .is_some_and(|device| device.revoked_at_ms.is_none()))
+        app.db.tx(|conn| {
+            let Some(device) = store::load_device(conn, device_id)? else {
+                return Ok(());
+            };
+            if device.revoked_at_ms.is_some() {
+                return Ok(());
+            }
+            conn.execute(
+                "INSERT INTO auth_challenges
+                    (id, kind, device_id, nonce_hash, audience, expires_at, key_epoch)
+                 VALUES (?1, 'device', ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    challenge_id,
+                    device_id.as_str(),
+                    bearer_secret_hash(&challenge),
+                    app.config.origin,
+                    store::ms(expires_at),
+                    store::ms(device.key_epoch),
+                ],
+            )?;
+            Ok(())
         })?;
-        if live {
-            app.db.tx(|conn| {
-                conn.execute(
-                    "INSERT INTO auth_challenges
-                        (id, kind, device_id, nonce_hash, audience, expires_at)
-                     VALUES (?1, 'device', ?2, ?3, ?4, ?5)",
-                    params![
-                        challenge_id,
-                        device_id.as_str(),
-                        bearer_secret_hash(&challenge),
-                        app.config.origin,
-                        store::ms(expires_at),
-                    ],
-                )?;
-                Ok(())
-            })?;
-        }
     }
     Ok(Json(json!({
         "challengeId": challenge_id,
@@ -893,33 +782,8 @@ pub async fn device_redeem(
     let now = now_ms();
 
     let (principal_id, device_id, session) = app.db.tx(|conn| {
-        let challenge = conn
-            .query_row(
-                "SELECT id, device_id, nonce_hash, audience, expires_at, consumed_at
-                 FROM auth_challenges WHERE id = ?1 AND kind = 'device'",
-                params![proof.challenge_id.as_str()],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, Vec<u8>>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, i64>(4)?,
-                        row.get::<_, Option<i64>>(5)?,
-                    ))
-                },
-            )
-            .map_err(|_| ApiError::unauthenticated())?;
-        let (id, challenge_device, nonce_hash, audience, expires_at, consumed_at) = challenge;
-        let challenge_device = challenge_device.ok_or_else(ApiError::unauthenticated)?;
-        let record = marks_auth::DeviceChallengeRecord {
-            id: ChallengeId::new(id).map_err(|_| ApiError::internal())?,
-            device_id: DeviceId::new(challenge_device).map_err(|_| ApiError::internal())?,
-            challenge_hash: store::hash32(nonce_hash)?,
-            audience,
-            expires_at_ms: store::from_ms(expires_at),
-            consumed_at_ms: consumed_at.map(store::from_ms),
-        };
+        let record = store::load_device_challenge(conn, &proof.challenge_id)?
+            .ok_or_else(ApiError::unauthenticated)?;
         let device =
             store::load_device(conn, &record.device_id)?.ok_or_else(ApiError::unauthenticated)?;
         let principal = store::load_principal(conn, &device.principal_id)?
@@ -1381,12 +1245,9 @@ pub async fn evt_redeem(
                 principal
             }
         };
+        authorize_locator_attach(existing_record.as_ref(), &principal_id)
+            .map_err(|_| ApiError::conflict())?;
 
-        let scratch_record = store::load_scratch(conn, &scratch.authority.scratch_id)?
-            .ok_or_else(ApiError::unauthenticated)?;
-        if scratch_record.claimed_by.is_some() {
-            return Err(ApiError::conflict());
-        }
         let pending = store::load_pending_device(conn, &scratch.authority.scratch_id)?
             .ok_or_else(ApiError::unauthenticated)?;
         if pending.id != promotion.pending_device_id
@@ -1402,24 +1263,14 @@ pub async fn evt_redeem(
             DeviceCapabilities::MEMBER,
             now,
         )?;
-        let changed = claim_scratch_documents(
+        let changed = identity::claim_scratch_documents(
             conn,
             &scratch.authority.scratch_id,
             &principal_id,
             &pending.id,
             now,
         )?;
-        conn.execute(
-            "UPDATE scratch_workspaces
-             SET claimed_by = ?2, claimed_at = ?3, finalize_expires_at = ?4
-             WHERE id = ?1 AND claimed_by IS NULL",
-            params![
-                scratch.authority.scratch_id.as_str(),
-                principal_id.as_str(),
-                store::ms(now),
-                store::ms(now.saturating_add(SCRATCH_FINALIZE_WINDOW_MS)),
-            ],
-        )?;
+        identity::persist_scratch_claim(conn, &scratch.authority.scratch_id, &principal_id, now)?;
         let consumed = conn.execute(
             "UPDATE auth_challenges SET consumed_at = ?2 WHERE id = ?1 AND consumed_at IS NULL",
             params![record.id.as_str(), store::ms(now)],

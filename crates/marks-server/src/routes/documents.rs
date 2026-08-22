@@ -17,7 +17,7 @@ use marks_auth::{
     AuthenticatedSession, DocumentAction, DocumentId, DocumentOwner, DocumentRole, EsbtSiteId,
     LinkGrantRecord, PrincipalId, ScratchId, TicketId, authorize_document_action,
     authorize_link_grant_role, bearer_secret_hash, encode_bearer_secret, issue_document_ticket,
-    issue_scratch_document_ticket, redeem_link_grant, require_principal_document,
+    issue_scratch_document_ticket, owner_acl_row, redeem_link_grant, require_principal_document,
     require_scratch_document, resolve_document_role,
 };
 use rusqlite::{Connection, params};
@@ -33,13 +33,17 @@ pub enum Caller {
 }
 
 fn caller(app: &App, headers: &HeaderMap) -> ApiResult<Caller> {
+    // Protocol: session cookies are checked before any durable principal
+    // operation. A leftover MarksScratch header from the UI first-paint
+    // path must not hide a live rotating session.
+    if let Ok(cookie) = guard::cookie_session(app, headers) {
+        return Ok(Caller::Principal(cookie.session));
+    }
     if headers.contains_key(header::AUTHORIZATION) {
         let scratch = guard::scratch_caller(app, headers)?;
-        Ok(Caller::Scratch(scratch.authority.scratch_id))
-    } else {
-        let cookie = guard::cookie_session(app, headers)?;
-        Ok(Caller::Principal(cookie.session))
+        return Ok(Caller::Scratch(scratch.authority.scratch_id));
     }
+    Err(ApiError::unauthenticated())
 }
 
 #[derive(Serialize)]
@@ -168,6 +172,19 @@ pub async fn create(
             ],
         )?;
         let id = DocumentId::new(id.clone()).map_err(|_| ApiError::internal())?;
+        if let Caller::Principal(session) = &caller {
+            let acl = owner_acl_row(id.clone(), session.principal_id().clone());
+            conn.execute(
+                "INSERT INTO document_acl (document_id, principal_id, role, granted_by, created_at)
+                 VALUES (?1, ?2, ?3, ?2, ?4)",
+                params![
+                    acl.document_id.as_str(),
+                    acl.principal_id.as_str(),
+                    store::role_to_str(acl.role),
+                    store::ms(now),
+                ],
+            )?;
+        }
         load_live_document(conn, &id)
     })?;
     Ok((StatusCode::CREATED, Json(json!({ "document": meta(&row) }))).into_response())
@@ -299,6 +316,19 @@ pub async fn duplicate(
             ],
         )?;
         let id = DocumentId::new(new_document.clone()).map_err(|_| ApiError::internal())?;
+        if let Caller::Principal(session) = &caller {
+            let acl = owner_acl_row(id.clone(), session.principal_id().clone());
+            conn.execute(
+                "INSERT INTO document_acl (document_id, principal_id, role, granted_by, created_at)
+                 VALUES (?1, ?2, ?3, ?2, ?4)",
+                params![
+                    acl.document_id.as_str(),
+                    acl.principal_id.as_str(),
+                    store::role_to_str(acl.role),
+                    store::ms(now),
+                ],
+            )?;
+        }
         load_live_document(conn, &id)
     })?;
     Ok((StatusCode::CREATED, Json(json!({ "document": meta(&row) }))).into_response())

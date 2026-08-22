@@ -434,3 +434,71 @@ async fn evt_promotion_transaction_path() {
 
     server.stop().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn leftover_scratch_header_does_not_hide_a_live_session() {
+    let server = TestServer::spawn(temp_db("leftover-scratch")).await;
+    let http = reqwest::Client::new();
+    let base = server.base.clone();
+    let principal = common::create_principal(&base, &http, "leftover").await;
+
+    let leftover = json_of(
+        http.post(format!("{base}/v1/auth/scratch"))
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    let leftover_auth = format!(
+        "MarksScratch {}.{}",
+        leftover["scratchId"].as_str().unwrap(),
+        leftover["capability"].as_str().unwrap()
+    );
+
+    let created = json_of(
+        http.post(format!("{base}/v1/documents"))
+            .header("Cookie", &principal.cookie)
+            .header("Origin", &base)
+            .header("Authorization", &leftover_auth)
+            .json(&json!({ "title": "durable after leftover scratch" }))
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    let document_id = created["document"]["id"].as_str().unwrap().to_owned();
+
+    let session_list = json_of(
+        http.get(format!("{base}/v1/documents"))
+            .header("Cookie", &principal.cookie)
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(
+        session_list["documents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|document| document["id"] == document_id)
+    );
+
+    let scratch_list = json_of(
+        http.get(format!("{base}/v1/documents"))
+            .header("Authorization", &leftover_auth)
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(
+        scratch_list["documents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|document| document["id"] != document_id)
+    );
+
+    server.stop().await;
+}
