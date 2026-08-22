@@ -17,7 +17,7 @@ import {
   snapshotFetchTimeoutMs,
   TabChannel,
   tabChannelName,
-  withPersistLock,
+  writeSnapshotUnderLock,
   type CommentRecord,
 } from '../browser';
 import { HEARTBEAT_MS, esbtPresence } from './presence';
@@ -619,11 +619,15 @@ export class EsbtEngine implements CollabSession {
     // EsbtDoc outlives `destroyed`, so a flush started from destroy() still
     // writes after the flag flips while we wait for the lock.
     try {
-      await withPersistLock(persistLockName('esbt', this.docId), async () => {
-        const snapshot = this.doc.export({ mode: 'snapshot' });
-        this.counters.snapshotBytes = snapshot.byteLength;
-        await idbSet(this.cacheKey, snapshot);
-      });
+      await writeSnapshotUnderLock(
+        persistLockName('esbt', this.docId),
+        () => {
+          const snapshot = this.doc.export({ mode: 'snapshot' });
+          this.counters.snapshotBytes = snapshot.byteLength;
+          return snapshot;
+        },
+        (snapshot) => idbSet(this.cacheKey, snapshot),
+      );
     } catch {
       // Storage pressure or private mode: the server copy is authoritative.
     }
