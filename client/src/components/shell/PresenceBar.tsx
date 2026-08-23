@@ -1,5 +1,6 @@
 import type { Peer } from '../../collab/types';
 import { colorVar, initials } from '../../collab/user';
+import { revealPresence } from '../../collab/presence';
 
 interface PresenceBarProps {
   peers: Peer[];
@@ -18,6 +19,9 @@ export function PresenceBar({ peers, max = 5 }: PresenceBarProps) {
           className={`avatar${peer.self ? ' avatar-self' : ''}`}
           style={{ '--avatar-color': colorVar(peer.colorIndex) } as React.CSSProperties}
           title={peer.self ? `${peer.name} (you)` : peer.name}
+          tabIndex={peer.self ? undefined : 0}
+          onPointerEnter={() => !peer.self && revealPresence(peer.id)}
+          onFocus={() => !peer.self && revealPresence(peer.id)}
         >
           {initials(peer.name)}
         </span>
