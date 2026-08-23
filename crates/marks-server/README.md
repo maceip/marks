@@ -30,6 +30,8 @@ The EVT redeem endpoint additionally refuses to run without a trusted issuer
 adapter; `MARKS_EVT_INSECURE_TEST_ADAPTER=1` enables the test-only shim that
 integration tests use to exercise the transaction path.
 
+Production on `marks.secure.build` is documented in [`deploy/`](../../deploy/).
+
 ## HTTP surface
 
 The identity endpoints are `docs/AUTHN-AUTHZ-PROTOCOL.md` §10 verbatim:

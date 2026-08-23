@@ -1,0 +1,32 @@
+# ── marks.secure.build — marks-server (API, rooms, service-mode UI) ─────
+# Appended to /etc/caddy/Caddyfile. CrowdSec already parses Caddy logs for
+# HTTP floods; this site block drops scanner junk and caps request bodies
+# before they reach the process.
+marks.secure.build {
+	import security_headers
+	encode zstd gzip
+
+	request_body {
+		max_size 8MB
+	}
+
+	@assets path /assets/*
+	header @assets Cache-Control "public, max-age=31536000, immutable"
+
+	@spam path /.env /.git* /wp-admin* /wp-login.php /xmlrpc.php /phpmyadmin* /cgi-bin* /vendor/phpunit* /actuator* /server-status
+	handle @spam {
+		abort
+	}
+
+	reverse_proxy 127.0.0.1:5192 {
+		flush_interval -1
+		header_up Host {host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Real-IP {remote_host}
+		transport http {
+			read_timeout 0
+			write_timeout 0
+			dial_timeout 5s
+		}
+	}
+}

@@ -68,7 +68,9 @@ npm run preview      # static preview only; no API or collaboration backend
 
 `marks-server` reads its own environment (`MARKS_LISTEN`, `MARKS_DB`,
 `MARKS_ORIGIN`, `MARKS_STATIC_DIR`, `MARKS_EVT_ENABLED`); see
-[crates/marks-server/README.md](crates/marks-server/README.md).
+[crates/marks-server/README.md](crates/marks-server/README.md). The
+`https://marks.secure.build` deploy (Caddy, systemd backoff, Knot) is in
+[deploy/](deploy/).
 
 ## Editing
 

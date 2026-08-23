@@ -1,0 +1,9 @@
+# Knot zone file: /var/lib/knot/zones/secure.build.zone
+# Zone is DNSSEC-signed. Do not edit the dump by hand; use knotc:
+#
+#   sudo knotc zone-begin secure.build.
+#   sudo knotc zone-set secure.build. marks 3600 A 142.248.222.1
+#   sudo knotc zone-commit secure.build.
+#
+# Record added:
+#   marks.secure.build.  3600  A  142.248.222.1
