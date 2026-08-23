@@ -989,6 +989,319 @@ async fn self_bootstrap_rejects_mismatch_and_claimed_scratch() {
     server.stop().await;
 }
 
+/// Build a `dbsc+jwt` the way Chrome would: base64url(header).base64url(payload)
+/// signed ES256 with a P1363 signature.
+fn dbsc_token(key: &DeviceKey, header: serde_json::Value, payload: serde_json::Value) -> String {
+    let header_b64 = b64(header.to_string().as_bytes());
+    let payload_b64 = b64(payload.to_string().as_bytes());
+    let signing_input = format!("{header_b64}.{payload_b64}");
+    let signature = key.sign_p1363(signing_input.as_bytes());
+    format!("{signing_input}.{}", b64(&signature))
+}
+
+fn dbsc_jwk(key: &DeviceKey) -> serde_json::Value {
+    let sec1 = key.public_sec1();
+    json!({
+        "kty": "EC",
+        "crv": "P-256",
+        "x": b64(&sec1[1..33]),
+        "y": b64(&sec1[33..65]),
+    })
+}
+
+fn header_param<'a>(header: &'a str, name: &str) -> &'a str {
+    let start = header
+        .find(&format!("{name}=\""))
+        .map(|index| index + name.len() + 2)
+        .expect("header parameter");
+    let rest = &header[start..];
+    &rest[..rest.find('"').expect("closing quote")]
+}
+
+/// Login responses invite hardware binding; the browser-driven registration
+/// and refresh dance stores the key, rotates the bound cookie, and fails
+/// closed on replay, forgery, and session mismatch. Devices that never call
+/// these endpoints keep working untouched — that is the quiet fallback.
+#[tokio::test(flavor = "multi_thread")]
+async fn dbsc_binds_a_session_and_refreshes_the_bound_cookie() {
+    let server = TestServer::spawn(temp_db("dbsc-flow")).await;
+    let http = reqwest::Client::new();
+    let base = server.base.clone();
+
+    // 1. Log in through the single-device rail and capture the invitation.
+    let scratch = json_of(
+        http.post(format!("{base}/v1/auth/scratch"))
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    let scratch_id = scratch["scratchId"].as_str().unwrap().to_owned();
+    let capability = scratch["capability"].as_str().unwrap().to_owned();
+    let scratch_auth = format!("MarksScratch {scratch_id}.{capability}");
+    let device_key = DeviceKey::generate();
+    let device_id = "device_dbsc_phone1".to_owned();
+    http.put(format!("{base}/v1/auth/scratch/{scratch_id}/device"))
+        .header("Authorization", &scratch_auth)
+        .json(&json!({ "deviceId": device_id, "publicKey": b64(&device_key.public_sec1()) }))
+        .send()
+        .await
+        .unwrap();
+    let now = now_ms();
+    let statement = marks_auth::SelfBootstrap {
+        version: 1,
+        controller_id: marks_auth::ControllerId::new("controller_dbsc1").unwrap(),
+        scratch_id: marks_auth::ScratchId::new(scratch_id.clone()).unwrap(),
+        device_id: marks_auth::DeviceId::new(device_id.clone()).unwrap(),
+        device_public_key_hash: device_key.public_key_hash(),
+        issued_at_ms: now,
+        expires_at_ms: now + 60_000,
+    };
+    let promoted = http
+        .post(format!("{base}/v1/auth/scratch/{scratch_id}/bootstrap"))
+        .header("Authorization", &scratch_auth)
+        .json(&json!({
+            "bootstrap": {
+                "version": 1,
+                "controllerId": "controller_dbsc1",
+                "scratchId": scratch_id,
+                "deviceId": device_id,
+                "devicePublicKeyHash": b64(&statement.device_public_key_hash),
+                "issuedAtMs": now,
+                "expiresAtMs": now + 60_000,
+            },
+            "signature": b64(&device_key.sign_p1363(&statement.signing_bytes())),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(promoted.status(), 201);
+
+    // The long-lived cookie now carries an explicit Max-Age so it outlives
+    // browser restarts, and the registration header invites a binding.
+    let raw_cookie = promoted
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(raw_cookie.contains("Max-Age="), "cookie has a lifetime");
+    let cookie = cookie_value(&raw_cookie);
+    let registration = promoted
+        .headers()
+        .get("secure-session-registration")
+        .expect("registration invitation")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(registration.starts_with("(ES256)"));
+    assert_eq!(
+        header_param(&registration, "path"),
+        "/v1/auth/dbsc/register"
+    );
+    let challenge = header_param(&registration, "challenge").to_owned();
+    let promoted = json_of(promoted).await;
+    let session_id = promoted["sessionId"].as_str().unwrap().to_owned();
+    assert_eq!(promoted["deviceBound"], false);
+
+    // 2. Register: a hardware key answers the challenge; the key travels in
+    //    the token header as a JWK.
+    let tpm_key = DeviceKey::generate();
+    let registration_token = dbsc_token(
+        &tpm_key,
+        json!({ "alg": "ES256", "typ": "dbsc+jwt", "jwk": dbsc_jwk(&tpm_key) }),
+        json!({ "jti": challenge, "aud": base, "iat": now / 1000 }),
+    );
+    let registered = http
+        .post(format!("{base}/v1/auth/dbsc/register"))
+        .header("Cookie", &cookie)
+        .header("Secure-Session-Response", &registration_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(registered.status(), 200);
+    let bound_cookie = cookie_value(
+        registered
+            .headers()
+            .get("set-cookie")
+            .expect("bound cookie")
+            .to_str()
+            .unwrap(),
+    );
+    assert!(bound_cookie.starts_with("__Host-marks_bound="));
+    let config = json_of(registered).await;
+    assert_eq!(config["session_identifier"], session_id.as_str());
+    assert_eq!(config["refresh_url"], "/v1/auth/dbsc/refresh");
+    assert_eq!(config["credentials"][0]["name"], "__Host-marks_bound");
+
+    // A replayed registration token fails closed on the consumed challenge.
+    let replay = http
+        .post(format!("{base}/v1/auth/dbsc/register"))
+        .header("Cookie", &cookie)
+        .header("Secure-Session-Response", &registration_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), 401);
+
+    // The session now reports its binding to the client.
+    let session = json_of(
+        http.get(format!("{base}/v1/auth/session"))
+            .header("Cookie", &cookie)
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(session["deviceBound"], true);
+    let inventory = json_of(
+        http.get(format!("{base}/v1/auth/devices"))
+            .header("Cookie", &cookie)
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(
+        inventory["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["sessionId"] == session_id.as_str() && entry["deviceBound"] == true)
+    );
+
+    // 3. Refresh: first round yields a challenge, the signed retry rotates
+    //    the bound cookie.
+    let first = http
+        .post(format!("{base}/v1/auth/dbsc/refresh"))
+        .header("Cookie", &cookie)
+        .header("Sec-Secure-Session-Id", &session_id)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(first.status(), 403);
+    let refresh_header = first
+        .headers()
+        .get("secure-session-challenge")
+        .expect("refresh challenge")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(refresh_header.contains(&format!("id=\"{session_id}\"")));
+    let refresh_challenge =
+        refresh_header[1..refresh_header[1..].find('"').unwrap() + 1].to_owned();
+
+    let refresh_token = dbsc_token(
+        &tpm_key,
+        json!({ "alg": "ES256", "typ": "dbsc+jwt" }),
+        json!({ "jti": refresh_challenge, "aud": base }),
+    );
+    let refreshed = http
+        .post(format!("{base}/v1/auth/dbsc/refresh"))
+        .header("Cookie", &cookie)
+        .header("Sec-Secure-Session-Id", &session_id)
+        .header("Secure-Session-Response", &refresh_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refreshed.status(), 200);
+    let rotated = cookie_value(
+        refreshed
+            .headers()
+            .get("set-cookie")
+            .expect("rotated bound cookie")
+            .to_str()
+            .unwrap(),
+    );
+    assert!(rotated.starts_with("__Host-marks_bound="));
+    assert_ne!(rotated, bound_cookie, "bound cookie rotates on refresh");
+
+    // A replayed refresh proof and a forged key both fail closed.
+    let replayed = http
+        .post(format!("{base}/v1/auth/dbsc/refresh"))
+        .header("Cookie", &cookie)
+        .header("Sec-Secure-Session-Id", &session_id)
+        .header("Secure-Session-Response", &refresh_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replayed.status(), 401);
+
+    let second = http
+        .post(format!("{base}/v1/auth/dbsc/refresh"))
+        .header("Cookie", &cookie)
+        .header("Sec-Secure-Session-Id", &session_id)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), 403);
+    let second_header = second
+        .headers()
+        .get("secure-session-challenge")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let second_challenge = second_header[1..second_header[1..].find('"').unwrap() + 1].to_owned();
+    let attacker = DeviceKey::generate();
+    let forged = dbsc_token(
+        &attacker,
+        json!({ "alg": "ES256", "typ": "dbsc+jwt" }),
+        json!({ "jti": second_challenge }),
+    );
+    let rejected = http
+        .post(format!("{base}/v1/auth/dbsc/refresh"))
+        .header("Cookie", &cookie)
+        .header("Sec-Secure-Session-Id", &session_id)
+        .header("Secure-Session-Response", &forged)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), 401);
+
+    // A refresh without the session cookie tells the browser to stop.
+    let stopped = json_of(
+        http.post(format!("{base}/v1/auth/dbsc/refresh"))
+            .header("Sec-Secure-Session-Id", &session_id)
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(stopped["continue"], false);
+
+    // 4. Logout clears both cookies so the browser drops the binding too.
+    let csrf = session["csrf"].as_str().unwrap();
+    let logout = http
+        .delete(format!("{base}/v1/auth/session"))
+        .header("Cookie", &cookie)
+        .header("Origin", &base)
+        .header("X-Marks-CSRF", csrf)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(logout.status(), 200);
+    let cleared: Vec<&str> = logout
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|value| value.to_str().unwrap())
+        .collect();
+    assert!(
+        cleared
+            .iter()
+            .any(|value| value.starts_with("__Host-marks_session=;"))
+    );
+    assert!(
+        cleared
+            .iter()
+            .any(|value| value.starts_with("__Host-marks_bound=;"))
+    );
+
+    server.stop().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn four_word_code_promotes_a_scratch_workspace() {
     let server = TestServer::spawn(temp_db("auth-words")).await;

@@ -171,12 +171,15 @@ pub struct StoredSession {
     pub record: SessionRecord,
     pub prev_secret_hash: Option<[u8; 32]>,
     pub rotated_at_ms: Option<u64>,
+    /// Hardware key registered through Device Bound Session Credentials.
+    pub dbsc_public_key_sec1: Option<Vec<u8>>,
+    pub dbsc_bound_at_ms: Option<u64>,
 }
 
 pub fn load_session(conn: &Connection, id: &SessionId) -> ApiResult<Option<StoredSession>> {
     conn.query_row(
         "SELECT id, principal_id, device_id, secret_hash, prev_secret_hash, rotated_at,
-                expires_at, revoked_at
+                expires_at, revoked_at, dbsc_public_key_sec1, dbsc_bound_at
          FROM sessions WHERE id = ?1",
         params![id.as_str()],
         |row| {
@@ -189,12 +192,25 @@ pub fn load_session(conn: &Connection, id: &SessionId) -> ApiResult<Option<Store
                 row.get::<_, Option<i64>>(5)?,
                 row.get::<_, i64>(6)?,
                 row.get::<_, Option<i64>>(7)?,
+                row.get::<_, Option<Vec<u8>>>(8)?,
+                row.get::<_, Option<i64>>(9)?,
             ))
         },
     )
     .optional()?
     .map(
-        |(id, principal, device, hash, prev_hash, rotated_at, expires_at, revoked_at)| {
+        |(
+            id,
+            principal,
+            device,
+            hash,
+            prev_hash,
+            rotated_at,
+            expires_at,
+            revoked_at,
+            dbsc_key,
+            dbsc_bound_at,
+        )| {
             Ok(StoredSession {
                 record: SessionRecord {
                     id: SessionId::new(id).map_err(|_| ApiError::internal())?,
@@ -206,9 +222,46 @@ pub fn load_session(conn: &Connection, id: &SessionId) -> ApiResult<Option<Store
                 },
                 prev_secret_hash: prev_hash.map(hash32).transpose()?,
                 rotated_at_ms: opt_ms(rotated_at),
+                dbsc_public_key_sec1: dbsc_key,
+                dbsc_bound_at_ms: opt_ms(dbsc_bound_at),
             })
         },
     )
+    .transpose()
+}
+
+/// Load the one-use DBSC challenge a token claims to answer, selected by its
+/// stored digest and bound session.
+pub fn load_dbsc_challenge(
+    conn: &Connection,
+    session_id: &SessionId,
+    nonce_hash: &[u8; 32],
+) -> ApiResult<Option<marks_auth::DbscChallengeRecord>> {
+    conn.query_row(
+        "SELECT id, session_id, nonce_hash, expires_at, consumed_at
+         FROM auth_challenges
+         WHERE kind = 'dbsc' AND session_id = ?1 AND nonce_hash = ?2",
+        params![session_id.as_str(), nonce_hash.as_slice()],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, Option<i64>>(4)?,
+            ))
+        },
+    )
+    .optional()?
+    .map(|(id, session, hash, expires_at, consumed_at)| {
+        Ok(marks_auth::DbscChallengeRecord {
+            id: marks_auth::ChallengeId::new(id).map_err(|_| ApiError::internal())?,
+            session_id: SessionId::new(session).map_err(|_| ApiError::internal())?,
+            nonce_hash: hash32(hash)?,
+            expires_at_ms: from_ms(expires_at),
+            consumed_at_ms: opt_ms(consumed_at),
+        })
+    })
     .transpose()
 }
 

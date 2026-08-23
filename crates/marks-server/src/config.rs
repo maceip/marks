@@ -15,6 +15,10 @@ pub struct Config {
     /// Optional directory with the built browser client. When set, unknown
     /// GET paths serve the SPA.
     pub static_dir: Option<PathBuf>,
+    /// Device Bound Session Credentials: send `Secure-Session-Registration`
+    /// on login responses and serve the register/refresh endpoints. Browsers
+    /// without DBSC support ignore the header entirely, so this is additive.
+    pub dbsc_enabled: bool,
     /// Feature flag for the experimental Chrome EVT promotion rail.
     pub evt_enabled: bool,
     /// Versioned HMAC key for verified-email locators. Lives outside the
@@ -48,6 +52,18 @@ impl Config {
         let origin = std::env::var("MARKS_ORIGIN").unwrap_or_else(|_| format!("http://{listen}"));
         validate_origin(&origin)?;
         let static_dir = std::env::var("MARKS_STATIC_DIR").ok().map(PathBuf::from);
+        // Sessions must outlive script-writable storage eviction: the cookie
+        // is server-set (exempt from Safari's 7-day proactive eviction) and
+        // rotation on use keeps an active device signed in indefinitely.
+        let session_ttl_days: u64 = match std::env::var("MARKS_SESSION_TTL_DAYS") {
+            Ok(value) => value
+                .parse()
+                .ok()
+                .filter(|days| (1..=400).contains(days))
+                .ok_or("MARKS_SESSION_TTL_DAYS must be 1..=400 days")?,
+            Err(_) => 180,
+        };
+        let dbsc_enabled = std::env::var("MARKS_DBSC_ENABLED").map_or(true, |value| value == "1");
         let evt_enabled = std::env::var("MARKS_EVT_ENABLED").is_ok_and(|value| value == "1");
         let evt_locator_key = match std::env::var("MARKS_EVT_LOCATOR_KEY") {
             Ok(hex) => {
@@ -66,13 +82,14 @@ impl Config {
             database,
             origin,
             static_dir,
+            dbsc_enabled,
             evt_enabled,
             evt_locator_key,
             evt_locator_key_version: 1,
             evt_adapter_version: std::env::var("MARKS_EVT_ADAPTER_VERSION")
                 .unwrap_or_else(|_| "chrome-evt-origin-trial-2026-08".to_owned()),
             scratch_ttl_ms: 24 * 60 * 60 * 1000,
-            session_ttl_ms: 30 * 24 * 60 * 60 * 1000,
+            session_ttl_ms: session_ttl_days * 24 * 60 * 60 * 1000,
             session_rotate_after_ms: 24 * 60 * 60 * 1000,
             pairing_ttl_ms: 2 * 60 * 1000,
             challenge_ttl_ms: 2 * 60 * 1000,

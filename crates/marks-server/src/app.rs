@@ -73,6 +73,8 @@ pub fn router(app: Arc<App>) -> Router {
             post(routes::auth::device_challenge),
         )
         .route("/v1/auth/device/redeem", post(routes::auth::device_redeem))
+        .route("/v1/auth/dbsc/register", post(routes::auth::dbsc_register))
+        .route("/v1/auth/dbsc/refresh", post(routes::auth::dbsc_refresh))
         .route(
             "/v1/auth/session",
             get(routes::auth::session_get).delete(routes::auth::session_delete),

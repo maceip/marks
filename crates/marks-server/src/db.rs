@@ -296,4 +296,18 @@ const MIGRATIONS: &[(i64, &str)] = &[
         WHERE word_code_hash IS NOT NULL;
     ",
     ),
+    (
+        4,
+        "
+    -- Device Bound Session Credentials: the browser-registered hardware key
+    -- and the digest of the short-lived bound cookie. Sessions without these
+    -- columns are ordinary cookie sessions; DBSC is additive.
+    ALTER TABLE sessions ADD COLUMN dbsc_public_key_sec1 BLOB;
+    ALTER TABLE sessions ADD COLUMN dbsc_bound_at INTEGER;
+    ALTER TABLE sessions ADD COLUMN dbsc_refreshed_at INTEGER;
+    ALTER TABLE sessions ADD COLUMN dbsc_cookie_hash BLOB;
+    -- DBSC registration/refresh challenges bind to the session they protect.
+    ALTER TABLE auth_challenges ADD COLUMN session_id TEXT;
+    ",
+    ),
 ];

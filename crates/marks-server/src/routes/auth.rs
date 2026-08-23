@@ -19,12 +19,13 @@ use marks_auth::{
     ChallengeId, ControllerBootstrap, DeviceCapabilities, DeviceGrant, DeviceId,
     DeviceSessionProof, PairingId, PrincipalId, SESSION_COOKIE_NAME, ScratchId, SelfBootstrap,
     SessionId, VerifiedEmailEvidence, authorize_controller_bootstrap,
-    authorize_controller_bootstrap_words, authorize_device_session, authorize_email_promotion,
-    authorize_locator_attach, authorize_pairing, authorize_pairing_finalize,
-    authorize_pairing_inspect, authorize_pairing_inspect_words, authorize_pairing_request,
-    authorize_pairing_words, authorize_revoke_device, authorize_self_bootstrap, bearer_secret_hash,
-    bind_pending_device, encode_bearer_secret, generate_pairing_words, normalize_pairing_words,
-    pairing_matches_pending, pairing_secret_hash, pairing_word_code_hash, scratch_capability_hash,
+    authorize_controller_bootstrap_words, authorize_dbsc_refresh, authorize_dbsc_registration,
+    authorize_device_session, authorize_email_promotion, authorize_locator_attach,
+    authorize_pairing, authorize_pairing_finalize, authorize_pairing_inspect,
+    authorize_pairing_inspect_words, authorize_pairing_request, authorize_pairing_words,
+    authorize_revoke_device, authorize_self_bootstrap, bearer_secret_hash, bind_pending_device,
+    encode_bearer_secret, generate_pairing_words, normalize_pairing_words, pairing_matches_pending,
+    pairing_secret_hash, pairing_word_code_hash, peek_dbsc_challenge_hash, scratch_capability_hash,
     select_principal_for_controller_grant, select_principal_for_email_locator, session_csrf_token,
     session_secret_hash, validate_claimed_scratch_capability,
 };
@@ -36,6 +37,17 @@ use std::sync::Arc;
 
 const PENDING_DEVICE_TTL_MS: u64 = 24 * 60 * 60 * 1000;
 const EVT_MAX_EVIDENCE_AGE_MS: u64 = 5 * 60 * 1000;
+
+/// The DBSC-managed short-lived cookie. Its absence never fails a request
+/// (quiet fallback); its digest is stored for observability and future
+/// enforcement.
+const DBSC_COOKIE_NAME: &str = "__Host-marks_bound";
+const DBSC_COOKIE_TTL_MS: u64 = 10 * 60 * 1000;
+const DBSC_REGISTER_PATH: &str = "/v1/auth/dbsc/register";
+const DBSC_REFRESH_PATH: &str = "/v1/auth/dbsc/refresh";
+/// Registration happens moments after login, but the browser may defer it;
+/// give the one-use challenge a comfortable window.
+const DBSC_REGISTRATION_CHALLENGE_TTL_MS: u64 = 10 * 60 * 1000;
 
 /* ------------------------------ helpers --------------------------------- */
 
@@ -85,11 +97,16 @@ pub struct NewSession {
 }
 
 impl NewSession {
-    pub fn cookie(&self) -> HeaderValue {
+    /// Session cookie with an explicit `Max-Age`. Without it the cookie is a
+    /// browser-session cookie that can vanish on browser exit while the
+    /// server-side row is still live; the server-set attribute also keeps it
+    /// exempt from Safari's proactive script-writable-storage eviction.
+    pub fn cookie(&self, ttl_ms: u64) -> HeaderValue {
         HeaderValue::from_str(&format!(
-            "{SESSION_COOKIE_NAME}={}.{}; Path=/; Secure; HttpOnly; SameSite=Lax",
+            "{SESSION_COOKIE_NAME}={}.{}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age={}",
             self.id.as_str(),
             encode_bearer_secret(&self.secret),
+            ttl_ms / 1000,
         ))
         .expect("cookie value")
     }
@@ -106,6 +123,70 @@ fn cleared_cookie() -> HeaderValue {
         "{SESSION_COOKIE_NAME}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0"
     ))
     .expect("cookie value")
+}
+
+fn dbsc_bound_cookie(secret: &[u8; 32]) -> HeaderValue {
+    HeaderValue::from_str(&format!(
+        "{DBSC_COOKIE_NAME}={}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age={}",
+        encode_bearer_secret(secret),
+        DBSC_COOKIE_TTL_MS / 1000,
+    ))
+    .expect("cookie value")
+}
+
+fn cleared_dbsc_cookie() -> HeaderValue {
+    HeaderValue::from_str(&format!(
+        "{DBSC_COOKIE_NAME}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0"
+    ))
+    .expect("cookie value")
+}
+
+/// Mint a one-use DBSC challenge for this session inside the caller's
+/// transaction and return the `Secure-Session-Registration` header value that
+/// invites the browser to bind a hardware key. Browsers without DBSC support
+/// ignore the header; nothing else changes for them.
+fn dbsc_registration_header(
+    conn: &Connection,
+    app: &App,
+    session_id: &SessionId,
+    now: u64,
+) -> ApiResult<HeaderValue> {
+    let challenge = b64(&new_secret());
+    conn.execute(
+        "INSERT INTO auth_challenges (id, kind, session_id, nonce_hash, audience, expires_at)
+         VALUES (?1, 'dbsc', ?2, ?3, ?4, ?5)",
+        params![
+            new_id("challenge"),
+            session_id.as_str(),
+            bearer_secret_hash(challenge.as_bytes()),
+            app.config.origin,
+            store::ms(now.saturating_add(DBSC_REGISTRATION_CHALLENGE_TTL_MS)),
+        ],
+    )?;
+    HeaderValue::from_str(&format!(
+        "(ES256);challenge=\"{challenge}\";path=\"{DBSC_REGISTER_PATH}\""
+    ))
+    .map_err(|_| ApiError::internal())
+}
+
+/// The session configuration document DBSC-capable browsers consume at
+/// registration and refresh. Origin-scoped; the bound cookie is identified by
+/// name and non-lifetime attributes.
+fn dbsc_session_config(app: &App, session_id: &SessionId) -> serde_json::Value {
+    json!({
+        "session_identifier": session_id.as_str(),
+        "refresh_url": DBSC_REFRESH_PATH,
+        "scope": {
+            "origin": app.config.origin,
+            "include_site": false,
+            "scope_specification": [],
+        },
+        "credentials": [{
+            "type": "cookie",
+            "name": DBSC_COOKIE_NAME,
+            "attributes": "Path=/; Secure; HttpOnly; SameSite=Lax",
+        }],
+    })
 }
 
 /// Insert one rotating session row inside the caller's transaction.
@@ -137,13 +218,43 @@ fn session_json(
     session: &NewSession,
     principal_id: &PrincipalId,
     device_id: &DeviceId,
+    device_bound: bool,
 ) -> ApiResult<serde_json::Value> {
     Ok(json!({
         "principalId": principal_id.as_str(),
         "deviceId": device_id.as_str(),
         "sessionId": session.id.as_str(),
         "csrf": session.csrf()?,
+        "deviceBound": device_bound,
     }))
+}
+
+/// A `201` login response: session JSON, the long-lived cookie with an
+/// explicit `Max-Age`, and — when DBSC is enabled — the registration header
+/// inviting the browser to bind a hardware key.
+fn login_response(
+    app: &App,
+    session: &NewSession,
+    principal_id: &PrincipalId,
+    device_id: &DeviceId,
+    registration: Option<HeaderValue>,
+) -> ApiResult<Response> {
+    let body = session_json(session, principal_id, device_id, false)?;
+    let mut response = (
+        StatusCode::CREATED,
+        [(
+            header::SET_COOKIE,
+            session.cookie(app.config.session_ttl_ms),
+        )],
+        Json(body),
+    )
+        .into_response();
+    if let Some(value) = registration {
+        response
+            .headers_mut()
+            .insert("secure-session-registration", value);
+    }
+    Ok(response)
 }
 
 /* ------------------------------ scratch --------------------------------- */
@@ -311,7 +422,7 @@ pub async fn scratch_self_bootstrap(
     }
     let now = now_ms();
 
-    let (principal_id, session, device_id, changed) = app.db.tx(|conn| {
+    let (principal_id, session, device_id, changed, registration) = app.db.tx(|conn| {
         let pending = store::load_pending_device(conn, &scratch.authority.scratch_id)?
             .ok_or_else(ApiError::unauthenticated)?;
         let authorized =
@@ -355,7 +466,18 @@ pub async fn scratch_self_bootstrap(
         // signature; give it the first rotating session directly. There is
         // no other tab to finalize.
         let session = insert_session(conn, &app, &principal_id, &authorized.device_id, now)?;
-        Ok((principal_id, session, authorized.device_id, changed))
+        let registration = app
+            .config
+            .dbsc_enabled
+            .then(|| dbsc_registration_header(conn, &app, &session.id, now))
+            .transpose()?;
+        Ok((
+            principal_id,
+            session,
+            authorized.device_id,
+            changed,
+            registration,
+        ))
     })?;
 
     for (document_id, epoch) in changed {
@@ -363,13 +485,7 @@ pub async fn scratch_self_bootstrap(
             .control(Control::EpochChanged { document_id, epoch })
             .await;
     }
-    let body = session_json(&session, &principal_id, &device_id)?;
-    Ok((
-        StatusCode::CREATED,
-        [(header::SET_COOKIE, session.cookie())],
-        Json(body),
-    )
-        .into_response())
+    login_response(&app, &session, &principal_id, &device_id, registration)
 }
 
 /* ------------------------------ pairings -------------------------------- */
@@ -621,105 +737,112 @@ pub async fn pairing_bootstrap(
     }
     let now = now_ms();
 
-    let (principal_id, session, controller_device_id, changed) = app.db.tx(|conn| {
-        let pairing =
-            store::load_pairing(conn, &pairing_id)?.ok_or_else(ApiError::unauthenticated)?;
-        let pending = store::load_pending_device(conn, &pairing.scratch_id)?
-            .ok_or_else(ApiError::unauthenticated)?;
-        pairing_matches_pending(&pairing, &pending).map_err(|_| ApiError::unauthenticated())?;
-        marks_auth::require_live_pending_device(&pending, &pairing.scratch_id, now)
+    let (principal_id, session, controller_device_id, changed, registration) =
+        app.db.tx(|conn| {
+            let pairing =
+                store::load_pairing(conn, &pairing_id)?.ok_or_else(ApiError::unauthenticated)?;
+            let pending = store::load_pending_device(conn, &pairing.scratch_id)?
+                .ok_or_else(ApiError::unauthenticated)?;
+            pairing_matches_pending(&pairing, &pending).map_err(|_| ApiError::unauthenticated())?;
+            marks_auth::require_live_pending_device(&pending, &pairing.scratch_id, now)
+                .map_err(|_| ApiError::unauthenticated())?;
+            let authorized = match &presented {
+                PairingPresented::Secret(secret) => authorize_controller_bootstrap(
+                    &pairing,
+                    secret,
+                    &bootstrap,
+                    &controller_public_key,
+                    &signature,
+                    now,
+                ),
+                PairingPresented::Words(words) => authorize_controller_bootstrap_words(
+                    &pairing,
+                    words,
+                    &bootstrap,
+                    &controller_public_key,
+                    &signature,
+                    now,
+                ),
+            }
             .map_err(|_| ApiError::unauthenticated())?;
-        let authorized = match &presented {
-            PairingPresented::Secret(secret) => authorize_controller_bootstrap(
-                &pairing,
-                secret,
-                &bootstrap,
-                &controller_public_key,
-                &signature,
-                now,
-            ),
-            PairingPresented::Words(words) => authorize_controller_bootstrap_words(
-                &pairing,
-                words,
-                &bootstrap,
-                &controller_public_key,
-                &signature,
-                now,
-            ),
-        }
-        .map_err(|_| ApiError::unauthenticated())?;
 
-        // The server, never the client, generates the principal.
-        let principal_id =
-            PrincipalId::new(new_id("principal")).map_err(|_| ApiError::internal())?;
-        conn.execute(
-            "INSERT INTO principals (id, created_at) VALUES (?1, ?2)",
-            params![principal_id.as_str(), store::ms(now)],
-        )?;
-        insert_device(
-            conn,
-            &authorized.controller_device_id,
-            &principal_id,
-            &authorized.controller_public_key_sec1,
-            DeviceCapabilities::CONTROLLER,
-            now,
-        )?;
-        conn.execute(
-            "INSERT INTO controllers (id, principal_id, device_id, key_epoch, created_at)
+            // The server, never the client, generates the principal.
+            let principal_id =
+                PrincipalId::new(new_id("principal")).map_err(|_| ApiError::internal())?;
+            conn.execute(
+                "INSERT INTO principals (id, created_at) VALUES (?1, ?2)",
+                params![principal_id.as_str(), store::ms(now)],
+            )?;
+            insert_device(
+                conn,
+                &authorized.controller_device_id,
+                &principal_id,
+                &authorized.controller_public_key_sec1,
+                DeviceCapabilities::CONTROLLER,
+                now,
+            )?;
+            conn.execute(
+                "INSERT INTO controllers (id, principal_id, device_id, key_epoch, created_at)
              VALUES (?1, ?2, ?3, 1, ?4)",
-            params![
-                authorized.controller_id.as_str(),
-                principal_id.as_str(),
-                authorized.controller_device_id.as_str(),
-                store::ms(now),
-            ],
-        )?;
-        insert_device(
-            conn,
-            &authorized.pending_device_id,
-            &principal_id,
-            &pending.public_key_sec1,
-            DeviceCapabilities::MEMBER,
-            now,
-        )?;
-        let changed = identity::claim_scratch_documents(
-            conn,
-            &authorized.scratch_id,
-            &principal_id,
-            &authorized.pending_device_id,
-            now,
-        )?;
-        identity::persist_scratch_claim(conn, &authorized.scratch_id, &principal_id, now)?;
-        identity::consume_pairing(conn, &pairing, principal_id.clone(), now)?;
-        // The phone authenticated with its controller signature; give its
-        // device the first rotating session.
-        let session = insert_session(
-            conn,
-            &app,
-            &principal_id,
-            &authorized.controller_device_id,
-            now,
-        )?;
-        Ok((
-            principal_id,
-            session,
-            authorized.controller_device_id,
-            changed,
-        ))
-    })?;
+                params![
+                    authorized.controller_id.as_str(),
+                    principal_id.as_str(),
+                    authorized.controller_device_id.as_str(),
+                    store::ms(now),
+                ],
+            )?;
+            insert_device(
+                conn,
+                &authorized.pending_device_id,
+                &principal_id,
+                &pending.public_key_sec1,
+                DeviceCapabilities::MEMBER,
+                now,
+            )?;
+            let changed = identity::claim_scratch_documents(
+                conn,
+                &authorized.scratch_id,
+                &principal_id,
+                &authorized.pending_device_id,
+                now,
+            )?;
+            identity::persist_scratch_claim(conn, &authorized.scratch_id, &principal_id, now)?;
+            identity::consume_pairing(conn, &pairing, principal_id.clone(), now)?;
+            // The phone authenticated with its controller signature; give its
+            // device the first rotating session.
+            let session = insert_session(
+                conn,
+                &app,
+                &principal_id,
+                &authorized.controller_device_id,
+                now,
+            )?;
+            let registration = app
+                .config
+                .dbsc_enabled
+                .then(|| dbsc_registration_header(conn, &app, &session.id, now))
+                .transpose()?;
+            Ok((
+                principal_id,
+                session,
+                authorized.controller_device_id,
+                changed,
+                registration,
+            ))
+        })?;
 
     for (document_id, epoch) in changed {
         app.rooms
             .control(Control::EpochChanged { document_id, epoch })
             .await;
     }
-    let body = session_json(&session, &principal_id, &controller_device_id)?;
-    Ok((
-        StatusCode::CREATED,
-        [(header::SET_COOKIE, session.cookie())],
-        Json(body),
+    login_response(
+        &app,
+        &session,
+        &principal_id,
+        &controller_device_id,
+        registration,
     )
-        .into_response())
 }
 
 #[derive(Deserialize)]
@@ -872,7 +995,7 @@ pub async fn pairing_finalize(
     let (scratch_id, capability) = guard::scratch_credentials(&headers)?;
     let now = now_ms();
 
-    let (principal_id, device_id, session) = app.db.tx(|conn| {
+    let (principal_id, device_id, session, registration) = app.db.tx(|conn| {
         let scratch =
             store::load_scratch(conn, &scratch_id)?.ok_or_else(ApiError::unauthenticated)?;
         let claimed = validate_claimed_scratch_capability(&scratch, &capability, now)
@@ -891,16 +1014,15 @@ pub async fn pairing_finalize(
             return Err(ApiError::unauthenticated());
         }
         let session = insert_session(conn, &app, &finalized.principal_id, &device.id, now)?;
-        Ok((finalized.principal_id, device.id, session))
+        let registration = app
+            .config
+            .dbsc_enabled
+            .then(|| dbsc_registration_header(conn, &app, &session.id, now))
+            .transpose()?;
+        Ok((finalized.principal_id, device.id, session, registration))
     })?;
 
-    let body = session_json(&session, &principal_id, &device_id)?;
-    Ok((
-        StatusCode::CREATED,
-        [(header::SET_COOKIE, session.cookie())],
-        Json(body),
-    )
-        .into_response())
+    login_response(&app, &session, &principal_id, &device_id, registration)
 }
 
 /* --------------------------- device sessions ----------------------------- */
@@ -1004,7 +1126,7 @@ pub async fn device_redeem(
     };
     let now = now_ms();
 
-    let (principal_id, device_id, session) = app.db.tx(|conn| {
+    let (principal_id, device_id, session, registration) = app.db.tx(|conn| {
         let record = store::load_device_challenge(conn, &proof.challenge_id)?
             .ok_or_else(ApiError::unauthenticated)?;
         let device =
@@ -1033,16 +1155,20 @@ pub async fn device_redeem(
             &authenticated.device_id,
             now,
         )?;
-        Ok((authenticated.principal_id, authenticated.device_id, session))
+        let registration = app
+            .config
+            .dbsc_enabled
+            .then(|| dbsc_registration_header(conn, &app, &session.id, now))
+            .transpose()?;
+        Ok((
+            authenticated.principal_id,
+            authenticated.device_id,
+            session,
+            registration,
+        ))
     })?;
 
-    let body = session_json(&session, &principal_id, &device_id)?;
-    Ok((
-        StatusCode::CREATED,
-        [(header::SET_COOKIE, session.cookie())],
-        Json(body),
-    )
-        .into_response())
+    login_response(&app, &session, &principal_id, &device_id, registration)
 }
 
 /* ------------------------------ sessions -------------------------------- */
@@ -1052,7 +1178,7 @@ pub async fn device_redeem(
 pub async fn session_get(State(app): State<Arc<App>>, headers: HeaderMap) -> ApiResult<Response> {
     let cookie = guard::cookie_session(&app, &headers)?;
     let now = now_ms();
-    let rotate = app.db.read(|conn| {
+    let (rotate, device_bound) = app.db.read(|conn| {
         let stored = store::load_session(conn, cookie.session.id())?
             .ok_or_else(ApiError::unauthenticated)?;
         let last = stored.rotated_at_ms.unwrap_or_else(|| {
@@ -1061,12 +1187,18 @@ pub async fn session_get(State(app): State<Arc<App>>, headers: HeaderMap) -> Api
                 .expires_at_ms
                 .saturating_sub(app.config.session_ttl_ms)
         });
-        Ok(now.saturating_sub(last) >= app.config.session_rotate_after_ms)
+        Ok((
+            now.saturating_sub(last) >= app.config.session_rotate_after_ms,
+            stored.dbsc_bound_at_ms.is_some(),
+        ))
     })?;
 
     if rotate {
         let secret = new_secret();
-        app.db.tx(|conn| {
+        // Rotation is the periodic moment an existing unbound session may
+        // still pick up a hardware binding without minting a challenge per
+        // page load.
+        let registration = app.db.tx(|conn| {
             conn.execute(
                 "UPDATE sessions
                  SET prev_secret_hash = secret_hash, secret_hash = ?2, rotated_at = ?3,
@@ -1079,7 +1211,9 @@ pub async fn session_get(State(app): State<Arc<App>>, headers: HeaderMap) -> Api
                     store::ms(now.saturating_add(app.config.session_ttl_ms)),
                 ],
             )?;
-            Ok(())
+            (app.config.dbsc_enabled && !device_bound)
+                .then(|| dbsc_registration_header(conn, &app, cookie.session.id(), now))
+                .transpose()
         })?;
         let session = NewSession {
             id: cookie.session.id().clone(),
@@ -1089,8 +1223,22 @@ pub async fn session_get(State(app): State<Arc<App>>, headers: HeaderMap) -> Api
             &session,
             cookie.session.principal_id(),
             cookie.session.device_id(),
+            device_bound,
         )?;
-        return Ok(([(header::SET_COOKIE, session.cookie())], Json(body)).into_response());
+        let mut response = (
+            [(
+                header::SET_COOKIE,
+                session.cookie(app.config.session_ttl_ms),
+            )],
+            Json(body),
+        )
+            .into_response();
+        if let Some(value) = registration {
+            response
+                .headers_mut()
+                .insert("secure-session-registration", value);
+        }
+        return Ok(response);
     }
 
     Ok(Json(json!({
@@ -1098,6 +1246,7 @@ pub async fn session_get(State(app): State<Arc<App>>, headers: HeaderMap) -> Api
         "deviceId": cookie.session.device_id().as_str(),
         "sessionId": cookie.session.id().as_str(),
         "csrf": b64(&session_csrf_token(&cookie.secret).map_err(|_| ApiError::internal())?),
+        "deviceBound": device_bound,
     }))
     .into_response())
 }
@@ -1122,11 +1271,15 @@ pub async fn session_delete(
             session_id: cookie.session.id().as_str().to_owned(),
         })
         .await;
-    Ok((
+    let mut response = (
         [(header::SET_COOKIE, cleared_cookie())],
         Json(json!({ "revoked": true })),
     )
-        .into_response())
+        .into_response();
+    response
+        .headers_mut()
+        .append(header::SET_COOKIE, cleared_dbsc_cookie());
+    Ok(response)
 }
 
 /// `GET /v1/auth/devices`: enumerate controllers, devices, and sessions.
@@ -1169,7 +1322,7 @@ pub async fn devices_list(State(app): State<Arc<App>>, headers: HeaderMap) -> Ap
         }
         let mut sessions = Vec::new();
         let mut statement = conn.prepare(
-            "SELECT id, device_id, created_at, expires_at, revoked_at
+            "SELECT id, device_id, created_at, expires_at, revoked_at, dbsc_bound_at
              FROM sessions WHERE principal_id = ?1",
         )?;
         let rows = statement.query_map(params![principal], |row| {
@@ -1179,6 +1332,7 @@ pub async fn devices_list(State(app): State<Arc<App>>, headers: HeaderMap) -> Ap
                 "createdAtMs": row.get::<_, i64>(2)?,
                 "expiresAtMs": row.get::<_, i64>(3)?,
                 "revokedAtMs": row.get::<_, Option<i64>>(4)?,
+                "deviceBound": row.get::<_, Option<i64>>(5)?.is_some(),
             }))
         })?;
         for row in rows {
@@ -1236,6 +1390,180 @@ pub async fn device_revoke(
             .await;
     }
     Ok(Json(json!({ "revoked": true })).into_response())
+}
+
+/* --------------------------------- DBSC ---------------------------------- */
+
+/// `POST /v1/auth/dbsc/register`: the browser — not page JavaScript — answers
+/// the `Secure-Session-Registration` challenge with a `dbsc+jwt` carrying a
+/// hardware-held public key. One transaction consumes the challenge, stores
+/// the key on the session row, and issues the short-lived bound cookie.
+/// Absence of DBSC support simply means this endpoint is never called.
+pub async fn dbsc_register(
+    State(app): State<Arc<App>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    if !app.config.dbsc_enabled {
+        return Err(ApiError::not_found());
+    }
+    rate(&app, &headers, &addr, "dbsc", 30)?;
+    let cookie = guard::cookie_session(&app, &headers)?;
+    let token = headers
+        .get("secure-session-response")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(ApiError::unauthenticated)?
+        .to_owned();
+    let claimed_hash = peek_dbsc_challenge_hash(&token).map_err(|_| ApiError::unauthenticated())?;
+    let now = now_ms();
+    let session_id = cookie.session.id().clone();
+
+    let bound_secret = new_secret();
+    app.db.tx(|conn| {
+        let challenge = store::load_dbsc_challenge(conn, &session_id, &claimed_hash)?
+            .ok_or_else(ApiError::unauthenticated)?;
+        let authorized = authorize_dbsc_registration(&challenge, &session_id, &token, now)
+            .map_err(|_| ApiError::unauthenticated())?;
+        let consumed = conn.execute(
+            "UPDATE auth_challenges SET consumed_at = ?2 WHERE id = ?1 AND consumed_at IS NULL",
+            params![challenge.id.as_str(), store::ms(now)],
+        )?;
+        if consumed != 1 {
+            return Err(ApiError::unauthenticated());
+        }
+        // Re-registration replaces the binding; it already requires the live
+        // session cookie, which is full control of the session.
+        conn.execute(
+            "UPDATE sessions
+             SET dbsc_public_key_sec1 = ?2, dbsc_bound_at = ?3, dbsc_refreshed_at = ?3,
+                 dbsc_cookie_hash = ?4
+             WHERE id = ?1 AND revoked_at IS NULL",
+            params![
+                session_id.as_str(),
+                authorized.public_key_sec1,
+                store::ms(now),
+                bearer_secret_hash(&bound_secret),
+            ],
+        )?;
+        Ok(())
+    })?;
+
+    Ok((
+        StatusCode::OK,
+        [
+            (header::SET_COOKIE, dbsc_bound_cookie(&bound_secret)),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+        ],
+        Json(dbsc_session_config(&app, &session_id)),
+    )
+        .into_response())
+}
+
+/// `POST /v1/auth/dbsc/refresh`: when the bound cookie expires the browser
+/// proves continued possession of the hardware key. Without a proof this
+/// endpoint answers `403` plus a one-use challenge; with a valid proof it
+/// rotates the bound cookie. A dead underlying session answers
+/// `{"continue": false}` so the browser stops maintaining the binding.
+pub async fn dbsc_refresh(
+    State(app): State<Arc<App>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    if !app.config.dbsc_enabled {
+        return Err(ApiError::not_found());
+    }
+    rate(&app, &headers, &addr, "dbsc", 30)?;
+    let now = now_ms();
+    let Ok(cookie) = guard::cookie_session(&app, &headers) else {
+        // Nothing server-side changes here; the browser is told to stop.
+        return Ok(Json(json!({ "continue": false })).into_response());
+    };
+    let presented_id = headers
+        .get("sec-secure-session-id")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(ApiError::unauthenticated)?;
+    if presented_id != cookie.session.id().as_str() {
+        return Err(ApiError::unauthenticated());
+    }
+    let session_id = cookie.session.id().clone();
+
+    let Some(token) = headers
+        .get("secure-session-response")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+    else {
+        // First round: mint the one-use challenge the proof must answer.
+        let challenge = b64(&new_secret());
+        app.db.tx(|conn| {
+            conn.execute(
+                "INSERT INTO auth_challenges
+                    (id, kind, session_id, nonce_hash, audience, expires_at)
+                 VALUES (?1, 'dbsc', ?2, ?3, ?4, ?5)",
+                params![
+                    new_id("challenge"),
+                    session_id.as_str(),
+                    bearer_secret_hash(challenge.as_bytes()),
+                    app.config.origin,
+                    store::ms(now.saturating_add(app.config.challenge_ttl_ms)),
+                ],
+            )?;
+            Ok(())
+        })?;
+        let value =
+            HeaderValue::from_str(&format!("\"{challenge}\";id=\"{}\"", session_id.as_str()))
+                .map_err(|_| ApiError::internal())?;
+        return Ok((
+            StatusCode::FORBIDDEN,
+            [("secure-session-challenge", value)],
+            Json(json!({ "error": "challenge required" })),
+        )
+            .into_response());
+    };
+
+    let claimed_hash = peek_dbsc_challenge_hash(&token).map_err(|_| ApiError::unauthenticated())?;
+    let bound_secret = new_secret();
+    let bound = app.db.tx(|conn| {
+        let stored =
+            store::load_session(conn, &session_id)?.ok_or_else(ApiError::unauthenticated)?;
+        let Some(bound_key) = stored.dbsc_public_key_sec1 else {
+            return Ok(false);
+        };
+        let challenge = store::load_dbsc_challenge(conn, &session_id, &claimed_hash)?
+            .ok_or_else(ApiError::unauthenticated)?;
+        authorize_dbsc_refresh(&challenge, &session_id, &bound_key, &token, now)
+            .map_err(|_| ApiError::unauthenticated())?;
+        let consumed = conn.execute(
+            "UPDATE auth_challenges SET consumed_at = ?2 WHERE id = ?1 AND consumed_at IS NULL",
+            params![challenge.id.as_str(), store::ms(now)],
+        )?;
+        if consumed != 1 {
+            return Err(ApiError::unauthenticated());
+        }
+        conn.execute(
+            "UPDATE sessions SET dbsc_refreshed_at = ?2, dbsc_cookie_hash = ?3
+             WHERE id = ?1 AND revoked_at IS NULL",
+            params![
+                session_id.as_str(),
+                store::ms(now),
+                bearer_secret_hash(&bound_secret),
+            ],
+        )?;
+        Ok(true)
+    })?;
+    if !bound {
+        // The session was never registered; tell the browser to stop.
+        return Ok(Json(json!({ "continue": false })).into_response());
+    }
+
+    Ok((
+        StatusCode::OK,
+        [
+            (header::SET_COOKIE, dbsc_bound_cookie(&bound_secret)),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+        ],
+        Json(dbsc_session_config(&app, &session_id)),
+    )
+        .into_response())
 }
 
 /* --------------------------------- EVT ----------------------------------- */
@@ -1348,7 +1676,7 @@ pub async fn evt_redeem(
     };
     let now = now_ms();
 
-    let (principal_id, device_id, session, changed) = app.db.tx(|conn| {
+    let (principal_id, device_id, session, changed, registration) = app.db.tx(|conn| {
         let challenge = conn
             .query_row(
                 "SELECT id, scratch_id, bound_device_id, bound_public_key_hash, nonce_hash,
@@ -1503,7 +1831,12 @@ pub async fn evt_redeem(
         }
         let session = insert_session(conn, &app, &principal_id, &pending.id, now)?;
         let device_id = pending.id.clone();
-        Ok((principal_id, device_id, session, changed))
+        let registration = app
+            .config
+            .dbsc_enabled
+            .then(|| dbsc_registration_header(conn, &app, &session.id, now))
+            .transpose()?;
+        Ok((principal_id, device_id, session, changed, registration))
     })?;
 
     for (document_id, epoch) in changed {
@@ -1511,11 +1844,5 @@ pub async fn evt_redeem(
             .control(Control::EpochChanged { document_id, epoch })
             .await;
     }
-    let body = session_json(&session, &principal_id, &device_id)?;
-    Ok((
-        StatusCode::CREATED,
-        [(header::SET_COOKIE, session.cookie())],
-        Json(body),
-    )
-        .into_response())
+    login_response(&app, &session, &principal_id, &device_id, registration)
 }
