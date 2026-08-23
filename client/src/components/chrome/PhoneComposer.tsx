@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import type { EditorView } from '@codemirror/view';
 import type { StateCommand } from '@codemirror/state';
 import type { CollabSession } from '../../collab/types';
@@ -43,6 +43,8 @@ interface PhoneComposerProps {
   voiceSupported?: boolean;
   onNotify?: (title: string, detail?: string, tone?: 'neutral' | 'success' | 'danger') => void;
   temporary?: boolean;
+  /** Controlled AI surface supplied by the document-level agent controller. */
+  agentChat?: ReactNode;
 }
 
 type PhoneSheet = 'insert' | 'tools' | 'more' | null;
@@ -144,14 +146,17 @@ export function PhoneComposer(props: PhoneComposerProps) {
           <div className="phone-sheet surface-material-host" role="dialog" aria-label={sheet}>
             <SurfaceMaterial variant="floating" intensity={1.08} />
             {sheet === 'tools' ? (
-              <DraftToolsSheet
-                open
-                embedded
-                documentTitle={props.documentTitle}
-                getView={props.getView}
-                onClose={() => setSheet(null)}
-                onNotify={props.onNotify}
-              />
+              <>
+                {props.agentChat}
+                <DraftToolsSheet
+                  open
+                  embedded
+                  documentTitle={props.documentTitle}
+                  getView={props.getView}
+                  onClose={() => setSheet(null)}
+                  onNotify={props.onNotify}
+                />
+              </>
             ) : (
               <>
                 <header>
