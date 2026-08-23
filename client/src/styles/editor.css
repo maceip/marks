@@ -6,7 +6,7 @@
  */
 .esbt-caret {
   position: relative;
-  border-left: 2px solid var(--cursor-color, var(--accent));
+  border-left: 2px solid var(--cursor-color, var(--color-action));
   border-right: none;
   margin-left: -1px;
   box-sizing: border-box;
@@ -20,9 +20,9 @@
   z-index: 30;
   padding: 1px 5px;
   border-radius: 4px 4px 4px 0;
-  background: var(--cursor-color, var(--accent));
+  background: var(--cursor-color, var(--color-action));
   color: #fff;
-  font-family: var(--font-sans);
+  font-family: var(--font-family-sans);
   font-size: 10.5px;
   font-weight: 600;
   line-height: 1.45;
@@ -39,19 +39,19 @@
 }
 
 .esbt-selection {
-  background-color: color-mix(in srgb, var(--cursor-color, var(--accent)) 24%, transparent);
+  background-color: color-mix(in srgb, var(--cursor-color, var(--color-action)) 24%, transparent);
   border-radius: 2px;
 }
 
-.marks-user1 { --cursor-color: var(--user-1); }
-.marks-user2 { --cursor-color: var(--user-2); }
-.marks-user3 { --cursor-color: var(--user-3); }
-.marks-user4 { --cursor-color: var(--user-4); }
-.marks-user5 { --cursor-color: var(--user-5); }
-.marks-user6 { --cursor-color: var(--user-6); }
-.marks-user7 { --cursor-color: var(--user-7); }
-.marks-user8 { --cursor-color: var(--user-8); }
+.marks-user1 { --cursor-color: var(--color-collaborator-1); }
+.marks-user2 { --cursor-color: var(--color-collaborator-2); }
+.marks-user3 { --cursor-color: var(--color-collaborator-3); }
+.marks-user4 { --cursor-color: var(--color-collaborator-4); }
+.marks-user5 { --cursor-color: var(--color-collaborator-5); }
+.marks-user6 { --cursor-color: var(--color-collaborator-6); }
+.marks-user7 { --cursor-color: var(--color-collaborator-7); }
+.marks-user8 { --cursor-color: var(--color-collaborator-8); }
 
 .cm-editor .cm-placeholder {
-  color: var(--text-faint);
+  color: var(--color-fg-subtle);
 }

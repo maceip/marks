@@ -1,173 +1,259 @@
+/*
+ * Marks design tokens
+ *
+ * Primitive values are implementation details of this file. Application CSS
+ * must use a semantic token so that themes can change without component edits.
+ * See docs/design-tokens.md for the token/local-property contract.
+ */
+
 :root {
   color-scheme: light;
 
-  --bg: #eef2f8;
-  --surface: #fbfbff;
-  --surface-raised: #ffffff;
-  --surface-sunken: #f0f3fa;
-  --glass: rgb(242 243 255 / 68%);
-  --glass-strong: rgb(250 248 255 / 85%);
-  --liquid-glass: rgb(255 255 255 / 55%);
-  --glass-border: rgb(35 53 111 / 20%);
-  --glass-highlight: rgb(255 255 255 / 92%);
-  --glass-refraction: radial-gradient(circle at 18% -35%, rgb(255 255 255 / 88%), transparent 52%), linear-gradient(118deg, rgb(255 255 255 / 34%), rgb(223 231 255 / 18%) 52%, rgb(236 255 249 / 22%));
-  --glass-shadow: 0 16px 48px -30px rgb(0 34 101 / 34%), inset 0 1px var(--glass-highlight), inset 0 -1px rgb(49 94 234 / 5%);
-  --glass-blur-chrome: 19px;
-  --glass-blur-panel: 23px;
-  --glass-blur-floating: 27px;
-  --glass-saturation: 168%;
+  /* Primitive palettes --------------------------------------------------- */
+  --primitive-neutral-0: #ffffff;
+  --primitive-neutral-25: #fbfbff;
+  --primitive-neutral-50: #f8f8fb;
+  --primitive-neutral-75: #f4f2f7;
+  --primitive-neutral-100: #f0f3fa;
+  --primitive-neutral-150: #eef2f8;
+  --primitive-neutral-200: #dce2ee;
+  --primitive-neutral-300: #bdc6d9;
+  --primitive-neutral-500: #8c96ad;
+  --primitive-neutral-600: #566078;
+  --primitive-neutral-900: #111a35;
+  --primitive-blue-50: #e9eeff;
+  --primitive-blue-100: #d9e2ff;
+  --primitive-blue-500: #315eea;
+  --primitive-blue-600: #244bc7;
+  --primitive-blue-700: #182654;
+  --primitive-green-50: #e6f8f0;
+  --primitive-green-500: #11bd72;
+  --primitive-green-700: #0a7b53;
+  --primitive-teal-500: #4d8a91;
+  --primitive-teal-700: #0f8f9e;
+  --primitive-amber-50: #fdf5e2;
+  --primitive-amber-300: #fadf7f;
+  --primitive-amber-500: #c7922a;
+  --primitive-amber-700: #b8860b;
+  --primitive-red-50: #fdeded;
+  --primitive-red-500: #d43b3b;
+  --primitive-red-700: #b02f6c;
 
-  --text: #111a35;
-  --text-muted: #566078;
-  --text-faint: #8c96ad;
+  /* Semantic colour: foreground, background, and border ----------------- */
+  --color-fg-default: var(--primitive-neutral-900);
+  --color-fg-muted: var(--primitive-neutral-600);
+  --color-fg-subtle: var(--primitive-neutral-500);
+  --color-fg-on-action: var(--primitive-neutral-0);
+  --color-bg-canvas: var(--primitive-neutral-150);
+  --color-bg-surface: var(--primitive-neutral-25);
+  --color-bg-raised: var(--primitive-neutral-0);
+  --color-bg-sunken: var(--primitive-neutral-100);
+  --color-border-default: var(--primitive-neutral-200);
+  --color-border-strong: var(--primitive-neutral-300);
 
-  --border: #dce2ee;
-  --border-strong: #bdc6d9;
+  /* Semantic colour: brand, action, and feedback ------------------------ */
+  --color-brand-primary: var(--primitive-blue-700);
+  --color-brand-accent: var(--primitive-blue-500);
+  --color-brand-positive: var(--primitive-green-500);
+  --color-brand-teal: var(--primitive-teal-500);
+  --color-brand-warm: var(--primitive-amber-500);
+  --color-action: var(--primitive-blue-500);
+  --color-action-hover: var(--primitive-blue-600);
+  --color-action-muted: #4c78f3;
+  --color-action-soft: var(--primitive-blue-50);
+  --color-feedback-danger: var(--primitive-red-500);
+  --color-feedback-danger-soft: var(--primitive-red-50);
+  --color-feedback-success: var(--primitive-green-500);
+  --color-feedback-success-soft: var(--primitive-green-50);
+  --color-feedback-warning: var(--primitive-amber-700);
+  --color-feedback-warning-soft: var(--primitive-amber-50);
+  --color-feedback-info: #2c78c8;
+  --color-feedback-info-soft: #eaf3fb;
 
-  --brand-navy: #182654;
-  --brand-blue: #315eea;
-  --brand-green: #11bd72;
-  --brand-teal: #4d8a91;
-  --brand-amber: #c7922a;
+  /* Semantic colour: selection, code, and collaborators ----------------- */
+  --color-selection: var(--primitive-blue-100);
+  --color-selection-match: #e8edff;
+  --color-search-match: #fdf0c2;
+  --color-search-match-active: var(--primitive-amber-300);
+  --color-active-line: #f7f7fa;
+  --color-code-fg: var(--primitive-red-700);
+  --color-code-bg: var(--primitive-neutral-75);
+  --color-code-block-bg: var(--primitive-neutral-50);
+  --color-syntax-keyword: #8250df;
+  --color-syntax-string: var(--primitive-green-700);
+  --color-syntax-number: #b8500b;
+  --color-syntax-function: #2a5cd7;
+  --color-syntax-type: var(--primitive-red-700);
+  --color-syntax-comment: #8b909a;
+  --color-collaborator-1: #e0567a;
+  --color-collaborator-2: #2f8f5b;
+  --color-collaborator-3: #2f6fd0;
+  --color-collaborator-4: #c2681a;
+  --color-collaborator-5: #8a4fd8;
+  --color-collaborator-6: #0f8f9e;
+  --color-collaborator-7: #c43b8e;
+  --color-collaborator-8: #6b7a2f;
 
-  --accent: var(--brand-blue);
-  --accent-hover: #244bc7;
-  --accent-muted: #4c78f3;
-  --accent-soft: #e9eeff;
+  /* Typography ---------------------------------------------------------- */
+  --font-family-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
+  --font-family-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  --font-size-xs: 10px;
+  --font-size-sm: 12px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-editor: 14.5px;
+  --line-height-tight: 1.2;
+  --line-height-default: 1.55;
+  --line-height-relaxed: 1.7;
+  --letter-spacing-tight: -0.02em;
+  --letter-spacing-default: 0;
+  --letter-spacing-caps: 0.075em;
 
-  --danger: #d43b3b;
-  --danger-soft: #fdeded;
-  --success: var(--brand-green);
-  --success-soft: #e6f8f0;
-  --warning: #b8860b;
-  --warning-soft: #fdf5e2;
-  --info: #2c78c8;
-  --info-soft: #eaf3fb;
+  /* 4px spacing scale --------------------------------------------------- */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
 
-  --selection: #d9e2ff;
-  --selection-match: #e8edff;
-  --search-match: #fdf0c2;
-  --search-match-active: #fadf7f;
-  --active-line: #f7f7fa;
+  /* Controls and icons -------------------------------------------------- */
+  --control-height-sm: 28px;
+  --control-height-md: 36px;
+  --control-height-lg: 44px;
+  --control-height-touch: 44px;
+  --icon-size-sm: 12px;
+  --icon-size-md: 16px;
+  --icon-size-lg: 20px;
+  --icon-size-xl: 24px;
 
-  --code: #b02f6c;
-  --code-bg: #f4f2f7;
-  --code-block-bg: #f8f8fb;
+  /* Shape, borders, opacity, elevation, and layers ---------------------- */
+  --radius-control: 6px;
+  --radius-card: 10px;
+  --radius-panel: 14px;
+  --radius-pill: 999px;
+  --radius-round: 50%;
+  --border-width-hairline: 1px;
+  --border-width-strong: 2px;
+  --opacity-disabled: 0.55;
+  --opacity-muted: 0.42;
+  --opacity-scrim: 0.55;
+  --elevation-sm: 0 1px 2px rgb(20 22 26 / 6%);
+  --elevation-md: 0 6px 24px -8px rgb(20 22 26 / 18%);
+  --elevation-lg: 0 20px 48px -16px rgb(20 22 26 / 26%);
+  --layer-base: 0;
+  --layer-raised: 1;
+  --layer-dropdown: 40;
+  --layer-scrim: 60;
+  --layer-modal: 80;
+  --layer-toast: 100;
 
-  --syntax-keyword: #8250df;
-  --syntax-string: #0a7b53;
-  --syntax-number: #b8500b;
-  --syntax-fn: #2a5cd7;
-  --syntax-type: #b02f6c;
-  --syntax-comment: #8b909a;
-
-  /* Collaborator colours, shared by both CRDT cursor bindings. */
-  --user-1: #e0567a;
-  --user-2: #2f8f5b;
-  --user-3: #2f6fd0;
-  --user-4: #c2681a;
-  --user-5: #8a4fd8;
-  --user-6: #0f8f9e;
-  --user-7: #c43b8e;
-  --user-8: #6b7a2f;
-
-  --shadow-sm: 0 1px 2px rgb(20 22 26 / 6%);
-  --shadow-md: 0 6px 24px -8px rgb(20 22 26 / 18%);
-  --shadow-lg: 0 20px 48px -16px rgb(20 22 26 / 26%);
-
-  --radius-sm: 6px;
-  --radius: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 20px;
-
-  --motion-fast: 120ms;
-  --motion-medium: 220ms;
+  /* Motion -------------------------------------------------------------- */
+  --duration-instant: 60ms;
+  --duration-fast: 120ms;
+  --duration-medium: 220ms;
+  --duration-slow: 420ms;
+  --ease-standard: ease;
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
   --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-distance-sm: 1px;
+  --motion-distance-md: 2px;
+  --motion-distance-lg: 8px;
+  --motion-scale-pressed: 0.96;
+  --motion-scale-enter: 0.98;
+  --motion-stagger: 35ms;
 
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
-    'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
-  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono',
-    monospace;
+  /* Materials ----------------------------------------------------------- */
+  --material-tint: rgb(242 243 255 / 68%);
+  --material-tint-strong: rgb(250 248 255 / 85%);
+  --material-tint-liquid: rgb(255 255 255 / 55%);
+  --material-border: rgb(35 53 111 / 20%);
+  --material-highlight: rgb(255 255 255 / 92%);
+  --material-refraction: radial-gradient(circle at 18% -35%, rgb(255 255 255 / 88%), transparent 52%), linear-gradient(118deg, rgb(255 255 255 / 34%), rgb(223 231 255 / 18%) 52%, rgb(236 255 249 / 22%));
+  --material-elevation: 0 16px 48px -30px rgb(0 34 101 / 34%), inset 0 1px var(--material-highlight), inset 0 -1px rgb(49 94 234 / 5%);
+  --material-blur-chrome: 19px;
+  --material-blur-panel: 23px;
+  --material-blur-floating: 27px;
+  --material-saturation: 168%;
+  --material-shader-chrome: 0.7;
+  --material-shader-panel: 0.82;
+  --material-shader-floating: 0.96;
+  --material-shader-hero: 0.76;
 
-  --editor-font-size: 14.5px;
-  --titlebar-height: 48px;
-  --ribbon-height: 148px;
-  --mobile-ribbon-height: 104px;
-  --topbar-height: var(--ribbon-height);
-  --statusbar-height: 30px;
-  --sidebar-width: 268px;
-  --touch-target: 44px;
+  /* Application dimensions --------------------------------------------- */
+  --layout-titlebar-height: 48px;
+  --layout-ribbon-height: 148px;
+  --layout-mobile-ribbon-height: 104px;
+  --layout-statusbar-height: 30px;
+  --layout-sidebar-width: 268px;
 }
 
 [data-theme='dark'] {
   color-scheme: dark;
-
-  --bg: #09101f;
-  --surface: #11182a;
-  --surface-raised: #17213a;
-  --surface-sunken: #0c1426;
-  --glass: rgb(10 19 38 / 70%);
-  --glass-strong: rgb(15 25 47 / 86%);
-  --liquid-glass: rgb(19 31 56 / 62%);
-  --glass-border: rgb(176 199 255 / 16%);
-  --glass-highlight: rgb(255 255 255 / 16%);
-  --glass-refraction: radial-gradient(circle at 18% -35%, rgb(99 139 255 / 22%), transparent 52%), linear-gradient(118deg, rgb(255 255 255 / 7%), rgb(25 46 91 / 16%) 52%, rgb(25 94 75 / 12%));
-  --glass-shadow: 0 18px 52px -28px rgb(0 0 0 / 72%), inset 0 1px var(--glass-highlight), inset 0 -1px rgb(61 102 210 / 10%);
-
-  --text: #eef3ff;
-  --text-muted: #a5b0c7;
-  --text-faint: #6f7c98;
-
-  --border: #26334e;
-  --border-strong: #3b4a69;
-
-  --brand-navy: #101a39;
-  --brand-blue: #7294ff;
-  --brand-green: #35d995;
-  --brand-teal: #67aab0;
-
-  --accent: var(--brand-blue);
-  --accent-hover: #91aaff;
-  --accent-muted: #5277e2;
-  --accent-soft: #1c2b55;
-
-  --danger: #f0716f;
-  --danger-soft: #2a1719;
-  --success: var(--brand-green);
-  --success-soft: #102b22;
-  --warning: #e0b653;
-  --warning-soft: #262014;
-  --info: #6bb2f0;
-  --info-soft: #131f2b;
-
-  --selection: #294079;
-  --selection-match: #22345e;
-  --search-match: #4a3f16;
-  --search-match-active: #6d5c1d;
-  --active-line: #191d23;
-
-  --code: #f0879c;
-  --code-bg: #21262e;
-  --code-block-bg: #14171c;
-
-  --syntax-keyword: #c39bfa;
-  --syntax-string: #7ed3a5;
-  --syntax-number: #f0b072;
-  --syntax-fn: #86b6f8;
-  --syntax-type: #f0879c;
-  --syntax-comment: #737b88;
-
-  --user-1: #ff8098;
-  --user-2: #5fd28f;
-  --user-3: #74a9f5;
-  --user-4: #f0a45e;
-  --user-5: #bb92f5;
-  --user-6: #4fc6d4;
-  --user-7: #f078bd;
-  --user-8: #b3c46b;
-
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
-  --shadow-md: 0 8px 28px -10px rgb(0 0 0 / 70%);
-  --shadow-lg: 0 24px 56px -18px rgb(0 0 0 / 80%);
+  --color-fg-default: #eef3ff;
+  --color-fg-muted: #a5b0c7;
+  --color-fg-subtle: #6f7c98;
+  --color-bg-canvas: #09101f;
+  --color-bg-surface: #11182a;
+  --color-bg-raised: #17213a;
+  --color-bg-sunken: #0c1426;
+  --color-border-default: #26334e;
+  --color-border-strong: #3b4a69;
+  --color-brand-primary: #101a39;
+  --color-brand-accent: #7294ff;
+  --color-brand-positive: #35d995;
+  --color-brand-teal: #67aab0;
+  --color-action: #7294ff;
+  --color-action-hover: #91aaff;
+  --color-action-muted: #5277e2;
+  --color-action-soft: #1c2b55;
+  --color-feedback-danger: #f0716f;
+  --color-feedback-danger-soft: #2a1719;
+  --color-feedback-success: #35d995;
+  --color-feedback-success-soft: #102b22;
+  --color-feedback-warning: #e0b653;
+  --color-feedback-warning-soft: #262014;
+  --color-feedback-info: #6bb2f0;
+  --color-feedback-info-soft: #131f2b;
+  --color-selection: #294079;
+  --color-selection-match: #22345e;
+  --color-search-match: #4a3f16;
+  --color-search-match-active: #6d5c1d;
+  --color-active-line: #191d23;
+  --color-code-fg: #f0879c;
+  --color-code-bg: #21262e;
+  --color-code-block-bg: #14171c;
+  --color-syntax-keyword: #c39bfa;
+  --color-syntax-string: #7ed3a5;
+  --color-syntax-number: #f0b072;
+  --color-syntax-function: #86b6f8;
+  --color-syntax-type: #f0879c;
+  --color-syntax-comment: #737b88;
+  --color-collaborator-1: #ff8098;
+  --color-collaborator-2: #5fd28f;
+  --color-collaborator-3: #74a9f5;
+  --color-collaborator-4: #f0a45e;
+  --color-collaborator-5: #bb92f5;
+  --color-collaborator-6: #4fc6d4;
+  --color-collaborator-7: #f078bd;
+  --color-collaborator-8: #b3c46b;
+  --material-tint: rgb(10 19 38 / 70%);
+  --material-tint-strong: rgb(15 25 47 / 86%);
+  --material-tint-liquid: rgb(19 31 56 / 62%);
+  --material-border: rgb(176 199 255 / 16%);
+  --material-highlight: rgb(255 255 255 / 16%);
+  --material-refraction: radial-gradient(circle at 18% -35%, rgb(99 139 255 / 22%), transparent 52%), linear-gradient(118deg, rgb(255 255 255 / 7%), rgb(25 46 91 / 16%) 52%, rgb(25 94 75 / 12%));
+  --material-elevation: 0 18px 52px -28px rgb(0 0 0 / 72%), inset 0 1px var(--material-highlight), inset 0 -1px rgb(61 102 210 / 10%);
+  --elevation-sm: 0 1px 2px rgb(0 0 0 / 40%);
+  --elevation-md: 0 8px 28px -10px rgb(0 0 0 / 70%);
+  --elevation-lg: 0 24px 56px -18px rgb(0 0 0 / 80%);
 }

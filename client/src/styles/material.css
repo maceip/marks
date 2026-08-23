@@ -16,7 +16,7 @@
   border-radius: inherit;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 420ms var(--ease-out);
+  transition: opacity var(--duration-slow) var(--ease-out);
   contain: strict;
 }
 
@@ -29,30 +29,30 @@
   z-index: 1;
 }
 
-.surface-material-chrome { --material-shader-opacity: 0.7; }
-.surface-material-floating { --material-shader-opacity: 0.96; }
-.surface-material-panel { --material-shader-opacity: 0.82; }
-.surface-material-hero { --material-shader-opacity: 0.76; }
+.surface-material-chrome { --material-shader-opacity: var(--material-shader-chrome); }
+.surface-material-floating { --material-shader-opacity: var(--material-shader-floating); }
+.surface-material-panel { --material-shader-opacity: var(--material-shader-panel); }
+.surface-material-hero { --material-shader-opacity: var(--material-shader-chrome)6; }
 
 :root[data-surface-tier='cinematic'] {
-  --glass-blur-chrome: 26px;
-  --glass-blur-panel: 30px;
-  --glass-blur-floating: 36px;
-  --glass-saturation: 190%;
+  --material-blur-chrome: 26px;
+  --material-blur-panel: 30px;
+  --material-blur-floating: 36px;
+  --material-saturation: 190%;
 }
 
 :root[data-surface-tier='balanced'] {
-  --glass-blur-chrome: 19px;
-  --glass-blur-panel: 23px;
-  --glass-blur-floating: 27px;
-  --glass-saturation: 168%;
+  --material-blur-chrome: 19px;
+  --material-blur-panel: 23px;
+  --material-blur-floating: 27px;
+  --material-saturation: 168%;
 }
 
 :root[data-surface-tier='foundation'] {
-  --glass-blur-chrome: 12px;
-  --glass-blur-panel: 16px;
-  --glass-blur-floating: 19px;
-  --glass-saturation: 146%;
+  --material-blur-chrome: 12px;
+  --material-blur-panel: 16px;
+  --material-blur-floating: 19px;
+  --material-saturation: 146%;
 }
 
 :root[data-surface-engine='css'] .surface-material-canvas,

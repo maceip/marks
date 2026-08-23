@@ -20,7 +20,7 @@
   align-content: start;
   gap: 18px;
   padding: 2.25rem 2.5rem;
-  background: var(--surface);
+  background: var(--color-bg-surface);
   pointer-events: none;
 }
 
@@ -35,7 +35,7 @@
   height: 11px;
   overflow: hidden;
   border-radius: 6px;
-  background: var(--surface-sunken);
+  background: var(--color-bg-sunken);
 }
 
 .skeleton-line::after {
@@ -46,7 +46,7 @@
   background: linear-gradient(
     90deg,
     transparent,
-    color-mix(in srgb, var(--text) 10%, transparent),
+    color-mix(in srgb, var(--color-fg-default) 10%, transparent),
     transparent
   );
   animation: marks-shimmer 1.15s ease-in-out infinite;
@@ -72,10 +72,10 @@
   z-index: 80;
   min-width: 198px;
   padding: 4px;
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-md);
+  background: var(--color-bg-raised);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-card);
+  box-shadow: var(--elevation-md);
 }
 
 .context-menu-item {
@@ -86,9 +86,9 @@
   width: 100%;
   padding: 7px 10px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-control);
   background: none;
-  color: var(--text);
+  color: var(--color-fg-default);
   font-size: 13px;
   text-align: left;
   cursor: pointer;
@@ -96,21 +96,21 @@
 
 .context-menu-item:hover:not(:disabled),
 .context-menu-item:focus-visible {
-  background: var(--surface-sunken);
+  background: var(--color-bg-sunken);
 }
 
 .context-menu-item:disabled {
-  color: var(--text-faint);
+  color: var(--color-fg-subtle);
   cursor: default;
 }
 
 .context-menu-item.danger {
-  color: var(--danger);
+  color: var(--color-feedback-danger);
 }
 
 .context-menu-item kbd {
-  color: var(--text-faint);
-  font-family: var(--font-sans);
+  color: var(--color-fg-subtle);
+  font-family: var(--font-family-sans);
   font-size: 11px;
 }
 
@@ -123,10 +123,10 @@
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--color-border-default);
   border-radius: 999px;
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-md);
+  background: var(--color-bg-raised);
+  box-shadow: var(--elevation-md);
   transform: translateX(-50%);
   font-size: 12.5px;
 }
@@ -135,12 +135,12 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--danger);
+  background: var(--color-feedback-danger);
   animation: pulse 1.2s ease-in-out infinite;
 }
 
 .voice-interim {
-  color: var(--text-muted);
+  color: var(--color-fg-muted);
   max-width: 28ch;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -152,8 +152,8 @@
 }
 
 .toolbar-button.active {
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--color-action-soft);
+  color: var(--color-action);
 }
 
 .editor-host .cm-content {

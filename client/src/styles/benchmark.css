@@ -1,8 +1,8 @@
 .benchmark {
   overflow-y: auto;
   padding: 28px 20px 64px;
-  background: radial-gradient(circle at 85% 5%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 32%),
-    var(--surface);
+  background: radial-gradient(circle at 85% 5%, color-mix(in srgb, var(--color-action) 8%, transparent), transparent 32%),
+    var(--color-bg-surface);
 }
 
 .benchmark-inner {
@@ -18,7 +18,7 @@
 }
 
 .benchmark-lede {
-  color: var(--text-muted);
+  color: var(--color-fg-muted);
   font-size: 13.5px;
   line-height: 1.65;
 }
@@ -30,18 +30,18 @@
   gap: 12px;
   justify-content: space-between;
   padding: 14px;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--surface-raised) 82%, transparent);
-  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--material-border);
+  border-radius: var(--radius-panel);
+  background: color-mix(in srgb, var(--color-bg-raised) 82%, transparent);
+  box-shadow: var(--elevation-sm);
 }
 
 .segmented {
   display: flex;
   gap: 2px;
   padding: 2px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-sunken);
+  border-radius: var(--radius-control);
+  background: var(--color-bg-sunken);
 }
 
 .segmented-button {
@@ -51,7 +51,7 @@
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--color-fg-muted);
   font-size: 12.5px;
   font-weight: 550;
   cursor: pointer;
@@ -60,34 +60,34 @@
 .segmented-button span {
   font-size: 10.5px;
   font-weight: 400;
-  color: var(--text-faint);
+  color: var(--color-fg-subtle);
 }
 
 .segmented-button.active {
-  background: var(--surface);
-  color: var(--text);
-  box-shadow: var(--shadow-sm);
+  background: var(--color-bg-surface);
+  color: var(--color-fg-default);
+  box-shadow: var(--elevation-sm);
 }
 
 .benchmark-phase {
-  color: var(--text-muted);
+  color: var(--color-fg-muted);
   font-size: 12.5px;
 }
 
 .benchmark-error {
   padding: 10px 12px;
-  border-radius: var(--radius-sm);
-  background: var(--danger-soft);
-  color: var(--danger);
+  border-radius: var(--radius-control);
+  background: var(--color-feedback-danger-soft);
+  color: var(--color-feedback-danger);
   font-size: 13px;
 }
 
 .benchmark-warning {
   padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--warning) 9%, var(--surface));
-  color: var(--text-muted);
+  border: 1px solid color-mix(in srgb, var(--color-feedback-warning) 35%, transparent);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--color-feedback-warning) 9%, var(--color-bg-surface));
+  color: var(--color-fg-muted);
   font-size: 12.5px;
   line-height: 1.5;
 }
@@ -100,11 +100,11 @@
 
 .benchmark-receipt-meta span {
   padding: 4px 8px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--color-border-default);
   border-radius: 999px;
-  background: var(--surface-sunken);
-  color: var(--text-faint);
-  font-family: var(--font-mono);
+  background: var(--color-bg-sunken);
+  color: var(--color-fg-subtle);
+  font-family: var(--font-family-mono);
   font-size: 10.5px;
 }
 
@@ -114,20 +114,20 @@
   overflow-x: auto;
   border-collapse: collapse;
   font-size: 13px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--surface-raised);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-panel);
+  background: var(--color-bg-raised);
 }
 
 .benchmark-table th,
 .benchmark-table td {
   padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--color-border-default);
   text-align: left;
 }
 
 .benchmark-table thead th {
-  color: var(--text-faint);
+  color: var(--color-fg-subtle);
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -143,14 +143,14 @@
 }
 
 .benchmark-table td.best {
-  color: var(--success);
+  color: var(--color-feedback-success);
   font-weight: 650;
 }
 
 .metric-hint {
   display: block;
   margin-top: 2px;
-  color: var(--text-faint);
+  color: var(--color-fg-subtle);
   font-size: 11.5px;
   font-weight: 400;
   line-height: 1.45;
@@ -167,21 +167,21 @@
   gap: 3px;
   min-width: 0;
   padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-raised);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-control);
+  background: var(--color-bg-raised);
 }
 
 .benchmark-size-grid span {
   overflow: hidden;
-  color: var(--text-faint);
+  color: var(--color-fg-subtle);
   font-size: 10.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .benchmark-size-grid strong {
-  color: var(--text);
+  color: var(--color-fg-default);
   font-size: 12.5px;
   font-variant-numeric: tabular-nums;
 }
@@ -195,7 +195,7 @@
 .benchmark-receipt-actions details {
   min-width: 0;
   flex: 1;
-  color: var(--text-muted);
+  color: var(--color-fg-muted);
   font-size: 12px;
 }
 
@@ -209,21 +209,21 @@
   overflow: auto;
   margin: 6px 0 0;
   padding: 10px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-sunken);
-  color: var(--text-muted);
-  font-family: var(--font-mono);
+  border-radius: var(--radius-control);
+  background: var(--color-bg-sunken);
+  color: var(--color-fg-muted);
+  font-family: var(--font-family-mono);
   font-size: 10.5px;
   line-height: 1.5;
 }
 
 .benchmark-notes {
   padding: 16px 18px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface-sunken);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-card);
+  background: var(--color-bg-sunken);
   font-size: 12.5px;
-  color: var(--text-muted);
+  color: var(--color-fg-muted);
 }
 
 .benchmark-notes h3 {
@@ -231,7 +231,7 @@
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--text-faint);
+  color: var(--color-fg-subtle);
 }
 
 .benchmark-notes ul {
@@ -242,7 +242,7 @@
 }
 
 .benchmark-notes strong {
-  color: var(--text);
+  color: var(--color-fg-default);
 }
 
 @media (max-width: 720px), (max-height: 560px) and (pointer: coarse) {
