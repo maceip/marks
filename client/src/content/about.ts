@@ -7,6 +7,14 @@ export function isAboutDocument(id: string | null | undefined): boolean {
   return id === ABOUT_DOCUMENT_ID;
 }
 
+/** True when the stored replica is empty or still the old About Marks copy. */
+export function aboutMarkdownNeedsRefresh(text: string | null | undefined): boolean {
+  const value = text?.trim() ?? '';
+  if (value.length === 0) return true;
+  if (value.includes(ABOUT_DOCUMENT_TITLE)) return false;
+  return /^# About Marks\b/m.test(value) || /```mermaid\s+timeline/.test(value);
+}
+
 export function aboutDocumentMeta(now = Date.now()): {
   id: string;
   title: string;
@@ -31,15 +39,15 @@ export function aboutDocumentMeta(now = Date.now()): {
  */
 export const ABOUT_DOCUMENT = `# Google Docs for Markdown
 
-Marks is the same-room writing surface people expect from a document suite, with source you can still read in any text editor.
+Marks is the document suite people already know how to use, except the file stays Markdown.
 
-This page is not a brochure beside the product. It is a Marks document: Markdown on the left, the designed page on the right, the same ribbon every other page uses.
+This page is not a brochure beside the product. It is a Marks document: Markdown in the editor, the designed page in preview, the same ribbon every other page uses.
 
 :::info
 Edit this page. Switch **Edit**, **Split**, and **Preview**. Format a line from **Home**. The marketing site is the editor.
 :::
 
-> A keystroke never waits for a network. Collaborators see the same Markdown. The file stays \`.md\`.
+> Type without a spinner. See the same source as everyone else. Take a \`.md\` file with you.
 
 ## What you get
 
@@ -52,18 +60,17 @@ Edit this page. Switch **Edit**, **Split**, and **Preview**. Format a line from 
 | Source you can export | No | Yes | Yes — always Markdown |
 | Preview of the page | Paginated | Debounced HTML | Dirty blocks only |
 
-## The room
+## How a page moves
 
 \`\`\`mermaid
 flowchart LR
-  you[You type Markdown] --> replica[Local replica]
-  replica --> preview[Preview paints dirty blocks]
-  replica --> room[Authorized room]
-  room --> them[Everyone else]
-  them --> replica
+  md[Markdown source] --> suite[Document suite]
+  suite --> you[You]
+  suite --> them[Everyone in the room]
+  md --> file[Still a .md file]
 \`\`\`
 
-No hero timeline. No second website. The diagram above is Markdown, rendered by the same preview that will render yours.
+The diagram is Markdown. So is the table above. So is every section on this page.
 
 ## Built around the work
 

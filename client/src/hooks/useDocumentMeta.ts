@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { readDocumentMeta, writeDocumentMeta } from '../browser/catalog-cache';
 import { documentIsOpenable } from '../browser/document-support';
+import { aboutDocumentMeta, isAboutDocument } from '../content/about';
 import { documentRepository } from '../data/documents';
+import { seedAboutDocumentText } from '../demo/workspace';
 import type { DocumentMeta } from '../lib/api';
 
 export interface DocumentMetaState {
@@ -32,6 +34,17 @@ export function useDocumentMeta(docId: string | null): DocumentMetaState {
 
     let active = true;
     setResolved(false);
+
+    // The public marketing document is built-in Markdown. Do not wait on the
+    // catalog or a server row — /welcome must open the editor immediately.
+    if (isAboutDocument(docId)) {
+      seedAboutDocumentText();
+      const about = aboutDocumentMeta();
+      setMeta(about);
+      setResolved(true);
+      if (documentRepository.mode === 'service') void writeDocumentMeta(about);
+      return;
+    }
 
     if (documentRepository.mode === 'service') {
       void readDocumentMeta(docId).then((cached) => {

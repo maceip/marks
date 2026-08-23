@@ -8,7 +8,12 @@ import {
   tabChannelName,
 } from '../browser';
 import { roomTicketProtocols } from '../auth/room-access';
-import { readLocalDocumentText, writeLocalDocumentText } from '../demo/workspace';
+import {
+  ABOUT_DOCUMENT,
+  aboutMarkdownNeedsRefresh,
+  isAboutDocument,
+} from '../content/about';
+import { readLocalDocumentText, seedAboutDocumentText, writeLocalDocumentText } from '../demo/workspace';
 import {
   appendJournalUpdate,
   JOURNAL_RETAINED_THRESHOLD,
@@ -505,6 +510,13 @@ export class EsbtEngine implements CollabSession {
     if (this.destroyed) {
       this.doc?.destroy();
       return;
+    }
+
+    if (isAboutDocument(this.docId) && this.doc) {
+      seedAboutDocumentText();
+      if (aboutMarkdownNeedsRefresh(this.getText())) {
+        this.doc.setText(ABOUT_DOCUMENT, { origin: 'import' });
+      }
     }
 
     this.markHydrated();

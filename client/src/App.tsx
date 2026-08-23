@@ -13,7 +13,7 @@ import { Sidebar } from './components/shell/Sidebar';
 import type { CursorInfo } from './components/workspace/EditorPane';
 import { Outline } from './components/workspace/Outline';
 import { StatusBar } from './components/workspace/StatusBar';
-import { ABOUT_DOCUMENT_ID } from './content/about';
+import { ABOUT_DOCUMENT_ID, isAboutDocument } from './content/about';
 import { Home } from './pages/Home';
 import { LOGOUT_LOCAL_LINE } from './lib/identity-copy';
 import { readPairingHash } from './lib/pairing-link';
@@ -144,6 +144,11 @@ export function App() {
   const [cursor, setCursor] = useState<CursorInfo>({ line: 1, column: 1, selected: 0 });
 
   useEffect(() => localStorage.setItem('marks:mode', mode), [mode]);
+
+  useEffect(() => {
+    if (!isAboutDocument(docId) || phone) return;
+    setMode('split');
+  }, [docId, phone]);
 
   useEffect(() => {
     localStorage.setItem('marks:ribbon-collapsed', String(ribbonCollapsed));
@@ -553,7 +558,10 @@ export function App() {
             if (document) openDialog({ type: 'delete', documentId: id, title: document.title });
           }}
           onOpenBenchmark={openBenchmark}
-          onOpenAbout={() => openDocument(ABOUT_DOCUMENT_ID)}
+          onOpenAbout={() => {
+            openDocument(ABOUT_DOCUMENT_ID);
+            if (!phone) setMode('split');
+          }}
         />
       )}
 

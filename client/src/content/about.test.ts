@@ -4,6 +4,7 @@ import {
   ABOUT_DOCUMENT,
   ABOUT_DOCUMENT_ID,
   ABOUT_DOCUMENT_TITLE,
+  aboutMarkdownNeedsRefresh,
   isAboutDocument,
 } from './about.ts';
 
@@ -15,6 +16,14 @@ describe('about document', () => {
     assert.match(ABOUT_DOCUMENT, /^# Google Docs for Markdown/m);
     assert.match(ABOUT_DOCUMENT, /This page is not a brochure/);
     assert.match(ABOUT_DOCUMENT, /The marketing site is the editor/);
+  });
+
+  it('refreshes empty or retired About Marks copy', () => {
+    assert.equal(aboutMarkdownNeedsRefresh(''), true);
+    assert.equal(aboutMarkdownNeedsRefresh('# About Marks\n\nOld copy.'), true);
+    assert.equal(aboutMarkdownNeedsRefresh('```mermaid\ntimeline\n    title Old hero\n```'), true);
+    assert.equal(aboutMarkdownNeedsRefresh(ABOUT_DOCUMENT), false);
+    assert.equal(aboutMarkdownNeedsRefresh('# Google Docs for Markdown\n\nEdited locally.'), false);
   });
 
   it('writes every marketing section in Markdown', () => {

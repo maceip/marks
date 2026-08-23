@@ -294,7 +294,7 @@ network timing on the eventual deployment and CDN.
 
 Before a UI handoff, verify at minimum:
 
-- About Marks (`/welcome/` → `/d/about-marks`) and workspace home at `1440x900` and `390x844`;
+- Google Docs for Markdown (`/welcome/` → `/d/about-marks` in the editor) and workspace home at `1440x900` and `390x844`;
 - document ribbon at `1440x900`, `390x844`, `853x1280`, and `1280x853`;
 - persistent desktop rail and modal tablet/phone drawer behavior;
 - File, Home, Insert, Draw, AI, Review, and View ribbon decks plus contextual
