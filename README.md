@@ -92,7 +92,10 @@ people to expect:
 - **Tables, footnotes, definition lists, abbreviations, sub/sup, marks, emoji**
 - **Math** via KaTeX, **diagrams** via Mermaid, **syntax highlighting** via highlight.js
 - **Callouts** — `:::info`, `:::success`, `:::warning`, `:::danger`, `:::note`
-- **Presence**: avatars, live remote cursors and selections
+- **Presence (delivered baseline)**: ephemeral per-tab avatars plus remote
+  source cursors/selections. Authenticated multi-tab aggregation, activity
+  states, anchored V2 frames, and preview-follow modes are planned, not shipped;
+  see the [presence contract](docs/PRESENCE.md).
 - **Per-user undo** — undoing reverts your edits, never a collaborator's
 - **Offline editing**, with local persistence, multi-tab replica sync, and automatic resync
 - **Voice input** where the browser exposes SpeechRecognition
@@ -176,6 +179,12 @@ are fully usable in local mode. Remote
 comment storage, commenter authorization, and cross-user history are still
 absent until the authenticated metadata service lands. The binding and release
 boundary is [docs/V1-SCOPE.md](docs/V1-SCOPE.md).
+
+Presence is intentionally outside durable sync. Its delivered V1 offset path,
+defined degraded behavior, planned V2 anchor path, privacy invariants, and
+reader-first rollout are tracked separately in [docs/PRESENCE.md](docs/PRESENCE.md);
+the avatar/cursor bullet above must not be read as claiming those planned
+semantics.
 
 **Engine performance receipt** in the sidebar runs the checked-in Rust/Wasm
 artifact in a worker. Interactive operations are one transaction and one

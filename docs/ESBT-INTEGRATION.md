@@ -21,11 +21,14 @@ document engine, one byte protocol, and one place for each policy.
 | Product resource/compaction profile | Marks | `engine-profile.json` |
 | IndexedDB durability, reconnect, room transport, editor bridge | Marks client | `client/src/collab/` |
 | Admission, authorization, durable revisions, retry receipts | Marks server | `crates/marks-server/src/room/` |
-| Avatars and carets | Marks presence protocol | `client/src/collab/presence-store.ts` |
+| Avatars and carets | Marks presence protocol | [`PRESENCE.md`](PRESENCE.md) |
 
 There is no TypeScript CRDT, native/Wasm transcoder, Node room server, or
 second undo implementation. Presence is lossy product state, not an ESBT data
-type.
+type. The delivered codec is the V1 JSON-value/UTF-16-offset baseline. The V2
+engine-anchor codec, identity aggregation, preview mappings, validation, and
+rolling upgrade are **planned** in [`PRESENCE.md`](PRESENCE.md). A missing or
+invalid presence frame is a degraded presence experience, never an ESBT error.
 
 ## 2. One source identity and generated ABI
 
@@ -127,7 +130,7 @@ Every WebSocket binary message is one tag byte plus a payload:
 | Tag | Direction | Payload |
 | ---: | --- | --- |
 | `0x01` update | server → client / legacy relay | canonical ESBT update |
-| `0x02` presence | both | bounded Marks presence bytes; never persisted |
+| `0x02` presence | both | bounded Marks presence bytes; delivered V1 and planned V2 are specified in [`PRESENCE.md`](PRESENCE.md); never persisted |
 | `0x03` server version | server → client | canonical ESBT version |
 | `0x04` snapshot | server → client | canonical compact/full ESBT snapshot |
 | `0x05` synced | server → client | empty initial-sync boundary |

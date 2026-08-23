@@ -25,6 +25,7 @@ room admission rule, update this file in the same change.
 | [`BROWSER-SURFACE.md`](BROWSER-SURFACE.md) | Clipboard, context menu, voice, cache, tab sync |
 | [`V1-SCOPE.md`](V1-SCOPE.md) | Release boundary; ESBT is identity-blind |
 | [`ESBT-INTEGRATION.md`](ESBT-INTEGRATION.md) | Engine/wire work; not a second identity system |
+| [`PRESENCE.md`](PRESENCE.md) | Presence states, identity aggregation, transient frames, preview following, privacy, and rollout |
 
 Do not re-litigate ESBT encoding here. Room replica and wire stay canonical
 Rust-core `ESBM` / `ESBS` / `ESBF`. The browser uses the same Rust source
@@ -526,7 +527,7 @@ Every binary frame is one tag byte followed by this payload:
 | Tag | Direction | Payload |
 | ---: | --- | --- |
 | `0x01` | server → client | canonical ESBT update |
-| `0x02` | both | bounded, lossy presence bytes |
+| `0x02` | both | bounded, lossy presence bytes; V1 is delivered and V2 is planned per [`PRESENCE.md`](PRESENCE.md) |
 | `0x03` | server → client | canonical server version |
 | `0x04` | server → client | canonical compact/full snapshot |
 | `0x05` | server → client | empty initial-sync boundary |
@@ -538,6 +539,14 @@ may not send `0x06`. A mutation remains `saving` until its exact `0x07` receipt
 has been reflected atomically into IndexedDB. Retrying an ID with the same
 digest returns its original receipt; reusing it for different bytes is a
 protocol violation. Comments are not ESBT bytes.
+
+The room currently delivers per-site V1 presence and source offset rendering.
+It does **not** yet deliver the authenticated participant aggregation, server
+bootstrap/removal, V2 engine anchors, activity states, deterministic room
+colors, or preview-follow modes in [`PRESENCE.md`](PRESENCE.md). Loss or
+rejection of presence is the defined degraded path: keep editing and durable
+sync working, and hide stale decorations rather than inventing identity or
+positions.
 
 **Service-mode text sync uses the Rust/Wasm `CollabSession`.** The room and
 the browser speak the same `ESBM`/`ESBS`/`ESBF` encodings. Do not add a
