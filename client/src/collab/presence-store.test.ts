@@ -32,7 +32,9 @@ test("presence roundtrips, deletes, and never re-emits remote state", () => {
 test("presence decoding is atomic and rejects trailing or non-canonical input", () => {
   const source = new PresenceStore(30_000);
   const target = new PresenceStore(30_000);
+
   source.set("peer-cm-user", { name: "Peer" });
+
   const valid = source.encodeAll();
 
   const trailing = new Uint8Array(valid.byteLength + 1);
@@ -40,10 +42,12 @@ test("presence decoding is atomic and rejects trailing or non-canonical input", 
   assert.throws(() => target.apply(trailing), /trailing/);
   assert.deepEqual(target.getAllStates(), {});
 
+
   assert.throws(
     () => target.apply(new Uint8Array([5, 2, 0x80, 0x00])),
     /truncated/,
   );
+
   assert.deepEqual(target.getAllStates(), {});
 
   source.destroy();
@@ -52,11 +56,13 @@ test("presence decoding is atomic and rejects trailing or non-canonical input", 
 
 test("presence validates values before changing local state", () => {
   const store = new PresenceStore(30_000);
+
   const cyclic: { self?: unknown } = {};
   cyclic.self = cyclic;
   assert.throws(() => store.set("bad", cyclic));
   assert.deepEqual(store.getAllStates(), {});
   assert.throws(() => store.set("huge", "x".repeat(17 * 1024)), /16 KiB/);
+
   assert.deepEqual(store.getAllStates(), {});
   store.destroy();
 });
@@ -67,10 +73,12 @@ test("presence expiry removes stale peers and notifies subscribers", async () =>
   store.subscribe(() => {
     notifications += 1;
   });
+
   store.set("peer", "online");
   const afterSet = notifications;
   await new Promise((resolve) => setTimeout(resolve, 560));
   assert.equal(store.get("peer"), undefined);
+
   assert.ok(notifications > afterSet);
   store.destroy();
 });

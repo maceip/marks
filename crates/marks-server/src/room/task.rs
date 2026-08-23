@@ -10,8 +10,10 @@ use super::protocol::{Mutation, MutationKind, decode_mutation, encode_committed}
 use super::{
     CLOSE_CAPACITY, CLOSE_DOCUMENT_DELETED, CLOSE_FORBIDDEN_WRITE, CLOSE_INTERNAL,
     CLOSE_INVALID_PAYLOAD, CLOSE_UNAUTHORIZED, Control, JoinRefusal, MSG_COMMITTED, MSG_EPHEMERAL,
+
     MSG_MUTATION, MSG_PRESENCE_DELTA, MSG_PRESENCE_REMOVAL, MSG_PRESENCE_SNAPSHOT, MSG_SERVER_VV,
-    MSG_SNAPSHOT, MSG_SYNCED, MSG_UPDATE, OutMsg, RoomMsg, RoomRead, frame,
+    MSG_SNAPSHOT, MSG_SYNCED, MSG_UPDATE, OutMsg, PresenceCounters, RoomMsg, RoomRead, frame,
+
 };
 use crate::config::Config;
 use crate::db::Db;
@@ -31,10 +33,15 @@ use tokio::sync::mpsc;
 
 /// Presence frames are relayed, never persisted; bound them separately.
 
-const MAX_EPHEMERAL_BYTES: usize = 64 * 1024;
+
+const MAX_EPHEMERAL_BYTES: usize = 1536;
+const EPHEMERAL_FRAMES_PER_SECOND: f64 = 30.0;
+const EPHEMERAL_BYTES_PER_SECOND: f64 = 24.0 * 1024.0;
+const DURABLE_QUEUE_RESERVE: usize = 16;
 const PRESENCE_TAG: u8 = 5;
 const PRESENCE_VERSION: u8 = 2;
 const MAX_PRESENCE_SEQUENCE: u64 = (1_u64 << 53) - 1;
+
 
 /// Receipts older than this window may be recreated as duplicate CRDT commits;
 /// their operations remain idempotent even after the receipt row is pruned.
@@ -47,9 +54,13 @@ struct Socket {
     mutation_window: u64,
     mutations_in_window: u32,
     mutation_bytes_in_window: usize,
+
     presence_instance: Option<[u8; 16]>,
     presence_sequence: u64,
     presence_keys: HashSet<String>,
+    ephemeral_frames: f64,
+    ephemeral_bytes: f64,
+    ephemeral_refill: std::time::Instant,
 }
 
 #[derive(Default)]
@@ -57,6 +68,7 @@ struct PresenceState {
     /// Complete encoded records (key length through value), indexed so a
     /// cursor move replaces rather than accumulates history.
     records: HashMap<String, Vec<u8>>,
+
 }
 
 enum CommitLookup {
@@ -390,6 +402,7 @@ struct Room {
     dead: Option<u16>,
     commit_batches: Arc<AtomicU64>,
     committed_mutations: Arc<AtomicU64>,
+    presence: Arc<PresenceCounters>,
 }
 
 pub(super) async fn run(
@@ -399,6 +412,7 @@ pub(super) async fn run(
     limits: esbt::ResourceLimits,
     commit_batches: Arc<AtomicU64>,
     committed_mutations: Arc<AtomicU64>,
+    presence: Arc<PresenceCounters>,
     mut rx: mpsc::Receiver<RoomMsg>,
 ) {
     let hydrated = db.read(|conn| {
@@ -428,6 +442,7 @@ pub(super) async fn run(
             dead: None,
             commit_batches,
             committed_mutations,
+            presence,
         },
         Err(_) => {
             // Refuse every join and drain; the manager entry drops with us.
@@ -617,9 +632,14 @@ impl Room {
                 mutation_window: now_ms() / 1_000,
                 mutations_in_window: 0,
                 mutation_bytes_in_window: 0,
+
                 presence_instance: None,
                 presence_sequence: 0,
                 presence_keys: HashSet::new(),
+                ephemeral_frames: EPHEMERAL_FRAMES_PER_SECOND,
+                ephemeral_bytes: EPHEMERAL_BYTES_PER_SECOND,
+                ephemeral_refill: std::time::Instant::now(),
+
             },
         );
         Ok(conn)
@@ -1200,7 +1220,21 @@ impl Room {
         self.dead = Some(close_code);
     }
 
+
     fn client_presence(&mut self, conn: u64, payload: &[u8]) {
+        self.presence.received.fetch_add(1, Ordering::Relaxed);
+        let Some(socket) = self.sockets.get_mut(&conn) else { return; };
+        let now = std::time::Instant::now();
+        let elapsed = now.duration_since(socket.ephemeral_refill).as_secs_f64();
+        socket.ephemeral_refill = now;
+        socket.ephemeral_frames = (socket.ephemeral_frames + elapsed * EPHEMERAL_FRAMES_PER_SECOND).min(EPHEMERAL_FRAMES_PER_SECOND);
+        socket.ephemeral_bytes = (socket.ephemeral_bytes + elapsed * EPHEMERAL_BYTES_PER_SECOND).min(EPHEMERAL_BYTES_PER_SECOND);
+        if payload.len() > MAX_EPHEMERAL_BYTES || socket.ephemeral_frames < 1.0 || socket.ephemeral_bytes < payload.len() as f64 {
+            self.presence.dropped.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        socket.ephemeral_frames -= 1.0;
+        socket.ephemeral_bytes -= payload.len() as f64;
         let Some(socket) = self.sockets.get(&conn) else {
             return;
         };
@@ -1300,6 +1334,7 @@ impl Room {
             );
         }
         self.broadcast(conn, frame(MSG_EPHEMERAL, &canonical));
+
 
     }
 

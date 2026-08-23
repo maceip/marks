@@ -117,12 +117,29 @@ pub struct Rooms {
     map: Arc<Mutex<HashMap<String, RoomEntry>>>,
     commit_batches: Arc<AtomicU64>,
     committed_mutations: Arc<AtomicU64>,
+    presence: Arc<PresenceCounters>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CommitStats {
     pub batches: u64,
     pub mutations: u64,
+}
+
+#[derive(Default)]
+pub(crate) struct PresenceCounters {
+    pub received: AtomicU64,
+    pub dropped: AtomicU64,
+    pub coalesced: AtomicU64,
+    pub broadcast: AtomicU64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PresenceStats {
+    pub received: u64,
+    pub dropped: u64,
+    pub coalesced: u64,
+    pub broadcast: u64,
 }
 
 pub struct JoinedRoom {
@@ -139,6 +156,7 @@ impl Rooms {
             map: Arc::new(Mutex::new(HashMap::new())),
             commit_batches: Arc::new(AtomicU64::new(0)),
             committed_mutations: Arc::new(AtomicU64::new(0)),
+            presence: Arc::new(PresenceCounters::default()),
         }
     }
 
@@ -177,6 +195,7 @@ impl Rooms {
         let task_limits = self.limits.clone();
         let task_commit_batches = self.commit_batches.clone();
         let task_committed_mutations = self.committed_mutations.clone();
+        let task_presence = self.presence.clone();
         let handle = tokio::spawn(async move {
             task::run(
                 task_document_id,
@@ -185,6 +204,7 @@ impl Rooms {
                 task_limits,
                 task_commit_batches,
                 task_committed_mutations,
+                task_presence,
                 rx,
             )
             .await;
@@ -216,6 +236,16 @@ impl Rooms {
         CommitStats {
             batches: self.commit_batches.load(Ordering::Relaxed),
             mutations: self.committed_mutations.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Payload-free process counters for the intentionally lossy presence lane.
+    pub fn presence_stats(&self) -> PresenceStats {
+        PresenceStats {
+            received: self.presence.received.load(Ordering::Relaxed),
+            dropped: self.presence.dropped.load(Ordering::Relaxed),
+            coalesced: self.presence.coalesced.load(Ordering::Relaxed),
+            broadcast: self.presence.broadcast.load(Ordering::Relaxed),
         }
     }
 

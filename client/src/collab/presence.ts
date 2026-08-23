@@ -118,13 +118,20 @@ export function esbtPresence(
   const plugin = ViewPlugin.define((view) => {
     let destroyed = false;
     let scheduled = false;
+
     // Epoch-based start prevents a reloaded sender from looking older than
     // its final pre-reload heartbeat while remaining a safe JSON integer.
     let sequence = Date.now() * 1_000;
     const lastSequences = new Map<string, number>();
 
+
     const publishSelection = (): void => {
+      if (publishTimer !== null) clearTimeout(publishTimer);
+      if (publishFrame !== null) cancelAnimationFrame(publishFrame);
+      publishTimer = null;
+      publishFrame = null;
       const main = view.state.selection.main;
+
       const document = getDocument();
       if (!document) return;
       sequence += 1;
@@ -132,6 +139,7 @@ export function esbtPresence(
         selectionKeyFor(),
         encodeSelectionPresence(captureSelectionPresence(document, main.anchor, main.head, sequence)),
       );
+
     };
 
     const refresh = (): void => {
@@ -167,12 +175,16 @@ export function esbtPresence(
     return {
       update(update) {
         if (update.selectionSet || update.docChanged || update.focusChanged) {
-          publishSelection();
+          scheduleSelection(dragging);
         }
       },
       destroy() {
         destroyed = true;
         clearInterval(heartbeat);
+        if (publishTimer !== null) clearTimeout(publishTimer);
+        if (publishFrame !== null) cancelAnimationFrame(publishFrame);
+        view.dom.removeEventListener('pointerdown', pointerDown);
+        view.dom.ownerDocument.removeEventListener('pointerup', pointerUp);
         unsubscribe();
         unsubscribeReplica();
         presence.delete(selectionKeyFor());
