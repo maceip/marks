@@ -1,4 +1,5 @@
-export type SurfaceTier = 'foundation' | 'balanced' | 'cinematic';
+import { selectInitialTier, type SurfaceTier } from './runtime-policy';
+export type { SurfaceTier } from './runtime-policy';
 
 export interface SurfaceFrame {
   now: number;
@@ -17,6 +18,7 @@ interface NavigatorHints extends Navigator {
 
 const SESSION_TIER_KEY = 'marks:surface-tier:v1';
 const TIER_SCORE: Record<SurfaceTier, number> = {
+  opaque: 0,
   foundation: 0,
   balanced: 1,
   cinematic: 2,
@@ -29,7 +31,7 @@ function media(query: string): boolean {
 function storedTier(): SurfaceTier | null {
   try {
     const value = sessionStorage.getItem(SESSION_TIER_KEY);
-    return value === 'foundation' || value === 'balanced' || value === 'cinematic'
+    return value === 'opaque' || value === 'foundation' || value === 'balanced' || value === 'cinematic'
       ? value
       : null;
   } catch {
@@ -47,26 +49,22 @@ function rememberTier(tier: SurfaceTier) {
 
 function detectTier(): SurfaceTier {
   const nav = navigator as NavigatorHints;
-  const reducedTransparency = media('(prefers-reduced-transparency: reduce)');
-  const saveData = Boolean(nav.connection?.saveData);
-  const webgl2 = typeof WebGL2RenderingContext !== 'undefined';
-
-  if (reducedTransparency || saveData || !webgl2) return 'foundation';
-
+  const coarsePointer = media('(pointer: coarse)');
+  const css = globalThis.CSS;
+  const backdropFilter = Boolean(css?.supports?.('backdrop-filter', 'blur(1px)') || css?.supports?.('-webkit-backdrop-filter', 'blur(1px)'));
+  const detected = selectInitialTier({
+    coarsePointer,
+    cores: nav.hardwareConcurrency || 4,
+    memoryGb: nav.deviceMemory ?? (coarsePointer ? 4 : 8),
+    pixelCost: innerWidth * innerHeight * Math.max(1, devicePixelRatio ** 2),
+    saveData: Boolean(nav.connection?.saveData),
+    reducedTransparency: media('(prefers-reduced-transparency: reduce)'),
+    reducedGlass: document.documentElement.dataset.glass === 'reduced',
+    webgl2: typeof WebGL2RenderingContext !== 'undefined',
+    backdropFilter,
+  });
   const remembered = storedTier();
-  if (remembered) return remembered;
-
-  const cores = nav.hardwareConcurrency || 4;
-  const finePointer = media('(pointer: fine)');
-  const memory = nav.deviceMemory ?? (finePointer ? 8 : 4);
-  const pixelCost = innerWidth * innerHeight * Math.max(1, devicePixelRatio ** 2);
-
-  if (finePointer && cores >= 8 && memory >= 8 && pixelCost <= 10_000_000) {
-    return 'cinematic';
-  }
-
-  if (cores >= 4 && memory >= 4) return 'balanced';
-  return 'foundation';
+  return remembered && TIER_SCORE[remembered] < TIER_SCORE[detected] ? remembered : detected;
 }
 
 function motionAllowed(): boolean {
@@ -82,7 +80,7 @@ function motionAllowed(): boolean {
  * octaves while the CSS glass recipe remains unchanged.
  */
 class SurfaceRuntime {
-  readonly tier: SurfaceTier;
+  private currentTier: SurfaceTier;
 
   private listeners = new Set<SurfaceFrameListener>();
   private shaderAvailable: boolean;
@@ -98,15 +96,15 @@ class SurfaceRuntime {
   private lastAdaptedAt = this.startedAt;
 
   constructor() {
-    this.tier = detectTier();
-    this.shaderAvailable = this.tier !== 'foundation';
-    this.quality = TIER_SCORE[this.tier];
+    this.currentTier = detectTier();
+    this.shaderAvailable = this.currentTier === 'balanced' || this.currentTier === 'cinematic';
+    this.quality = TIER_SCORE[this.currentTier];
     this.qualityTarget = this.quality;
 
     const root = document.documentElement;
-    root.dataset.surfaceTier = this.tier;
+    root.dataset.surfaceTier = this.currentTier;
     root.dataset.surfaceEngine = this.supportsShader ? 'webgl2' : 'css';
-    rememberTier(this.tier);
+    rememberTier(this.currentTier);
 
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') this.invalidate();
@@ -120,8 +118,8 @@ class SurfaceRuntime {
 
   get label(): string {
     if (!this.shaderAvailable) return 'Efficient frosted';
-    if (this.tier === 'cinematic') return 'Cinematic GPU';
-    if (this.tier === 'balanced') return 'Adaptive GPU';
+    if (this.currentTier === 'cinematic') return 'Cinematic GPU';
+    if (this.currentTier === 'balanced') return 'Adaptive GPU';
     return 'Efficient frosted';
   }
 
@@ -130,10 +128,15 @@ class SurfaceRuntime {
   }
 
   disableShader() {
-    if (!this.shaderAvailable) return;
     this.shaderAvailable = false;
+    this.currentTier = 'foundation';
+    this.qualityTarget = 0;
     this.cancel();
-    document.documentElement.dataset.surfaceEngine = 'css';
+    const root = document.documentElement;
+    root.dataset.surfaceTier = 'foundation';
+    root.dataset.surfaceEngine = 'css';
+    rememberTier('foundation');
+    document.querySelectorAll('.surface-material-canvas').forEach((canvas) => canvas.remove());
   }
 
   subscribe(listener: SurfaceFrameListener): () => void {
@@ -229,11 +232,14 @@ class SurfaceRuntime {
         this.qualityTarget > 0.72 &&
         now - this.lastAdaptedAt > 12_000
       ) {
-        this.qualityTarget = Math.max(0.72, this.qualityTarget - 0.65);
+        this.currentTier = this.currentTier === 'cinematic' ? 'balanced' : 'foundation';
+        this.qualityTarget = TIER_SCORE[this.currentTier];
         this.slowPressure = 0;
         this.lastAdaptedAt = now;
         document.documentElement.dataset.surfaceLoad = 'tempered';
-        rememberTier('balanced');
+        document.documentElement.dataset.surfaceTier = this.currentTier;
+        rememberTier(this.currentTier);
+        if (this.currentTier === 'foundation') this.disableShader();
       }
     }
 

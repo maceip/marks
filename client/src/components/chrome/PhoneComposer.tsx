@@ -142,7 +142,7 @@ export function PhoneComposer(props: PhoneComposerProps) {
         <div className="phone-sheet-layer">
           <button type="button" className="phone-sheet-scrim" aria-label="Close sheet" onClick={() => setSheet(null)} />
           <div className="phone-sheet surface-material-host" role="dialog" aria-label={sheet}>
-            <SurfaceMaterial variant="floating" intensity={1.08} />
+            <SurfaceMaterial variant="floating" />
             {sheet === 'tools' ? (
               <DraftToolsSheet
                 open
@@ -192,7 +192,7 @@ export function PhoneComposer(props: PhoneComposerProps) {
       )}
 
       <nav className="phone-nav surface-material-host" aria-label="Phone composer">
-        <SurfaceMaterial variant="chrome" intensity={0.9} />
+        <SurfaceMaterial variant="chrome" />
         <button type="button" className={writing ? 'active' : undefined} onClick={() => props.onModeChange('edit')}>
           <Glyph name="pencil" size={22} />
           <span>Write</span>

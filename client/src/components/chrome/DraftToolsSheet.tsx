@@ -47,7 +47,7 @@ export function DraftToolsSheet({
 
   return (
     <section className={`draft-tools-sheet surface-material-host${embedded ? ' embedded' : ''}`} aria-label="Local draft tools">
-      <SurfaceMaterial variant="floating" intensity={1.04} />
+      <SurfaceMaterial variant="floating" />
       <header className="draft-tools-head">
         <div>
           <span>Deterministic and local</span>

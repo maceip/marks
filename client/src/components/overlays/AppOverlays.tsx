@@ -451,7 +451,7 @@ function ReviewDrawer({
 
   return (
     <aside className={`review-drawer surface-material-host${closing ? ' is-closing' : ''}`} aria-label={rendered.type === 'comments' ? 'Comments' : 'Version history'} ref={panelRef}>
-      <SurfaceMaterial variant="panel" intensity={0.94} />
+      <SurfaceMaterial variant="panel" />
       <header className="review-head">
         <div>
           <span>{rendered.type === 'comments' ? 'Review' : 'Document'}</span>

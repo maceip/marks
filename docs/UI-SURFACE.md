@@ -231,6 +231,30 @@ horizontally scroll.
   dictation, caret, or a bounded loading skeleton.
 - Ambient gradients and grids remain static paint layers.
 
+### Material registry and rendering tiers
+
+Material rendering is restricted to bounded, non-scrolling shell chrome: the top/ribbon chrome,
+side panels and drawers, floating menus/dialogs/dock, and the welcome hero. Recipes come from
+`client/src/design-system/materials.ts`; arbitrary shader intensity values are not permitted.
+The editor, preview, outline content, review/document reading surfaces, and every other scrolling
+document body use the `opaqueDocument` treatment and must never mount a material canvas.
+
+All tiers preserve the owning component's silhouette, border placement, text contrast, padding,
+and hit targets; only paint and animation cost changes:
+
+- **cinematic:** WebGL2 liquid/refraction, pointer response, high-resolution backing, and 60fps
+  only during bounded interaction (low idle cadence otherwise).
+- **balanced:** reduced backing resolution, two shader octaves/lower shader opacity, 45fps during
+  interaction, and a low idle cadence.
+- **foundation:** translucent CSS tint and Gaussian backdrop blur; no canvas or continuous animation.
+- **opaque/accessibility:** a solid raised surface with no backdrop filter. Reduced transparency,
+  reduced glass, save-data, or unsupported backdrop filters select it. Shader compile failure or
+  context loss immediately removes canvases and falls back to foundation.
+
+Initial selection deterministically considers pointer precision, memory, core count, pixel cost,
+save-data, accessibility preferences, filter support, and WebGL2. Sustained missed frames can only
+move cinematic → balanced → foundation; a session never upgrades.
+
 ## Runtime and loading budgets
 
 Budgets are deterministic level-9 gzip transfer sizes for production output,

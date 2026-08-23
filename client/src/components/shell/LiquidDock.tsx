@@ -20,7 +20,7 @@ export function LiquidDock({
 }: LiquidDockProps) {
   return (
     <div className="liquid-dock surface-material-host" role="toolbar" aria-label="Quick document actions">
-      <SurfaceMaterial variant="floating" intensity={1.18} />
+      <SurfaceMaterial variant="floating" />
       <button type="button" className="liquid-dock-primary" onClick={onCommands}>
         <span><Icon path={icons.sparkles} size={16} /></span>
         Commands
