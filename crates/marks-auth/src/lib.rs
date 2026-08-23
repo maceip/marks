@@ -27,6 +27,7 @@ mod acl;
 mod authorization;
 mod bearer;
 mod crypto;
+mod dbsc;
 mod device;
 mod device_session;
 mod document;
@@ -57,6 +58,10 @@ pub use bearer::{
     parse_ticket_subprotocol,
 };
 pub use crypto::{bearer_secret_hash, public_key_hash};
+pub use dbsc::{
+    AuthorizedDbscRegistration, DbscChallengeRecord, DbscError, authorize_dbsc_refresh,
+    authorize_dbsc_registration, dbsc_jwk_to_sec1, peek_dbsc_challenge_hash,
+};
 pub use device::{
     CapabilityError, DeviceCapabilities, DeviceError, DeviceRecord, authorize_revoke_device,
 };
