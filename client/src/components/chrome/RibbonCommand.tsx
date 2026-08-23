@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { Glyph, type GlyphName } from '../glyphs/Glyph';
+import { Button } from '../ui/Button';
 
 interface RibbonCommandProps {
   glyph: GlyphName;
@@ -25,8 +26,11 @@ export function RibbonCommand({
   children,
 }: RibbonCommandProps) {
   return (
-    <button
+    <Button
       type="button"
+      variant="subtle"
+      tone={danger ? 'danger' : 'neutral'}
+      size="small"
       className={`ribbon-command${pressed ? ' active' : ''}${danger ? ' danger-command' : ''}${large ? ' ribbon-command-large' : ''}`}
       title={title ?? label}
       aria-label={label}
@@ -38,7 +42,7 @@ export function RibbonCommand({
       <Glyph name={glyph} size={large ? 28 : 22} />
       <span className="ribbon-command-label">{label}</span>
       {children}
-    </button>
+    </Button>
   );
 }
 

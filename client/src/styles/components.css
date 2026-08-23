@@ -1,0 +1,54 @@
+/* Shared interactive contracts. Feature styles may change geometry, but states live here. */
+.ui-control {
+  position: relative;
+  border: 1px solid transparent;
+  font: inherit;
+  cursor: pointer;
+  transition: background var(--motion-fast) ease, border-color var(--motion-fast) ease,
+    color var(--motion-fast) ease, transform 60ms ease, opacity var(--motion-fast) ease;
+}
+.ui-control:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ui-control:active:not(:disabled, [data-loading='true']) { transform: translateY(1px); }
+.ui-control:disabled, .ui-control[data-loading='true'] { cursor: not-allowed; opacity: .52; }
+
+.button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 550; }
+.button-small { min-height: 28px; padding: 3px 9px; font-size: 12px; }
+.button-medium { min-height: 32px; padding: 5px 12px; }
+.button-large { min-height: 40px; padding: 8px 16px; font-size: 14px; }
+.button-secondary { border-color: var(--border); background: var(--surface); color: var(--text); }
+.button-secondary:hover:not(:disabled) { border-color: var(--border-strong); background: var(--surface-sunken); }
+.button-primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+.button-primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
+.button-subtle { background: transparent; color: var(--text-muted); }
+.button-subtle:hover:not(:disabled), .button-subtle[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent); }
+.button-danger, .button[data-tone='danger'] { color: var(--danger); }
+.button-danger { border-color: color-mix(in srgb, var(--danger) 38%, var(--border)); background: var(--danger-soft); }
+.button-danger:hover:not(:disabled) { border-color: var(--danger); }
+.button-link { min-height: auto; padding: 0; border: 0; background: none; color: var(--accent); }
+.button-link:hover:not(:disabled) { text-decoration: underline; }
+.button-icon { display: inline-flex; flex: none; }
+
+.icon-button { display: inline-flex; align-items: center; justify-content: center; padding: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); }
+.icon-button-small { width: 28px; height: 28px; }
+.icon-button-medium, .icon-button:not([class*='icon-button-']) { width: 32px; height: 32px; }
+.icon-button-large { width: 40px; height: 40px; }
+.icon-button:hover:not(:disabled), .icon-button[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent); }
+.icon-button[data-tone='danger']:hover:not(:disabled), .icon-button.danger:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger); }
+
+.ui-pill { display: inline-flex; align-items: center; min-height: 24px; padding: 2px 9px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-sunken); color: var(--text-muted); font-size: 12px; }
+.ui-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); }
+.ui-tab { padding: 7px 10px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-muted); }
+.ui-tab:hover:not(:disabled) { color: var(--text); }
+.ui-tab[aria-selected='true'] { border-bottom-color: var(--accent); color: var(--accent); }
+.ui-divider { width: 100%; height: 1px; margin: 8px 0; border: 0; background: var(--border); }
+.ui-spinner { display: inline-block; width: 1em; height: 1em; flex: none; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: ui-spin .7s linear infinite; }
+@keyframes ui-spin { to { transform: rotate(1turn); } }
+.ui-tooltip { position: relative; display: inline-flex; }
+.ui-tooltip-content { position: absolute; z-index: 100; left: 50%; bottom: calc(100% + 7px); width: max-content; max-width: 28ch; padding: 5px 8px; border-radius: var(--radius-sm); background: var(--text); color: var(--surface); font-size: 12px; pointer-events: none; opacity: 0; transform: translate(-50%, 3px); transition: opacity var(--motion-fast), transform var(--motion-fast); }
+.ui-tooltip:has(.ui-tooltip-trigger:hover) .ui-tooltip-content, .ui-tooltip:has(.ui-tooltip-trigger:focus-within) .ui-tooltip-content { opacity: 1; transform: translate(-50%, 0); }
+
+@media (pointer: coarse) {
+  .ui-control { min-width: var(--touch-target); min-height: var(--touch-target); }
+  .button-link::before { content: ''; position: absolute; inset: 50% auto auto 50%; width: var(--touch-target); height: var(--touch-target); transform: translate(-50%, -50%); }
+}
+@media (prefers-reduced-motion: reduce) { .ui-control, .ui-tooltip-content { transition: none; } .ui-spinner { animation-duration: 1.4s; } }
