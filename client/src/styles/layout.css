@@ -510,7 +510,10 @@
   display: flex;
   align-items: center;
   padding-right: 4px;
+  min-width: 28px;
 }
+
+.presence-avatar-button { display: inline-flex; padding: 0; border: 0; background: transparent; cursor: pointer; }
 
 .avatar {
   display: inline-flex;
@@ -527,6 +530,11 @@
   font-weight: 700;
   letter-spacing: 0.02em;
 }
+.avatar img { width: 100%; height: 100%; border-radius: inherit; object-fit: cover; }
+.avatar-active { box-shadow: 0 0 0 1px color-mix(in srgb, var(--avatar-color) 60%, transparent); }
+.avatar-editing { box-shadow: 0 0 0 2px var(--avatar-color), 0 0 0 3px var(--glass-strong); }
+.presence-avatar-button, .avatar-overflow { animation: presence-arrive 160ms ease-out; }
+@keyframes presence-arrive { from { opacity: 0; transform: scale(.8); } }
 
 .avatar-self {
   box-shadow: 0 0 0 1.5px var(--accent);
@@ -536,6 +544,19 @@
   background: var(--surface-sunken);
   color: var(--text-muted);
 }
+.presence-backdrop { position: fixed; inset: 0; z-index: 80; }
+.presence-panel { position: absolute; top: calc(var(--titlebar-height) - 4px); right: 12px; width: min(420px, calc(100vw - 24px)); max-height: min(520px, calc(100vh - 80px)); overflow: auto; padding: 12px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-raised); box-shadow: var(--shadow-lg); color: var(--text); }
+.presence-panel header, .presence-panel li, .presence-actions { display: flex; align-items: center; }
+.presence-panel header { justify-content: space-between; margin-bottom: 8px; }
+.presence-panel header button { border: 0; background: transparent; color: inherit; font-size: 22px; }
+.presence-panel ul { margin: 0; padding: 0; list-style: none; }
+.presence-panel li { gap: 10px; min-height: 52px; border-top: 1px solid var(--border-subtle); }
+.presence-details { display: grid; flex: 1; min-width: 0; }
+.presence-details strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.presence-details span { color: var(--text-muted); font-size: 11px; }
+.presence-actions { gap: 4px; }
+.presence-actions button { min-height: 32px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: inherit; }
+@media (prefers-reduced-motion: reduce) { .presence-avatar-button, .avatar-overflow { animation: none; } }
 
 /* ---------------------------------------------------------------- workspace */
 
@@ -939,10 +960,12 @@
     font-size: 13px;
   }
 
-  .titlebar .status,
-  .titlebar .presence {
+  .titlebar .status {
     display: none;
   }
+  .titlebar .presence .presence-avatar-button:nth-of-type(n+2) { display: none; }
+  .titlebar .presence .avatar { width: 24px; height: 24px; }
+  .presence-panel { position: fixed; top: auto; right: 0; bottom: 0; left: 0; width: auto; max-height: min(72vh, 560px); border-radius: 18px 18px 0 0; padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
 
   .ribbon-body {
     position: fixed;

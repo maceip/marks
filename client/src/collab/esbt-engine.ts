@@ -293,6 +293,10 @@ export class EsbtEngine implements CollabSession {
     this.ephemeral.set(userKey(this.presenceSiteId()), {
       active: true,
       colorPreference: this.user.colorIndex,
+      name: this.user.name,
+      colorClassName: `marks-user${this.user.colorIndex}`,
+      participantId: this.user.id || this.presenceSiteId(),
+
     });
   }
 
@@ -1392,15 +1396,23 @@ export class EsbtEngine implements CollabSession {
 
     for (const [key, value] of Object.entries(states)) {
       if (!key.endsWith('-cm-user') || !value || typeof value !== 'object') continue;
+
       const user = value as { participantId?: unknown; connectionId?: unknown; name?: unknown; colorIndex?: unknown };
       const name = typeof user.name === 'string' ? user.name : 'Anonymous';
       const connectionId = typeof user.connectionId === 'string' ? user.connectionId : key.replace(/-cm-user$/, '');
       peers.push({
         participantId: typeof user.participantId === 'string' ? user.participantId : connectionId,
         connectionId,
+
         name,
         colorIndex: typeof user.colorIndex === 'number' && user.colorIndex >= 1 && user.colorIndex <= 8 ? user.colorIndex : 1,
         self: key === selfKey,
+        participantId: typeof user.participantId === 'string' ? user.participantId : site,
+        selection: selection && typeof selection === 'object' &&
+          typeof (selection as { from?: unknown }).from === 'number' &&
+          typeof (selection as { to?: unknown }).to === 'number'
+          ? selection as { from: number; to: number } : undefined,
+        section: 'Document',
       });
     }
 
@@ -1414,7 +1426,7 @@ export class EsbtEngine implements CollabSession {
       });
     }
 
-    peers.sort((a, b) => Number(b.self) - Number(a.self) || a.name.localeCompare(b.name));
+    peers.sort((a, b) => Number(b.self) - Number(a.self) || a.connectionId.localeCompare(b.connectionId));
     this.cachedPeers = peers;
     for (const listener of this.peerListeners) listener(peers);
   }

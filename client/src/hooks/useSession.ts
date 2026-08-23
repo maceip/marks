@@ -34,7 +34,7 @@ export function useSession(
   const [hydrated, setHydrated] = useState(false);
 
   // Identity changes should not tear down a live session.
-  const identity = useMemo(() => user, [user.name, user.colorIndex]);
+  const identity = useMemo(() => user, [user.name, user.colorIndex, user.id]);
 
   useEffect(() => {
     if (!docId) {
