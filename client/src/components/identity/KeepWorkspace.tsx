@@ -1,22 +1,75 @@
+import { useEffect, useRef, useState } from 'react';
+import { bindPendingDevice } from '../../auth/pending-device';
+import { finalizePairing, mintPairing, pairingUrlFromTicket, type PairingTicket } from '../../auth/identity';
 import { PAIRING_STEPS, SCRATCH_HONEST_LINE, SCRATCH_LOCAL_LINE, SCRATCH_UPGRADE_LINE } from '../../lib/identity-copy';
 import { pairingLandingPath } from '../../lib/pairing-link';
+import { UI_DATA_MODE } from '../../lib/product';
+import { SERVICE_ERROR_COPY } from '../../lib/service-errors';
 import { Icon, icons } from '../ui/Icon';
 import { QrMark } from './QrMark';
 
 interface KeepWorkspaceProps {
   onNotify: (title: string, detail?: string, tone?: 'neutral' | 'success' | 'danger') => void;
   onOpenPhone?: () => void;
+  onPromoted?: () => void;
 }
 
-export function KeepWorkspace({ onNotify, onOpenPhone }: KeepWorkspaceProps) {
-  const landing = pairingLandingPath(location.origin);
+export function KeepWorkspace({ onNotify, onOpenPhone, onPromoted }: KeepWorkspaceProps) {
+  const service = UI_DATA_MODE === 'service';
+  const [ticket, setTicket] = useState<PairingTicket | null>(null);
+  const [status, setStatus] = useState<'idle' | 'minting' | 'waiting' | 'kept' | 'failed'>('idle');
+  const onNotifyRef = useRef(onNotify);
+  const onPromotedRef = useRef(onPromoted);
+  onNotifyRef.current = onNotify;
+  onPromotedRef.current = onPromoted;
 
-  const copyLink = async () => {
+  useEffect(() => {
+    if (!service) return;
+    let cancelled = false;
+    let poll: number | undefined;
+    void (async () => {
+      setStatus('minting');
+      try {
+        await bindPendingDevice();
+        const minted = await mintPairing();
+        if (cancelled) return;
+        setTicket(minted);
+        setStatus('waiting');
+        poll = window.setInterval(() => {
+          void finalizePairing(minted.pairingId).then((result) => {
+            if (cancelled || result === 'pending') return;
+            if (result === 'gone') {
+              setStatus('failed');
+              if (poll) window.clearInterval(poll);
+              return;
+            }
+            setStatus('kept');
+            if (poll) window.clearInterval(poll);
+            onNotifyRef.current('Workspace kept', 'This tab can now see and save your documents on other devices.', 'success');
+            onPromotedRef.current?.();
+          });
+        }, 1500);
+      } catch {
+        if (!cancelled) {
+          setStatus('failed');
+          onNotifyRef.current(SERVICE_ERROR_COPY[401].title, SERVICE_ERROR_COPY[401].detail, SERVICE_ERROR_COPY[401].tone);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (poll) window.clearInterval(poll);
+    };
+  }, [service]);
+
+  const landing = ticket ? pairingUrlFromTicket(ticket) : pairingLandingPath(location.origin);
+
+  const copyValue = async (value: string, title: string, detail: string) => {
     try {
-      await navigator.clipboard.writeText(landing);
-      onNotify('Pairing path copied', 'This is /link, the phone confirmation surface. It is not a pairing ticket.', 'success');
+      await navigator.clipboard.writeText(value);
+      onNotify(title, detail, 'success');
     } catch {
-      onNotify('Copy was blocked', 'Open /link on the phone. The address bar still has this origin.', 'danger');
+      onNotify('Copy was blocked', 'Type the four words or open /link on the phone.', 'danger');
     }
   };
 
@@ -26,15 +79,24 @@ export function KeepWorkspace({ onNotify, onOpenPhone }: KeepWorkspaceProps) {
       <p className="identity-note">{SCRATCH_HONEST_LINE}</p>
 
       <div className="keep-stage">
-        <QrMark value={landing} label="QR for the Marks pairing landing page" />
+        <QrMark value={landing} label="QR for the Marks pairing ticket" />
         <div>
-          <strong>Phone controller</strong>
+          <strong>{status === 'kept' ? 'This workspace is kept' : 'Phone controller'}</strong>
           <small>
-            The service puts only the pairing URL in this QR — <code>/link#v1.…</code>. This build
-            shows the landing path. The secret never belongs in a toast.
+            {service
+              ? 'Scan the QR, or type the four words on a phone that cannot scan. The secret stays out of toasts.'
+              : 'This build shows the landing path. The service puts only the pairing URL in this QR.'}
           </small>
         </div>
       </div>
+
+      {ticket && (
+        <div className="pairing-words" aria-live="polite">
+          <strong>Four words</strong>
+          <p className="pairing-words-phrase">{ticket.words}</p>
+          <small>For a phone, terminal, or other low-fidelity client that cannot scan.</small>
+        </div>
+      )}
 
       <ol className="identity-steps">
         {PAIRING_STEPS.map((step, index) => (
@@ -46,12 +108,39 @@ export function KeepWorkspace({ onNotify, onOpenPhone }: KeepWorkspaceProps) {
         ))}
       </ol>
 
-      <p className="identity-note">{SCRATCH_LOCAL_LINE}</p>
+      {!service && <p className="identity-note">{SCRATCH_LOCAL_LINE}</p>}
+      {service && status === 'waiting' && (
+        <p className="identity-note">Waiting for the phone to confirm. This tab finalizes itself.</p>
+      )}
+      {service && status === 'failed' && (
+        <p className="identity-note">The pairing expired or failed. Open Keep workspace again for a fresh code.</p>
+      )}
 
       <div className="dialog-actions">
-        <button type="button" className="button primary" onClick={() => void copyLink()}>
-          <Icon path={icons.link} /> Copy /link
+        <button
+          type="button"
+          className="button primary"
+          onClick={() =>
+            void copyValue(
+              ticket?.url ?? landing,
+              ticket ? 'Secure link copied' : 'Pairing path copied',
+              ticket
+                ? 'Open this on the phone. The secret is in the fragment.'
+                : 'This is /link. It is not a pairing ticket until the service mints one.',
+            )
+          }
+        >
+          <Icon path={icons.link} /> {ticket ? 'Copy secure link' : 'Copy /link'}
         </button>
+        {ticket && (
+          <button
+            type="button"
+            className="button"
+            onClick={() => void copyValue(ticket.words, 'Four words copied', 'Type these on the phone confirmation page.')}
+          >
+            Copy words
+          </button>
+        )}
         {onOpenPhone && (
           <button type="button" className="button" onClick={onOpenPhone}>
             Open phone confirmation

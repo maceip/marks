@@ -1,4 +1,6 @@
+import { redeemEnrolledDevice } from './device-session.ts';
 import type { RoomAuthority } from './room-access.ts';
+import { cacheSession, clearCachedSession, sessionFromUnknown } from './session-cache.ts';
 import {
   clearScratchCredential,
   loadScratchCredential,
@@ -44,6 +46,11 @@ export function getActiveCaller(): ServiceCaller | null {
 export function resetServiceCallerForTests(): void {
   cached = null;
   inflight = null;
+  clearCachedSession();
+}
+
+export function setActiveCaller(caller: ServiceCaller | null): void {
+  cached = caller;
 }
 
 export interface EnsureServiceCallerOptions {
@@ -75,7 +82,19 @@ async function resolveFromNetwork(options: EnsureServiceCallerOptions): Promise<
   const session = await fetchImpl('/v1/auth/session', { credentials: 'same-origin' });
   if (session.ok) {
     clearScratchCredential(storage);
+    const info = sessionFromUnknown(await session.json().catch(() => null));
+    if (info) cacheSession(info);
     return { kind: 'session' };
+  }
+
+  try {
+    const recovered = await redeemEnrolledDevice(fetchImpl);
+    if (recovered) {
+      clearScratchCredential(storage);
+      return { kind: 'session' };
+    }
+  } catch {
+    // IndexedDB or a challenge failure is not a first-paint blocker.
   }
 
   const existing = loadScratchCredential(storage);

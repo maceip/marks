@@ -171,6 +171,13 @@
 .local-notice-danger { border-color: color-mix(in srgb, var(--danger) 27%, var(--border)); background: color-mix(in srgb, var(--danger-soft) 84%, transparent); color: var(--danger); }
 .share-link-grant { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
 .pairing-actions { flex-wrap: wrap; }
+.pairing-words { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--glass-border); border-radius: 16px; background: var(--surface-sunken); }
+.pairing-words strong { font-size: 10px; font-weight: 700; letter-spacing: .075em; text-transform: uppercase; color: var(--text-muted); }
+.pairing-words-phrase { margin: 0; font-size: 22px; line-height: 1.35; letter-spacing: .02em; }
+.pairing-words small { color: var(--text-muted); font-size: 11px; line-height: 1.5; }
+.pairing-words-entry { display: grid; gap: 6px; }
+.pairing-words-entry strong { font-size: 10px; font-weight: 700; letter-spacing: .075em; text-transform: uppercase; color: var(--text-muted); }
+.pairing-words-entry input { min-height: 44px; padding: 0 12px; border: 1px solid var(--glass-border); border-radius: 12px; background: var(--surface-raised); color: inherit; font: inherit; }
 
 @media (max-width: 720px) {
   .keep-stage { grid-template-columns: 1fr; justify-items: center; text-align: center; }

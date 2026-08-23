@@ -1,5 +1,7 @@
 import type { EditorView } from '@codemirror/view';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { logout } from './auth/identity';
+import { bindPendingDevice, getOrCreatePendingDevice } from './auth/pending-device';
 import { ensureServiceCaller, getActiveCaller, type ServiceCaller } from './auth/caller';
 import { createMarksDocumentAccess } from './auth/room-access';
 import { loadUser } from './collab/user';
@@ -76,11 +78,18 @@ export function App() {
   const user = useMemo(loadUser, []);
   const [serviceCaller, setServiceCaller] = useState<ServiceCaller | null>(null);
   useEffect(() => {
+    void getOrCreatePendingDevice().catch(() => undefined);
+  }, []);
+  useEffect(() => {
     if (UI_DATA_MODE !== 'service') return;
     let cancelled = false;
     void ensureServiceCaller()
-      .then((caller) => {
-        if (!cancelled) setServiceCaller(caller);
+      .then(async (caller) => {
+        if (cancelled) return;
+        setServiceCaller(caller);
+        if (caller.kind === 'scratch') {
+          void bindPendingDevice().catch(() => undefined);
+        }
       })
       .catch(() => {
         if (!cancelled) setServiceCaller(null);
@@ -113,6 +122,10 @@ export function App() {
   const [overlaysMounted, setOverlaysMounted] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [pairing, setPairing] = useState(() => readPairingHash(location.hash));
+  useEffect(() => {
+    if (!location.hash.startsWith('#v1.')) return;
+    history.replaceState(null, '', `${location.pathname}${location.search}`);
+  }, []);
 
   const documents = useDocuments(route.name !== 'benchmark');
   const docId = route.name === 'document' ? route.id : null;
@@ -432,6 +445,17 @@ export function App() {
           navigate({ name: 'link' });
           break;
         case 'logout':
+          if (UI_DATA_MODE === 'service' && serviceCaller?.kind === 'session') {
+            void logout()
+              .then(() => {
+                setServiceCaller(null);
+                void ensureServiceCaller({ forceProbe: true }).then(setServiceCaller);
+                notify('Signed out', 'This tab is a temporary workspace again.', 'success');
+                void documents.refresh();
+              })
+              .catch(() => notify(SERVICE_ERROR_COPY[403].title, SERVICE_ERROR_COPY[403].detail, 'danger'));
+            break;
+          }
           notify(SERVICE_ERROR_COPY[401].title, LOGOUT_LOCAL_LINE, 'neutral');
           break;
         case 'find': {
@@ -461,6 +485,8 @@ export function App() {
       session,
       sidebarOpen,
       title,
+      documents,
+      serviceCaller,
     ],
   );
 
@@ -764,6 +790,16 @@ export function App() {
             onTheme={setTheme}
             onPreferences={setPreferences}
             onNotify={notify}
+            onPromoted={() => {
+              setServiceCaller({ kind: 'session' });
+              setDialog(null);
+              void documents.refresh();
+            }}
+            onSignedOut={() => {
+              setServiceCaller(null);
+              void ensureServiceCaller({ forceProbe: true }).then(setServiceCaller);
+              void documents.refresh();
+            }}
           />
         </Suspense>
       )}
