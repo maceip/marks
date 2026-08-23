@@ -24,13 +24,16 @@ use esbt::snapshot::Message;
 use marks_auth::{DocumentAction, DocumentId, RoomActor, authorize_room_action};
 use rusqlite::{OptionalExtension, params};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
 
 /// Presence frames are relayed, never persisted; bound them separately.
 const MAX_EPHEMERAL_BYTES: usize = 64 * 1024;
+const PRESENCE_TAG: u8 = 5;
+const PRESENCE_VERSION: u8 = 2;
+const MAX_PRESENCE_SEQUENCE: u64 = (1_u64 << 53) - 1;
 /// Receipts older than this window may be recreated as duplicate CRDT commits;
 /// their operations remain idempotent even after the receipt row is pruned.
 const IDEMPOTENCY_RECEIPT_WINDOW: u64 = 65_536;
@@ -41,6 +44,9 @@ struct Socket {
     mutation_window: u64,
     mutations_in_window: u32,
     mutation_bytes_in_window: usize,
+    presence_instance: Option<[u8; 16]>,
+    presence_sequence: u64,
+    presence_keys: HashSet<String>,
 }
 
 enum CommitLookup {
@@ -98,6 +104,132 @@ struct PendingAck {
     version: Vec<u8>,
 }
 
+#[derive(Debug)]
+struct PresenceEntry {
+    key: String,
+    deleted: bool,
+    age: u64,
+    value: Vec<u8>,
+}
+
+#[derive(Clone)]
+struct PresenceLease {
+    conn: u64,
+    instance: [u8; 16],
+    sequence: u64,
+    keys: HashSet<String>,
+}
+
+fn presence_uint(input: &[u8], offset: &mut usize) -> Option<u64> {
+    let mut value = 0_u64;
+    let mut shift = 0;
+    let start = *offset;
+    loop {
+        let byte = *input.get(*offset)?;
+        *offset += 1;
+        if shift >= 63 && byte & 0x7f != 0 {
+            return None;
+        }
+        value |= u64::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 {
+            if *offset - start > 1 && byte == 0 {
+                return None;
+            }
+            return Some(value);
+        }
+        shift += 7;
+    }
+}
+
+fn presence_put_uint(out: &mut Vec<u8>, mut value: u64) {
+    loop {
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        out.push(byte);
+        if value == 0 {
+            break;
+        }
+    }
+}
+
+fn decode_presence(input: &[u8]) -> Option<([u8; 16], u64, Vec<PresenceEntry>)> {
+    if input.get(0..2)? != [PRESENCE_TAG, PRESENCE_VERSION] {
+        return None;
+    }
+    let instance: [u8; 16] = input.get(2..18)?.try_into().ok()?;
+    let mut offset = 18;
+    let sequence = presence_uint(input, &mut offset)?;
+    if sequence == 0 || sequence > MAX_PRESENCE_SEQUENCE {
+        return None;
+    }
+    let count = usize::try_from(presence_uint(input, &mut offset)?).ok()?;
+    if count > 256 {
+        return None;
+    }
+    let mut entries = Vec::with_capacity(count);
+    for _ in 0..count {
+        let key_len = usize::try_from(presence_uint(input, &mut offset)?).ok()?;
+        if key_len == 0 || key_len > 256 {
+            return None;
+        }
+        let key = std::str::from_utf8(input.get(offset..offset.checked_add(key_len)?)?)
+            .ok()?
+            .to_owned();
+        offset += key_len;
+        let flags = *input.get(offset)?;
+        offset += 1;
+        if flags == 1 {
+            entries.push(PresenceEntry {
+                key,
+                deleted: true,
+                age: 0,
+                value: vec![],
+            });
+            continue;
+        }
+        if flags != 0 {
+            return None;
+        }
+        let age = presence_uint(input, &mut offset)?;
+        let value_len = usize::try_from(presence_uint(input, &mut offset)?).ok()?;
+        if value_len > 16 * 1024 {
+            return None;
+        }
+        let value = input.get(offset..offset.checked_add(value_len)?)?.to_vec();
+        offset += value_len;
+        // Validate JSON now so relayed frames satisfy the client codec.
+        serde_json::from_slice::<serde_json::Value>(&value).ok()?;
+        entries.push(PresenceEntry {
+            key,
+            deleted: false,
+            age,
+            value,
+        });
+    }
+    (offset == input.len()).then_some((instance, sequence, entries))
+}
+
+fn encode_presence(instance: [u8; 16], sequence: u64, entries: &[PresenceEntry]) -> Vec<u8> {
+    let mut out = vec![PRESENCE_TAG, PRESENCE_VERSION];
+    out.extend_from_slice(&instance);
+    presence_put_uint(&mut out, sequence);
+    presence_put_uint(&mut out, entries.len() as u64);
+    for entry in entries {
+        presence_put_uint(&mut out, entry.key.len() as u64);
+        out.extend_from_slice(entry.key.as_bytes());
+        out.push(u8::from(entry.deleted));
+        if !entry.deleted {
+            presence_put_uint(&mut out, entry.age.min(30_000));
+            presence_put_uint(&mut out, entry.value.len() as u64);
+            out.extend_from_slice(&entry.value);
+        }
+    }
+    out
+}
+
 struct SeenMutation {
     kind: MutationKind,
     digest: [u8; 32],
@@ -119,6 +251,8 @@ struct Room {
     since_compact: u64,
     epoch: u64,
     sockets: HashMap<u64, Socket>,
+    retired_presence: HashSet<[u8; 16]>,
+    active_presence: HashMap<String, PresenceLease>,
     next_conn: u64,
     dead: Option<u16>,
     commit_batches: Arc<AtomicU64>,
@@ -153,6 +287,8 @@ pub(super) async fn run(
             since_compact: 0,
             epoch,
             sockets: HashMap::new(),
+            retired_presence: HashSet::new(),
+            active_presence: HashMap::new(),
             next_conn: 1,
             dead: None,
             commit_batches,
@@ -313,6 +449,9 @@ impl Room {
                 mutation_window: now_ms() / 1_000,
                 mutations_in_window: 0,
                 mutation_bytes_in_window: 0,
+                presence_instance: None,
+                presence_sequence: 0,
+                presence_keys: HashSet::new(),
             },
         );
         Ok(conn)
@@ -904,7 +1043,98 @@ impl Room {
         {
             return;
         }
-        self.broadcast(conn, frame(MSG_EPHEMERAL, payload));
+        let owner = match &socket.actor {
+            RoomActor::Principal(actor) => actor.esbt_site.to_string(),
+            RoomActor::Scratch(actor) => actor.esbt_site.to_string(),
+        };
+        let Some((instance, sequence, mut entries)) = decode_presence(payload) else {
+            return;
+        };
+        // The terminal sequence is reserved for the room-generated retirement
+        // tombstone, so even a hostile sender cannot make retirement lose.
+        if sequence == MAX_PRESENCE_SEQUENCE {
+            return;
+        }
+        if self.retired_presence.contains(&instance) {
+            return;
+        }
+
+        let bound = socket.presence_instance;
+        if bound.is_some_and(|bound| bound != instance) || sequence <= socket.presence_sequence {
+            return;
+        }
+
+        // Only the admitted actor owns `<site>-cm-*`; never relay an identity
+        // chosen by the client. Unknown key namespaces are rejected.
+        for entry in &mut entries {
+            let Some((_, suffix)) = entry.key.split_once("-cm-") else {
+                return;
+            };
+            if suffix.is_empty() {
+                return;
+            }
+            entry.key = format!("{owner}-cm-{suffix}");
+        }
+
+        if bound.is_none() {
+            // A reconnect using the same durable site first retires the old
+            // socket instance. Its terminal tombstone wins over every update.
+            let old = self
+                .active_presence
+                .get(&owner)
+                .cloned()
+                .filter(|lease| lease.instance != instance);
+            if let Some(PresenceLease {
+                conn: other,
+                instance: old_instance,
+                sequence: old_sequence,
+                keys,
+            }) = old
+            {
+                self.retired_presence.insert(old_instance);
+                let removals: Vec<_> = keys
+                    .into_iter()
+                    .map(|key| PresenceEntry {
+                        key,
+                        deleted: true,
+                        age: 0,
+                        value: vec![],
+                    })
+                    .collect();
+                let retired = encode_presence(old_instance, old_sequence + 1, &removals);
+                self.broadcast(other, frame(MSG_EPHEMERAL, &retired));
+                if let Some(socket) = self.sockets.get_mut(&other) {
+                    socket.presence_instance = None;
+                    socket.presence_keys.clear();
+                }
+            }
+        }
+
+        let canonical = encode_presence(instance, sequence, &entries);
+        if canonical.len() > MAX_EPHEMERAL_BYTES {
+            return;
+        }
+        if let Some(socket) = self.sockets.get_mut(&conn) {
+            socket.presence_instance = Some(instance);
+            socket.presence_sequence = sequence;
+            for entry in &entries {
+                if entry.deleted {
+                    socket.presence_keys.remove(&entry.key);
+                } else {
+                    socket.presence_keys.insert(entry.key.clone());
+                }
+            }
+            self.active_presence.insert(
+                owner,
+                PresenceLease {
+                    conn,
+                    instance,
+                    sequence,
+                    keys: socket.presence_keys.clone(),
+                },
+            );
+        }
+        self.broadcast(conn, frame(MSG_EPHEMERAL, &canonical));
     }
 
     fn broadcast(&mut self, from: u64, message: Vec<u8>) {
