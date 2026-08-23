@@ -280,6 +280,7 @@ export class EsbtEngine implements CollabSession {
     this.ephemeral.set(userKey(this.presenceSiteId()), {
       name: this.user.name,
       colorClassName: `marks-user${this.user.colorIndex}`,
+      participantId: this.user.id || this.presenceSiteId(),
     });
   }
 
@@ -1363,14 +1364,22 @@ export class EsbtEngine implements CollabSession {
 
     for (const [key, value] of Object.entries(states)) {
       if (!key.endsWith('-cm-user') || !value || typeof value !== 'object') continue;
-      const user = value as { name?: unknown; colorClassName?: unknown };
+      const user = value as { name?: unknown; colorClassName?: unknown; participantId?: unknown };
       const name = typeof user.name === 'string' ? user.name : 'Anonymous';
       const match = /marks-user(\d)/.exec(String(user.colorClassName ?? ''));
+      const site = key.replace(/-cm-user$/, '');
+      const selection = states[`${site}-cm-sel`];
       peers.push({
-        id: key.replace(/-cm-user$/, ''),
+        id: site,
         name,
         colorIndex: match ? Number(match[1]) : 1,
         self: key === selfKey,
+        participantId: typeof user.participantId === 'string' ? user.participantId : site,
+        selection: selection && typeof selection === 'object' &&
+          typeof (selection as { from?: unknown }).from === 'number' &&
+          typeof (selection as { to?: unknown }).to === 'number'
+          ? selection as { from: number; to: number } : undefined,
+        section: 'Document',
       });
     }
 
@@ -1383,7 +1392,7 @@ export class EsbtEngine implements CollabSession {
       });
     }
 
-    peers.sort((a, b) => Number(b.self) - Number(a.self) || a.name.localeCompare(b.name));
+    peers.sort((a, b) => Number(b.self) - Number(a.self) || a.id.localeCompare(b.id));
     this.cachedPeers = peers;
     for (const listener of this.peerListeners) listener(peers);
   }

@@ -424,9 +424,10 @@
 :root[data-shell='phone'] .liquid-dock,
 :root[data-shell='phone'] .product-mark,
 :root[data-shell='phone'] .titlebar .status,
-:root[data-shell='phone'] .titlebar .presence,
 :root[data-shell='phone'] .titlebar-search,
 :root[data-shell='phone'] .quick-access { display: none; }
+:root[data-shell='phone'] .titlebar .presence .presence-avatar-button:nth-of-type(n+2) { display: none; }
+:root[data-shell='phone'] .presence-panel { position: fixed; inset: auto 0 0; width: auto; max-height: 72vh; border-radius: 18px 18px 0 0; padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
 
 .phone-composer {
   position: contents;

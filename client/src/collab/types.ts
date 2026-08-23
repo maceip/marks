@@ -27,11 +27,22 @@ export interface Peer {
   /** Palette index 1-8, matching the `.marks-user{n}` CSS classes. */
   colorIndex: number;
   self: boolean;
+  /** Stable person key. Several live site ids (tabs) may belong to one person. */
+  participantId?: string;
+  avatarUrl?: string;
+  authenticated?: boolean;
+  /** Most recent remote selection; presence UI treats a selection as editing. */
+  selection?: { from: number; to: number };
+  section?: string;
+  joinedAt?: number;
+  connectionIds?: string[];
 }
 
 export interface LocalUser {
   name: string;
   colorIndex: number;
+  /** Browser identity shared by this person's tabs, never displayed. */
+  id?: string;
 }
 
 export interface RoomTicket {
