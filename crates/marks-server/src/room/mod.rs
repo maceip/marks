@@ -26,6 +26,11 @@ pub const MSG_SYNCED: u8 = 0x05;
 pub const MSG_MUTATION: u8 = 0x06;
 /// Server-to-origin durable commit receipt.
 pub const MSG_COMMITTED: u8 = 0x07;
+/// Marks-owned, transient presence messages. These are deliberately distinct
+/// from durable ESBT snapshots and updates.
+pub const MSG_PRESENCE_DELTA: u8 = 0x08;
+pub const MSG_PRESENCE_SNAPSHOT: u8 = 0x09;
+pub const MSG_PRESENCE_REMOVAL: u8 = 0x0a;
 
 /// Close codes. `4404` is the one the browser treats as "document deleted".
 pub const CLOSE_INVALID_PAYLOAD: u16 = 4400;

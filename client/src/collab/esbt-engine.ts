@@ -35,6 +35,9 @@ import { PresenceStore } from './presence-store';
 import { EDITOR_CHUNK_UNITS } from './profile';
 import {
   MSG_EPHEMERAL,
+  MSG_PRESENCE_DELTA,
+  MSG_PRESENCE_REMOVAL,
+  MSG_PRESENCE_SNAPSHOT,
   MSG_COMMITTED,
   MSG_MUTATION,
   MSG_SERVER_VV,
@@ -270,7 +273,7 @@ export class EsbtEngine implements CollabSession {
     }
     this.unsubscribers.push(
       this.ephemeral.subscribe(() => this.refreshPeers()),
-      this.ephemeral.subscribeLocalUpdates((bytes) => this.send(MSG_EPHEMERAL, bytes)),
+      this.ephemeral.subscribeLocalUpdates((bytes) => this.send(MSG_PRESENCE_DELTA, bytes)),
     );
     this.refreshPeers();
     this.refreshTelemetry();
@@ -880,7 +883,7 @@ export class EsbtEngine implements CollabSession {
     socket.addEventListener('message', (event) => this.onMessage(event.data as ArrayBuffer));
     socket.addEventListener('open', () => {
       this.reconnectDelay = RECONNECT_MIN_MS;
-      this.send(MSG_EPHEMERAL, this.ephemeral.encodeAll());
+      this.send(MSG_PRESENCE_DELTA, this.ephemeral.encodeAll());
     });
     socket.addEventListener('close', (event) => this.onDisconnect(socket, event.code));
     socket.addEventListener('error', () => this.onDisconnect(socket));
@@ -1010,6 +1013,9 @@ export class EsbtEngine implements CollabSession {
         this.importRemote(payload);
         break;
       case MSG_EPHEMERAL:
+      case MSG_PRESENCE_DELTA:
+      case MSG_PRESENCE_SNAPSHOT:
+      case MSG_PRESENCE_REMOVAL:
         try {
           this.ephemeral.apply(payload);
         } catch {

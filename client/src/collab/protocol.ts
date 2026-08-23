@@ -9,6 +9,9 @@ export const MSG_SNAPSHOT = 0x04;
 export const MSG_SYNCED = 0x05;
 export const MSG_MUTATION = 0x06;
 export const MSG_COMMITTED = 0x07;
+export const MSG_PRESENCE_DELTA = 0x08;
+export const MSG_PRESENCE_SNAPSHOT = 0x09;
+export const MSG_PRESENCE_REMOVAL = 0x0a;
 
 const MUTATION_MAGIC = new Uint8Array([0x4d, 0x4b, 0x4d, 0x54]); // MKMT
 const COMMITTED_MAGIC = new Uint8Array([0x4d, 0x4b, 0x43, 0x4d]); // MKCM
