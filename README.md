@@ -11,7 +11,7 @@ session first and the preview repaints only the blocks you actually changed.
 
 ![Split view](docs/screenshots/split-light.png)
 
-## Why it feels different
+## the best (only?) collaborative markdown editor
 
 Most markdown editors debounce the preview and re-render the whole document.
 That is fine for a page of notes and miserable for a long one. marks takes the
