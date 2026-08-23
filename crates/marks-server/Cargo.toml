@@ -10,7 +10,7 @@ rust-version.workspace = true
 marks-auth = { path = "../marks-auth" }
 # The authoritative ESBT sequence CRDT (Mechaoui & Imine, arXiv:2607.28101).
 # Pinned to an exact revision: wire formats are part of the trust boundary.
-esbt = { git = "https://github.com/maceip/ESBT-web", rev = "6de13dd1c84fca3f33d51658ed86d5502b288284" }
+esbt = { git = "https://github.com/maceip/ESBT-web", rev = "3d11890684d6c23bf3c23131ac6197055175a601" }
 
 axum = { version = "0.8", features = ["ws"] }
 aho-corasick = "1"
