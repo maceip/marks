@@ -1,5 +1,7 @@
+import { ABOUT_DOCUMENT, ABOUT_DOCUMENT_ID, ABOUT_DOCUMENT_TITLE } from '../content/about';
 import type { DocumentMeta } from '../lib/api';
-import { UI_PERFORMANCE_RECEIPT } from '../lib/product';
+
+export { ABOUT_DOCUMENT_ID, ABOUT_DOCUMENT_TITLE };
 
 export type TemplateId = 'blank' | 'brief' | 'meeting' | 'launch';
 
@@ -123,49 +125,6 @@ Write the sentence people should repeat after seeing the launch.
   },
 ];
 
-const WELCOME_DOCUMENT = `# A faster place to think
-
-Marks is a quiet writing surface with a powerful command layer. This document is local to your browser, so the entire interface is available before any backing service comes online.
-
-## The product posture
-
-The visual model is **cold glass, hot core**:
-
-- Glass belongs to the ribbon, drawers, menus, and inspectors.
-- The document remains opaque, calm, and cheap to render.
-- Electric blue identifies intent. Green marks revision and local completion.
-- The ribbon may be dense. The page should never feel dense.
-
-## Try the surface
-
-- [x] Switch between Edit, Split, and Preview
-- [ ] Format this line from the Home ribbon
-- [ ] Open History from Review
-- [ ] Press **⌘⇧P** to open the command palette
-
-## A performance promise
-
-| Surface | Critical transfer |
-| --- | ---: |
-| Marketing | ${UI_PERFORMANCE_RECEIPT.marketingCriticalKb} KB |
-| App shell | ${UI_PERFORMANCE_RECEIPT.appCriticalKb} KB |
-
-> Rich interaction should feel expensive to design, not expensive to run.
-
-### Feature-paid rendering
-
-Optional renderers stay out of the path until content asks for them.
-
-\`\`\`ts
-const surface = await marks.open({ mode: 'local' })
-surface.write('at thought speed')
-\`\`\`
-
-## What comes next
-
-The data and collaboration services can attach beneath this interface later. The visible product does not need to wait for them.
-`;
-
 const LAUNCH_DOCUMENT = `# August surface launch
 
 ## North star
@@ -174,7 +133,7 @@ Make a browser writing app feel as immediate as a native text field and as capab
 
 ## This week
 
-- [x] Separate the marketing critical path
+- [x] Make About a real document in the editor
 - [x] Build the adaptive ribbon
 - [ ] Exercise every modal and menu
 - [ ] Record the mobile and foldable receipts
@@ -222,10 +181,10 @@ function seedWorkspace(): DocumentMeta[] {
   const now = Date.now();
   const seeds: Array<{ id: string; title: string; content: string; minutesAgo: number }> = [
     {
-      id: 'welcome-to-marks',
-      title: 'A faster place to think',
-      content: WELCOME_DOCUMENT,
-      minutesAgo: 4,
+      id: ABOUT_DOCUMENT_ID,
+      title: ABOUT_DOCUMENT_TITLE,
+      content: ABOUT_DOCUMENT,
+      minutesAgo: 2,
     },
     {
       id: 'surface-launch',
@@ -257,18 +216,47 @@ function seedWorkspace(): DocumentMeta[] {
   return documents;
 }
 
+function ensureAboutDocument(documents: DocumentMeta[]): DocumentMeta[] {
+  localStorage.setItem(textKey(ABOUT_DOCUMENT_ID), ABOUT_DOCUMENT);
+  const existing = documents.find((document) => document.id === ABOUT_DOCUMENT_ID);
+  if (existing) {
+    if (existing.title === ABOUT_DOCUMENT_TITLE && existing.chars === ABOUT_DOCUMENT.length) {
+      return documents;
+    }
+    const next = documents.map((document) =>
+      document.id === ABOUT_DOCUMENT_ID
+        ? { ...document, title: ABOUT_DOCUMENT_TITLE, chars: ABOUT_DOCUMENT.length }
+        : document,
+    );
+    saveDocuments(next);
+    return next;
+  }
+  const now = Date.now();
+  const about: DocumentMeta = {
+    id: ABOUT_DOCUMENT_ID,
+    title: ABOUT_DOCUMENT_TITLE,
+    engine: 'esbt',
+    chars: ABOUT_DOCUMENT.length,
+    created_at: now,
+    updated_at: now,
+  };
+  const next = [about, ...documents];
+  saveDocuments(next);
+  return next;
+}
+
 export function loadLocalDocuments(): DocumentMeta[] {
   const stored = localStorage.getItem(WORKSPACE_KEY);
   if (stored) {
     try {
       const documents = JSON.parse(stored) as DocumentMeta[];
-      return documents.sort((a, b) => b.updated_at - a.updated_at);
+      return ensureAboutDocument(documents).sort((a, b) => b.updated_at - a.updated_at);
     } catch {
       localStorage.removeItem(WORKSPACE_KEY);
     }
   }
 
-  if (localStorage.getItem(WORKSPACE_READY_KEY)) return [];
+  if (localStorage.getItem(WORKSPACE_READY_KEY)) return ensureAboutDocument([]);
   return seedWorkspace();
 }
 

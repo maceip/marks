@@ -1,4 +1,5 @@
 import { applyServiceCallerHeaders, ensureServiceCaller } from '../auth/caller';
+import { ServiceError } from './service-errors';
 
 export interface DocumentMeta {
   id: string;
@@ -28,11 +29,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         credentials: 'same-origin',
         headers,
       });
-      if (!retry.ok) throw new Error(`${init?.method ?? 'GET'} ${path} failed: ${retry.status}`);
+      if (!retry.ok) throw new ServiceError(retry.status);
       return (await retry.json()) as T;
     }
   }
-  if (!response.ok) throw new Error(`${init?.method ?? 'GET'} ${path} failed: ${response.status}`);
+  if (!response.ok) throw new ServiceError(response.status);
   return (await response.json()) as T;
 }
 

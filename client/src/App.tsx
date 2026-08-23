@@ -3,25 +3,29 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { ensureServiceCaller, getActiveCaller, type ServiceCaller } from './auth/caller';
 import { createMarksDocumentAccess } from './auth/room-access';
 import { loadUser } from './collab/user';
-import type { AppDialog, ReviewSurface } from './components/AppOverlays';
-import { ContextMenu } from './components/ContextMenu';
-import type { CursorInfo } from './components/EditorPane';
-import { HomeSurface } from './components/HomeSurface';
-import { Icon, icons } from './components/Icon';
-import { LiquidDock } from './components/LiquidDock';
-import { OpeningShell } from './components/OpeningShell';
-import { Outline } from './components/Outline';
-import { PerfHud } from './components/PerfHud';
-import { Sidebar } from './components/Sidebar';
-import { StatusBar } from './components/StatusBar';
-import { TopBar, type ViewMode } from './components/TopBar';
-import { ToastRegion, type ToastMessage } from './components/ToastRegion';
-import { VoiceBar } from './components/VoiceBar';
+import type { AppDialog, ReviewSurface } from './components/overlays/AppOverlays';
+import { ContextMenu } from './components/overlays/ContextMenu';
+import { Icon, icons } from './components/ui/Icon';
+import { LiquidDock } from './components/shell/LiquidDock';
+import { OpeningShell } from './components/shell/OpeningShell';
+import { PerfHud } from './components/overlays/PerfHud';
+import { Sidebar } from './components/shell/Sidebar';
+import type { CursorInfo } from './components/workspace/EditorPane';
+import { Outline } from './components/workspace/Outline';
+import { StatusBar } from './components/workspace/StatusBar';
+import { ABOUT_DOCUMENT_ID } from './content/about';
+import { Home } from './pages/Home';
+import { LOGOUT_LOCAL_LINE } from './lib/identity-copy';
+import { readPairingHash } from './lib/pairing-link';
+import { SERVICE_ERROR_COPY } from './lib/service-errors';
+import { TopBar, type ViewMode } from './components/shell/TopBar';
+import { ToastRegion, type ToastMessage } from './components/overlays/ToastRegion';
+import { VoiceBar } from './components/overlays/VoiceBar';
 import type { LocalDocumentDraft, TemplateId } from './demo/workspace';
 import { useBrowserSurface } from './hooks/useBrowserSurface';
 import { useDocumentMeta } from './hooks/useDocumentMeta';
 import { useDocuments } from './hooks/useDocuments';
-import { useMediaQuery } from './hooks/useMediaQuery';
+import { useDevicePosture } from './hooks/useDevicePosture';
 import { useRoute } from './hooks/useRoute';
 import { useSession } from './hooks/useSession';
 import { useTheme } from './hooks/useTheme';
@@ -39,10 +43,16 @@ const Benchmark = lazy(() =>
   import('./pages/Benchmark').then((module) => ({ default: module.Benchmark })),
 );
 const Workspace = lazy(() =>
-  import('./components/Workspace').then((module) => ({ default: module.Workspace })),
+  import('./components/workspace/Workspace').then((module) => ({ default: module.Workspace })),
 );
 const AppOverlays = lazy(() =>
-  import('./components/AppOverlays').then((module) => ({ default: module.AppOverlays })),
+  import('./components/overlays/AppOverlays').then((module) => ({ default: module.AppOverlays })),
+);
+const AiSheet = lazy(() =>
+  import('./components/chrome/AiSheet').then((module) => ({ default: module.AiSheet })),
+);
+const LinkPage = lazy(() =>
+  import('./pages/Link').then((module) => ({ default: module.LinkPage })),
 );
 
 /** How often the HUD and word counts refresh. Editing never waits on this. */
@@ -60,8 +70,9 @@ export function App() {
   const [route, navigate] = useRoute();
   const [theme, toggleTheme, setTheme] = useTheme();
   const [preferences, setPreferences] = useUiPreferences();
-  const phone = useMediaQuery(UI_MEDIA.phone);
-  const overlayNavigation = useMediaQuery(UI_MEDIA.overlayNavigation);
+  const posture = useDevicePosture();
+  const phone = posture.phone;
+  const overlayNavigation = posture.overlayNavigation;
   const user = useMemo(loadUser, []);
   const [serviceCaller, setServiceCaller] = useState<ServiceCaller | null>(null);
   useEffect(() => {
@@ -97,9 +108,11 @@ export function App() {
     () => localStorage.getItem('marks:ribbon-collapsed') === 'true',
   );
   const [dialog, setDialog] = useState<AppDialog | null>(null);
+  const [aiOpen, setAiOpen] = useState(false);
   const [reviewSurface, setReviewSurface] = useState<ReviewSurface | null>(null);
   const [overlaysMounted, setOverlaysMounted] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [pairing, setPairing] = useState(() => readPairingHash(location.hash));
 
   const documents = useDocuments(route.name !== 'benchmark');
   const docId = route.name === 'document' ? route.id : null;
@@ -226,6 +239,19 @@ export function App() {
     setOverlaysMounted(true);
     setDialog(next);
   }, []);
+
+  useEffect(() => {
+    const sync = () => {
+      const next = readPairingHash(location.hash);
+      setPairing(next);
+      if (next === 'invalid') {
+        notify(SERVICE_ERROR_COPY[401].title, SERVICE_ERROR_COPY[401].detail, SERVICE_ERROR_COPY[401].tone);
+      }
+    };
+    sync();
+    window.addEventListener('hashchange', sync);
+    return () => window.removeEventListener('hashchange', sync);
+  }, [notify]);
 
   const openDocument = useCallback(
     (id: string) => {
@@ -380,7 +406,28 @@ export function App() {
           openBenchmark();
           break;
         case 'about':
-          location.assign('/welcome/');
+          openDocument(ABOUT_DOCUMENT_ID);
+          if (!phone) setMode('split');
+          break;
+        case 'keep-workspace':
+          openDialog({ type: 'keep-workspace' });
+          break;
+        case 'account':
+          openDialog({ type: 'account' });
+          break;
+        case 'pairing':
+          navigate({ name: 'link' });
+          break;
+        case 'logout':
+          notify(SERVICE_ERROR_COPY[401].title, LOGOUT_LOCAL_LINE, 'neutral');
+          break;
+        case 'find': {
+          const view = viewRef.current;
+          if (view) void import('./editor/actions').then(({ openFind }) => openFind(view));
+          break;
+        }
+        case 'ai-compose':
+          setAiOpen(true);
           break;
       }
     },
@@ -393,7 +440,10 @@ export function App() {
       openBenchmark,
       openDialog,
       outlineOpen,
+      navigate,
+      openDocument,
       overlayNavigation,
+      phone,
       reviewSurface,
       session,
       sidebarOpen,
@@ -457,9 +507,11 @@ export function App() {
     document.title =
       route.name === 'benchmark'
         ? 'Benchmark · marks'
-        : route.name === 'document'
-          ? `${title} · marks`
-          : 'marks — collaborative writing at thought speed';
+        : route.name === 'link'
+          ? 'Phone confirmation · marks'
+          : route.name === 'document'
+            ? `${title} · marks`
+            : 'marks — collaborative writing at thought speed';
   }, [title, route.name]);
 
   useEffect(() => {
@@ -467,11 +519,12 @@ export function App() {
     setFocusMode(false);
     setReviewSurface(null);
     setOutlineOpen(false);
+    setAiOpen(false);
   }, [route.name]);
 
   return (
-    <div className={`app route-${route.name}${sidebarOpen && !focusMode ? ' with-sidebar' : ''}${focusMode ? ' focus-mode' : ''}${ribbonCollapsed ? ' ribbon-collapsed' : ''}`}>
-      {sidebarOpen && !focusMode && (
+    <div className={`app route-${route.name}${sidebarOpen && !focusMode && !posture.foldable ? ' with-sidebar' : ''}${focusMode ? ' focus-mode' : ''}${ribbonCollapsed ? ' ribbon-collapsed' : ''}`} data-shell={posture.shell} data-doc={docId ?? undefined}>
+      {sidebarOpen && !focusMode && !posture.foldable && (
         <Sidebar
           documents={documents.documents}
           activeId={docId}
@@ -487,17 +540,19 @@ export function App() {
             if (document) openDialog({ type: 'delete', documentId: id, title: document.title });
           }}
           onOpenBenchmark={openBenchmark}
+          onOpenAbout={() => openDocument(ABOUT_DOCUMENT_ID)}
         />
       )}
 
       <main className={`main route-${route.name}`}>
         <TopBar
-          title={route.name === 'benchmark' ? 'Engine benchmark' : title}
+          title={route.name === 'benchmark' ? 'Engine benchmark' : route.name === 'link' ? 'Phone confirmation' : title}
           docId={docId}
           route={route.name}
           documentReady={Boolean(session && hydrated)}
           documentAvailable={!resolved || supported}
-          phone={phone}
+          posture={posture}
+          selected={cursor.selected}
           getView={getView}
           status={status}
           peers={peers}
@@ -517,6 +572,8 @@ export function App() {
           onToggleOutline={() => setOutlineOpen((open) => !open)}
           onToggleRibbon={() => setRibbonCollapsed((collapsed) => !collapsed)}
           onAction={runAction}
+          onOpenAi={() => setAiOpen(true)}
+          onNotify={notify}
           onVoice={session ? surface.toggleVoice : undefined}
           voiceActive={surface.voiceStatus === 'listening'}
           voiceSupported={surface.voiceSupported}
@@ -525,6 +582,14 @@ export function App() {
         {route.name === 'benchmark' ? (
           <Suspense fallback={<div className="empty-state">Loading benchmark…</div>}>
             <Benchmark onBack={() => navigate({ name: 'home' })} />
+          </Suspense>
+        ) : route.name === 'link' ? (
+          <Suspense fallback={<div className="empty-state">Opening phone confirmation…</div>}>
+            <LinkPage
+              pairing={pairing}
+              onNotify={notify}
+              onKeep={() => openDialog({ type: 'keep-workspace' })}
+            />
           </Suspense>
         ) : docId && resolved && !supported ? (
           <div className="empty-state">
@@ -557,6 +622,11 @@ export function App() {
               <Workspace
                 session={session}
                 mode={mode}
+                posture={posture}
+                getView={getView}
+                documentTitle={title}
+                onModeChange={setMode}
+                onAction={runAction}
                 scrollSync={scrollSync}
                 onStats={handleStats}
                 onHeadings={setHeadings}
@@ -573,7 +643,7 @@ export function App() {
         ) : docId ? (
           <OpeningShell cached={Boolean(meta)} offline={surface.network === 'offline'} />
         ) : (
-          <HomeSurface
+          <Home
             documents={documents.documents}
             loading={documents.loading}
             onCreate={() => void createDocument()}
@@ -582,6 +652,7 @@ export function App() {
             onOpenTemplates={() => openDialog({ type: 'templates' })}
             onOpenBenchmark={openBenchmark}
             onOpenPreferences={() => openDialog({ type: 'preferences' })}
+            onKeepWorkspace={() => openDialog({ type: 'keep-workspace' })}
           />
         )}
 
@@ -636,7 +707,21 @@ export function App() {
         />
       )}
 
-      {route.name === 'document' && session && !phone && !focusMode && (
+      {aiOpen && route.name === 'document' && !phone && (
+        <Suspense fallback={null}>
+          <aside className="ai-float" aria-label="AI composition">
+            <AiSheet
+              open
+              documentTitle={title}
+              getView={getView}
+              onClose={() => setAiOpen(false)}
+              onNotify={notify}
+            />
+          </aside>
+        </Suspense>
+      )}
+
+      {route.name === 'document' && session && !phone && !focusMode && !posture.foldable && (
         <LiquidDock
           onCommands={() => runAction('command-palette')}
           onComments={() => runAction('comments')}

@@ -1,0 +1,40 @@
+import { SurfaceMaterial } from '../components/ui/SurfaceMaterial';
+import { PairingInspect } from '../components/identity/PairingInspect';
+import { MarksMark } from '../components/ui/MarksMark';
+import type { PairingLink } from '../auth/protocol';
+import '../styles/home.css';
+
+interface LinkPageProps {
+  pairing: PairingLink | 'invalid' | null;
+  onNotify: (title: string, detail?: string, tone?: 'neutral' | 'success' | 'danger') => void;
+  onKeep: () => void;
+}
+
+/** Phone confirmation surface. Same tokens as the desktop identity chrome. */
+export function LinkPage({ pairing, onNotify, onKeep }: LinkPageProps) {
+  const state = pairing === 'invalid' ? 'invalid' : pairing ? 'ready' : 'waiting';
+
+  return (
+    <div className="home-surface pairing-landing">
+      <section className="home-hero surface-material-host">
+        <SurfaceMaterial variant="hero" intensity={0.92} />
+        <div className="home-hero-copy">
+          <span className="home-kicker"><MarksMark size={16} /> Phone confirmation</span>
+          <h2>Keep a workspace from this phone.</h2>
+          <p>
+            Inspect, bootstrap, or approve. The secret stays in the fragment. This page does not
+            invent a second account type, a passcode, or a sent invitation.
+          </p>
+        </div>
+      </section>
+      <section className="home-section pairing-landing-body">
+        <PairingInspect state={state} onNotify={onNotify} />
+        <div className="dialog-actions">
+          <button type="button" className="button" onClick={onKeep}>
+            This tab is still temporary
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}

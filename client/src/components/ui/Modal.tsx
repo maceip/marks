@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { Icon, icons } from '../Icon';
-import { SurfaceMaterial } from '../SurfaceMaterial';
+import { Icon, icons } from './Icon';
+import { SurfaceMaterial } from './SurfaceMaterial';
 
 interface ModalProps {
   open: boolean;

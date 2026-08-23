@@ -1,0 +1,679 @@
+/* Document chrome: ribbon, 3D glyphs, phone composer, foldable stage.
+   Loaded only with the document route so home keeps its CSS budget. */
+
+.quick-access {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 2px;
+}
+
+.glyph {
+  --tilt-x: 0;
+  --tilt-y: 0;
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  pointer-events: none;
+}
+
+.ribbon-command .glyph,
+.phone-nav .glyph,
+.phone-format-chips .glyph,
+.phone-sheet-grid .glyph,
+.mini-toolbar .glyph,
+.ai-modes .glyph,
+.liquid-dock .glyph {
+  pointer-events: auto;
+}
+
+.glyph-shadow,
+.glyph-body {
+  grid-area: 1 / 1;
+  overflow: visible;
+}
+
+.glyph-shadow {
+  fill: rgb(12 28 72 / 22%);
+  transform: translate3d(0, 2px, -8px) scale(0.92);
+  filter: blur(1.2px);
+}
+
+.glyph-live .glyph-body {
+  transform:
+    perspective(140px)
+    rotateX(calc(var(--tilt-y) * -11deg))
+    rotateY(calc(var(--tilt-x) * 13deg))
+    translateZ(4px);
+  transform-style: preserve-3d;
+  transition: transform 160ms var(--ease-out);
+}
+
+.glyph-slab {
+  fill: url(#none);
+  stroke-width: 1;
+}
+
+.glyph-navy .glyph-slab { fill: #1c2c63; stroke: color-mix(in srgb, #7294ff 55%, white); }
+.glyph-blue .glyph-slab { fill: #2c54d8; stroke: color-mix(in srgb, white 70%, #315eea); }
+.glyph-green .glyph-slab { fill: #0f8f5b; stroke: color-mix(in srgb, #9ff3c8 70%, white); }
+.glyph-teal .glyph-slab { fill: #1f6d74; stroke: color-mix(in srgb, #9ee8ef 60%, white); }
+.glyph-amber .glyph-slab { fill: #8d6410; stroke: color-mix(in srgb, #f5d27a 70%, white); }
+
+.glyph-lip {
+  fill: none;
+  stroke: rgb(255 255 255 / 42%);
+  stroke-width: 1.2;
+  stroke-linecap: round;
+}
+
+.glyph-fold {
+  fill: #11bd72;
+  stroke: color-mix(in srgb, #0b6a42 40%, white);
+  stroke-width: 0.8;
+}
+
+.glyph-mark {
+  fill: none;
+  stroke: rgb(255 255 255 / 92%);
+  stroke-width: 1.55;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.glyph-spec {
+  fill: none;
+  stroke: rgb(255 255 255 / 58%);
+  stroke-width: 1.15;
+  stroke-linecap: round;
+  transform: translateX(calc(var(--tilt-x) * 2px));
+}
+
+.ribbon-command:active .glyph-live .glyph-body,
+.phone-nav button:active .glyph-live .glyph-body {
+  transform: perspective(140px) rotateX(8deg) translateZ(0) scale(0.96);
+}
+
+.ribbon-body {
+  display: grid;
+  grid-template-rows: 29px minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+.ribbon-tabs {
+  display: flex;
+  align-items: end;
+  gap: 2px;
+  min-width: 0;
+  padding: 0 10px;
+}
+
+.ribbon-tab {
+  align-self: stretch;
+  min-width: 54px;
+  padding: 0 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 570;
+  cursor: pointer;
+}
+
+.ribbon-tab:hover { color: var(--text); }
+.ribbon-tab.active {
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+}
+
+.ribbon-tab.contextual {
+  color: var(--brand-green);
+  font-weight: 650;
+}
+
+.ribbon-tab.contextual.active {
+  border-bottom-color: var(--brand-green);
+}
+
+.ribbon-deck {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--glass-border);
+  background: var(--glass-refraction), color-mix(in srgb, var(--glass) 54%, transparent);
+}
+
+.ribbon-toolbar {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  padding: 3px 8px 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 0;
+  background: transparent;
+  scrollbar-width: none;
+}
+
+.ribbon-toolbar::-webkit-scrollbar { display: none; }
+
+.ribbon-command-group {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 12px;
+  flex: none;
+  align-items: center;
+  min-width: max-content;
+  padding: 0 8px;
+}
+
+.ribbon-command-group + .ribbon-command-group {
+  border-left: 1px solid var(--glass-border);
+}
+
+.ribbon-command-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ribbon-command {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 50px;
+  height: 48px;
+  padding: 2px 5px;
+  border: 1px solid color-mix(in srgb, var(--brand-navy) 8%, transparent);
+  border-radius: 15px;
+  background:
+    linear-gradient(145deg, rgb(255 255 255 / 42%), transparent 48%),
+    color-mix(in srgb, var(--surface-raised) 70%, transparent);
+  color: var(--text-muted);
+  box-shadow: 0 8px 18px -15px rgb(10 24 64 / 46%), inset 0 1px var(--glass-highlight);
+  cursor: pointer;
+  transition: color var(--motion-fast) ease, background var(--motion-fast) ease, transform 70ms var(--ease-out);
+}
+
+.ribbon-command-large {
+  min-width: 64px;
+  height: 58px;
+}
+
+.ribbon-command:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
+  background: color-mix(in srgb, var(--surface-raised) 94%, transparent);
+  color: var(--text);
+  transform: translateY(-1px);
+}
+
+.ribbon-command:active:not(:disabled) { transform: translateY(1px); }
+.ribbon-command.active,
+.ribbon-command[aria-pressed='true'] {
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+  background: color-mix(in srgb, var(--accent-soft) 90%, transparent);
+  color: var(--accent);
+}
+.ribbon-command:disabled { opacity: 0.38; cursor: not-allowed; }
+.ribbon-command.danger-command { color: var(--danger); }
+.ribbon-command-label {
+  max-width: 68px;
+  overflow: hidden;
+  font-size: 8.8px;
+  font-weight: 590;
+  line-height: 1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ribbon-group-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  align-self: end;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 650;
+  line-height: 11px;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.ribbon-launcher {
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 8px;
+  cursor: pointer;
+}
+
+.ribbon-gallery {
+  display: flex;
+  gap: 4px;
+}
+
+.style-chip {
+  display: grid;
+  min-width: 46px;
+  height: 46px;
+  padding: 4px;
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-raised) 88%, transparent);
+  color: var(--text-muted);
+  font-size: 8px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.style-chip span {
+  font-size: 13px;
+  font-weight: 720;
+  letter-spacing: -0.04em;
+  text-transform: none;
+  color: var(--text);
+}
+
+.style-h1 span { font-size: 16px; }
+.style-h2 span { font-size: 14px; }
+.style-h3 span { font-size: 12px; color: var(--accent); }
+.style-h4 span { font-size: 11px; }
+
+.ribbon-deck-enter { animation: ribbon-deck-in 170ms var(--ease-out) both; }
+@keyframes ribbon-deck-in {
+  from { opacity: 0; transform: translateY(4px); }
+}
+
+.mini-toolbar {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 40px;
+  padding: 4px 8px 4px 4px;
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  background: var(--glass-refraction), var(--liquid-glass);
+  box-shadow: var(--glass-shadow);
+  transform: translateX(-50%);
+  animation: ribbon-deck-in 160ms var(--ease-out) both;
+}
+
+.mini-toolbar button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.mini-toolbar button:hover { background: var(--accent-soft); color: var(--accent); }
+.mini-toolbar span { color: var(--text-faint); font-size: 10px; padding-right: 4px; }
+
+.workspace-shell { position: relative; }
+
+.ai-float {
+  position: fixed;
+  top: calc(var(--ribbon-height) + 10px);
+  right: 12px;
+  z-index: 52;
+  width: min(380px, calc(100vw - 24px));
+  overflow: hidden;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  background: var(--glass-refraction), var(--glass-strong);
+  box-shadow: var(--shadow-lg);
+}
+
+.ai-sheet {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  overflow: hidden;
+}
+
+.ai-sheet.embedded { padding: 0; }
+.ai-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.ai-sheet-head span,
+.ai-honest { color: var(--text-muted); font-size: 11.5px; }
+.ai-sheet-head h2 { font-size: 16px; letter-spacing: -0.03em; }
+.ai-modes {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+}
+.ai-modes button {
+  display: grid;
+  justify-items: center;
+  gap: 3px;
+  min-width: 64px;
+  padding: 7px 6px;
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-raised) 70%, transparent);
+  color: var(--text-muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+.ai-modes button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.ai-instruction { display: grid; gap: 6px; color: var(--text-muted); font-size: 11px; font-weight: 650; }
+.ai-instruction textarea,
+.ai-preview {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: 12.5px var(--font-mono);
+}
+.ai-preview {
+  max-height: 180px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+.ai-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+:root[data-shell='phone'] .main.route-document {
+  grid-template-rows: var(--titlebar-height) minmax(0, 1fr) 0;
+  padding-bottom: calc(118px + env(safe-area-inset-bottom) + var(--keyboard-inset, 0px));
+}
+
+:root[data-shell='phone'] .app-ribbon.ribbon-document {
+  grid-template-rows: var(--titlebar-height);
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+:root[data-shell='phone'] .statusbar,
+:root[data-shell='phone'] .liquid-dock,
+:root[data-shell='phone'] .product-mark,
+:root[data-shell='phone'] .titlebar .status,
+:root[data-shell='phone'] .titlebar .presence,
+:root[data-shell='phone'] .titlebar-search,
+:root[data-shell='phone'] .quick-access { display: none; }
+
+.phone-composer {
+  position: contents;
+}
+
+.phone-identity {
+  position: fixed;
+  left: 8px;
+  right: 8px;
+  top: calc(52px + env(safe-area-inset-top));
+  z-index: 53;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--brand-amber) 40%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand-amber) 12%, var(--glass));
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+}
+
+.phone-identity span {
+  flex: none;
+  color: var(--brand-amber);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.phone-format-chips {
+  position: fixed;
+  right: 8px;
+  bottom: calc(72px + env(safe-area-inset-bottom) + var(--keyboard-inset, 0px));
+  left: 8px;
+  z-index: 54;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 4px;
+  scrollbar-width: none;
+}
+
+.phone-format-chips button {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 58px;
+  min-height: 52px;
+  padding: 4px;
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  background: var(--glass-strong);
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 620;
+}
+
+.phone-format-chips button.active { color: var(--accent); background: var(--accent-soft); }
+
+.phone-nav {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 56;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  min-height: calc(64px + env(safe-area-inset-bottom));
+  padding: 6px 8px calc(8px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--glass-border);
+  background: var(--glass-refraction), var(--glass-strong);
+  box-shadow: 0 -16px 36px -28px rgb(0 0 0 / 55%);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .phone-nav {
+    background: var(--glass-refraction), var(--glass);
+    -webkit-backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturation));
+    backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturation));
+  }
+}
+
+.phone-nav button {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  min-height: 48px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 620;
+}
+
+.phone-nav button.active { color: var(--accent); }
+
+.phone-sheet-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+}
+
+.phone-sheet-scrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgb(8 12 24 / 38%);
+}
+
+.phone-sheet {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  max-height: min(78vh, 640px);
+  padding: 16px 16px calc(18px + env(safe-area-inset-bottom));
+  overflow: auto;
+  border-top: 1px solid var(--glass-border);
+  border-radius: 22px 22px 0 0;
+  background: var(--glass-refraction), var(--glass-strong);
+  animation: phone-sheet-in 220ms var(--ease-spring) both;
+}
+
+.phone-sheet header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.phone-sheet-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.phone-sheet-grid button {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  min-height: 84px;
+  padding: 10px 6px;
+  border: 1px solid var(--glass-border);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--surface-raised) 80%, transparent);
+  color: var(--text);
+  font-size: 11px;
+}
+
+@keyframes phone-sheet-in {
+  from { transform: translateY(18px); opacity: 0; }
+}
+
+.phone-composer.keyboard-open .phone-nav span,
+.phone-composer.keyboard-open .phone-format-chips,
+.phone-composer.keyboard-open .phone-identity { display: none; }
+.phone-composer.keyboard-open .phone-nav {
+  min-height: calc(48px + env(safe-area-inset-bottom));
+}
+
+:root[data-shell='fold-book'] .workspace,
+:root[data-shell='fold-book'] .workspace.mode-edit,
+:root[data-shell='fold-book'] .workspace.mode-preview,
+:root[data-shell='fold-book'] .workspace.mode-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--hinge-gap, 28px) minmax(0, 1fr);
+}
+
+:root[data-shell='fold-book'] .workspace .splitter {
+  pointer-events: none;
+  background: transparent;
+}
+
+:root[data-shell='fold-book'] .workspace.mode-edit .preview-pane,
+:root[data-shell='fold-book'] .workspace.mode-edit .fold-companion,
+:root[data-shell='fold-book'] .workspace.mode-preview .editor-pane {
+  display: flex;
+}
+
+:root[data-shell='fold-laptop'] .workspace,
+:root[data-shell='fold-laptop'] .workspace.mode-split {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) var(--hinge-gap, 24px) minmax(0, 1fr);
+}
+
+:root[data-shell='fold-laptop'] .workspace .splitter {
+  cursor: row-resize;
+  background: transparent;
+}
+
+.fold-companion {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface);
+}
+
+.fold-companion-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 10px 0;
+}
+
+.fold-companion-tabs button {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.fold-companion-tabs button.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.fold-companion-body {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+
+:root[data-density='compact'] .ribbon-command { height: 42px; min-width: 46px; }
+:root[data-glass='reduced'] .phone-nav,
+:root[data-glass='reduced'] .phone-sheet,
+:root[data-glass='reduced'] .mini-toolbar {
+  background: var(--surface-raised);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+:root[data-motion='reduced'] .glyph-live .glyph-body,
+:root[data-surface-tier='foundation'] .glyph-live .glyph-body {
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glyph-live .glyph-body { transform: none; }
+}

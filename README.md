@@ -77,8 +77,10 @@ people to expect:
 - **Synchronised scrolling** mapped by source line, not by percentage
 - **Formatting toolbar** and shortcuts — bold, italic, strikethrough, highlight,
   headings, links, lists, task lists, quotes, tables, code blocks
-- **Adaptive command ribbon** — File, Home, Insert, Review, and View decks;
-  collapsible on desktop/foldables and fixed to the safe-area bottom on phones
+- **Adaptive command ribbon** — File, Home, Insert, Draw, AI, Review, and View
+  decks plus contextual Picture / Table / Shape tools; 3D folded-glass glyphs;
+  a phone composer and a hinge-aware foldable companion instead of squeezed
+  breakpoints
 - **Local comments and version history** — complete interaction scaffolding
   behind replaceable review/session adapters
 - **Live outline** built from the document's headings (`Ctrl`/`Cmd` + `Shift` + `O`)
@@ -108,7 +110,15 @@ client/                     Vite + React + TypeScript
   markdown/                 markdown-it setup, block diffing, DOM patching
   workers/                  markdown.worker.ts, bench.worker.ts
   editor/                   CodeMirror 6 setup, commands, theme
-  components/ pages/        UI
+  pages/                    route screens: Home, Benchmark
+  content/                  canonical documents (About opens in the editor)
+  components/shell/         app frame: titlebar, sidebar, dock
+  components/chrome/        Word-inspired ribbon, phone composer
+  components/workspace/     editor, preview, outline, status
+  components/overlays/      dialogs, toasts, context menu, HUD
+  components/identity/      keep-workspace and account sheets
+  components/glyphs/        3D folded-glass command icons
+  components/ui/            primitives: mark, icons, modal, glass host
 esbt/                       temporary TypeScript ESBT browser adapter
 crates/marks-auth/          identity/authorization validators
 crates/marks-server/        the only HTTP/WebSocket process

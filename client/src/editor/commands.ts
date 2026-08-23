@@ -1,6 +1,6 @@
 import { EditorSelection, type ChangeSpec, type StateCommand } from '@codemirror/state';
 import type { EditorView, KeyBinding } from '@codemirror/view';
-import { isPlainUrl, markdownFromClipboard, writeClipboardEvent } from '../browser';
+import { isPlainUrl, markdownFromClipboard, writeClipboardEvent } from '../browser/clipboard.ts';
 
 /** Wrap or unwrap each selection range with a marker, e.g. `**bold**`. */
 export function toggleWrap(marker: string, placeholder = ''): StateCommand {
@@ -106,13 +106,217 @@ function insertSnippet(text: string, selectFrom: number, selectTo: number): Stat
   };
 }
 
+export const toggleUnderline = toggleWrap('++', 'underlined');
+export const toggleSuperscript = toggleWrap('^', 'sup');
+export const toggleSubscript = toggleWrap('~', 'sub');
+
 export const insertHorizontalRule = insertSnippet('\n---\n\n', 5, 5);
 export const insertCodeBlock = insertSnippet('```\n\n```\n', 3, 3);
+export const insertMath = insertSnippet('$$\n\n$$\n', 3, 3);
+export const insertMermaid = insertSnippet('```mermaid\nflowchart LR\n  A[Start] --> B[Next]\n```\n', 21, 26);
+export const insertFootnote = insertSnippet('[^1]: footnote\n', 6, 14);
+export const insertToc = insertSnippet('<!-- toc -->\n\n', 13, 13);
 export const insertTable = insertSnippet(
   '| Column | Column |\n| --- | --- |\n| Cell | Cell |\n',
   2,
   8,
 );
+
+export function insertCallout(kind: 'info' | 'success' | 'warning' | 'danger' | 'note' = 'info'): StateCommand {
+  return insertSnippet(`:::${kind}\nNote\n:::\n`, kind.length + 5, kind.length + 9);
+}
+
+export type ShapeKind = 'rect' | 'ellipse' | 'diamond' | 'arrow' | 'bubble';
+
+const SHAPE_PATH: Record<ShapeKind, string> = {
+  rect: '<rect x="12" y="18" width="136" height="60" rx="10"/>',
+  ellipse: '<ellipse cx="80" cy="48" rx="62" ry="28"/>',
+  diamond: '<polygon points="80,14 138,48 80,82 22,48"/>',
+  arrow: '<path d="M18 48h92l-12-16M110 48l-12 16"/>',
+  bubble: '<path d="M24 18h96a16 16 0 0 1 16 16v28a16 16 0 0 1-16 16H70l-18 14v-14H24A16 16 0 0 1 8 62V34A16 16 0 0 1 24 18z"/>',
+};
+
+export function insertShape(kind: ShapeKind = 'rect', label = 'Label'): StateCommand {
+  const svg = `<figure class="marks-shape" data-shape="${kind}" data-fill="accent">
+<svg viewBox="0 0 160 96" role="img" aria-label="${label}">${SHAPE_PATH[kind]}</svg>
+<figcaption>${label}</figcaption>
+</figure>
+`;
+  return insertSnippet(svg, svg.indexOf(label), svg.indexOf(label) + label.length);
+}
+
+export function insertHtmlImage(url: string, alt = 'image', width = 480, align: 'left' | 'center' | 'right' = 'center'): StateCommand {
+  const insert = `<img src="${url}" alt="${alt}" class="marks-figure" width="${width}" data-align="${align}" />\n`;
+  return insertSnippet(insert, insert.indexOf(alt), insert.indexOf(alt) + alt.length);
+}
+
+export const setParagraph = toggleLinePrefix('', /^\s{0,3}#{1,6}\s+/);
+
+export function indentLines(): StateCommand {
+  return ({ state, dispatch }) => {
+    const changes: ChangeSpec[] = [];
+    const seen = new Set<number>();
+    for (const range of state.selection.ranges) {
+      const first = state.doc.lineAt(range.from).number;
+      const last = state.doc.lineAt(range.to).number;
+      for (let number = first; number <= last; number++) {
+        if (seen.has(number)) continue;
+        seen.add(number);
+        const line = state.doc.line(number);
+        if (line.text.length === 0) continue;
+        changes.push({ from: line.from, insert: '  ' });
+      }
+    }
+    if (changes.length === 0) return false;
+    dispatch(state.update({ changes, userEvent: 'input.indent' }));
+    return true;
+  };
+}
+
+export function outdentLines(): StateCommand {
+  return ({ state, dispatch }) => {
+    const changes: ChangeSpec[] = [];
+    const seen = new Set<number>();
+    for (const range of state.selection.ranges) {
+      const first = state.doc.lineAt(range.from).number;
+      const last = state.doc.lineAt(range.to).number;
+      for (let number = first; number <= last; number++) {
+        if (seen.has(number)) continue;
+        seen.add(number);
+        const line = state.doc.line(number);
+        const match = /^( {1,2}|\t)/.exec(line.text);
+        if (!match) continue;
+        changes.push({ from: line.from, to: line.from + match[0].length });
+      }
+    }
+    if (changes.length === 0) return false;
+    dispatch(state.update({ changes, userEvent: 'input.indent' }));
+    return true;
+  };
+}
+
+export const clearFormatting: StateCommand = ({ state, dispatch }) => {
+  const range = state.selection.main;
+  if (range.empty) return false;
+  const selected = state.sliceDoc(range.from, range.to);
+  const cleaned = selected
+    .replace(/(\*\*|__|~~|==|`|\+\+)/g, '')
+    .replace(/(^|\s)([*_])(?=\S)/g, '$1')
+    .replace(/(?<=\S)([*_])(?=\s|$)/g, '');
+  if (cleaned === selected) return false;
+  dispatch(
+    state.update({
+      changes: { from: range.from, to: range.to, insert: cleaned },
+      selection: { anchor: range.from, head: range.from + cleaned.length },
+      userEvent: 'input.format',
+    }),
+  );
+  return true;
+};
+
+export const growHeading: StateCommand = ({ state, dispatch }) => {
+  const line = state.doc.lineAt(state.selection.main.from);
+  const match = /^(#{1,6})\s/.exec(line.text);
+  const level = match ? Math.max(1, match[1].length - 1) : 2;
+  return setHeading(level)({ state, dispatch });
+};
+
+export const shrinkHeading: StateCommand = ({ state, dispatch }) => {
+  const line = state.doc.lineAt(state.selection.main.from);
+  const match = /^(#{1,6})\s/.exec(line.text);
+  if (!match) return false;
+  if (match[1].length >= 6) return setParagraph({ state, dispatch });
+  return setHeading(match[1].length + 1)({ state, dispatch });
+};
+
+export function addTableRow(): StateCommand {
+  return ({ state, dispatch }) => {
+    const line = state.doc.lineAt(state.selection.main.from);
+    if (!/^\s*\|/.test(line.text)) return false;
+    const cells = line.text.split('|').length - 2;
+    const row = `| ${Array.from({ length: Math.max(1, cells) }, () => 'Cell').join(' | ')} |`;
+    let insertAt = line.to;
+    let cursor = state.selection.main.from;
+    while (cursor < state.doc.length) {
+      const next = state.doc.lineAt(cursor);
+      if (!/^\s*\|/.test(next.text)) break;
+      insertAt = next.to;
+      cursor = next.to + 1;
+    }
+    dispatch(
+      state.update({
+        changes: { from: insertAt, insert: `\n${row}` },
+        selection: { anchor: insertAt + 3 },
+        userEvent: 'input.format',
+      }),
+    );
+    return true;
+  };
+}
+
+export function addTableColumn(): StateCommand {
+  return ({ state, dispatch }) => {
+    const line = state.doc.lineAt(state.selection.main.from);
+    if (!/^\s*\|/.test(line.text)) return false;
+    let start = line.from;
+    let end = line.to;
+    while (start > 0) {
+      const previous = state.doc.lineAt(start - 1);
+      if (!/^\s*\|/.test(previous.text)) break;
+      start = previous.from;
+    }
+    while (end < state.doc.length) {
+      const next = state.doc.lineAt(end + 1);
+      if (!/^\s*\|/.test(next.text)) break;
+      end = next.to;
+    }
+
+    const changes: ChangeSpec[] = [];
+    const block = state.sliceDoc(start, end).split('\n');
+    let offset = start;
+    for (const row of block) {
+      const isSep = /^\s*\|[\s:|-]+\|/.test(row);
+      const insert = isSep ? ' --- |' : ' Cell |';
+      changes.push({ from: offset + row.length, insert });
+      offset += row.length + 1;
+    }
+    dispatch(state.update({ changes, userEvent: 'input.format' }));
+    return true;
+  };
+}
+
+export function replaceRange(from: number, to: number, insert: string): StateCommand {
+  return ({ state, dispatch }) => {
+    dispatch(
+      state.update({
+        changes: { from, to, insert },
+        selection: { anchor: from, head: from + insert.length },
+        scrollIntoView: true,
+        userEvent: 'input.format',
+      }),
+    );
+    return true;
+  };
+}
+
+export function insertGenerated(text: string, replaceSelection = false): StateCommand {
+  return ({ state, dispatch }) => {
+    const range = state.selection.main;
+    const from = replaceSelection ? range.from : range.to;
+    const to = replaceSelection ? range.to : range.to;
+    const prefix = !replaceSelection && from > 0 && state.sliceDoc(from - 1, from) !== '\n' ? '\n' : '';
+    const insert = `${prefix}${text}`;
+    dispatch(
+      state.update({
+        changes: { from, to, insert },
+        selection: { anchor: from + insert.length },
+        scrollIntoView: true,
+        userEvent: 'input',
+      }),
+    );
+    return true;
+  };
+}
 
 export const insertLink: StateCommand = ({ state, dispatch }) => {
   const changes = state.changeByRange((range) => {
