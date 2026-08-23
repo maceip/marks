@@ -10,8 +10,8 @@ use super::protocol::{Mutation, MutationKind, decode_mutation, encode_committed}
 use super::{
     CLOSE_CAPACITY, CLOSE_DOCUMENT_DELETED, CLOSE_FORBIDDEN_WRITE, CLOSE_INTERNAL,
     CLOSE_INVALID_PAYLOAD, CLOSE_UNAUTHORIZED, Control, JoinRefusal, MSG_COMMITTED, MSG_EPHEMERAL,
-    MSG_MUTATION, MSG_SERVER_VV, MSG_SNAPSHOT, MSG_SYNCED, MSG_UPDATE, OutMsg, RoomMsg, RoomRead,
-    frame,
+    MSG_MUTATION, MSG_PRESENCE_DELTA, MSG_PRESENCE_REMOVAL, MSG_PRESENCE_SNAPSHOT, MSG_SERVER_VV,
+    MSG_SNAPSHOT, MSG_SYNCED, MSG_UPDATE, OutMsg, RoomMsg, RoomRead, frame,
 };
 use crate::config::Config;
 use crate::db::Db;
@@ -30,7 +30,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
 
 /// Presence frames are relayed, never persisted; bound them separately.
-const MAX_EPHEMERAL_BYTES: usize = 64 * 1024;
+const MAX_PRESENCE_BYTES_PER_CONNECTION: usize = 8 * 1024;
+const MAX_PRESENCE_RECORDS_PER_CONNECTION: usize = 8;
+const MAX_PRESENCE_KEY_BYTES: usize = 256;
+const MAX_PRESENCE_VALUE_BYTES: usize = 4 * 1024;
+const PRESENCE_SCHEMA_V1: u8 = 5;
 /// Receipts older than this window may be recreated as duplicate CRDT commits;
 /// their operations remain idempotent even after the receipt row is pruned.
 const IDEMPOTENCY_RECEIPT_WINDOW: u64 = 65_536;
@@ -42,6 +46,13 @@ struct Socket {
     mutation_window: u64,
     mutations_in_window: u32,
     mutation_bytes_in_window: usize,
+}
+
+#[derive(Default)]
+struct PresenceState {
+    /// Complete encoded records (key length through value), indexed so a
+    /// cursor move replaces rather than accumulates history.
+    records: HashMap<String, Vec<u8>>,
 }
 
 enum CommitLookup {
@@ -108,6 +119,127 @@ struct SeenMutation {
 
 type SeenMutations = HashMap<[u8; 16], SeenMutation>;
 
+fn read_presence_uint(bytes: &[u8], offset: &mut usize) -> Option<usize> {
+    let mut value = 0usize;
+    let mut shift = 0u32;
+    loop {
+        let byte = *bytes.get(*offset)?;
+        *offset += 1;
+        let part = usize::from(byte & 0x7f).checked_shl(shift)?;
+        value = value.checked_add(part)?;
+        if byte & 0x80 == 0 {
+            if shift != 0 && byte == 0 {
+                return None;
+            }
+            return Some(value);
+        }
+        shift = shift.checked_add(7)?;
+        if shift >= usize::BITS {
+            return None;
+        }
+    }
+}
+
+fn read_presence_bytes<'a>(
+    bytes: &'a [u8],
+    offset: &mut usize,
+    maximum: usize,
+) -> Option<&'a [u8]> {
+    let length = read_presence_uint(bytes, offset)?;
+    if length > maximum {
+        return None;
+    }
+    let end = offset.checked_add(length)?;
+    let value = bytes.get(*offset..end)?;
+    *offset = end;
+    Some(value)
+}
+
+/// Decode the legacy v1 Marks record encoding, but bind every key to the
+/// authenticated actor's ESBT site. This prevents one socket from replacing or
+/// deleting another actor's cursor by forging its key.
+fn decode_presence(bytes: &[u8], instance: &str) -> Option<Vec<(String, Option<Vec<u8>>)>> {
+    if bytes.len() > MAX_PRESENCE_BYTES_PER_CONNECTION
+        || bytes.first().copied()? != PRESENCE_SCHEMA_V1
+    {
+        return None;
+    }
+    let mut offset = 1;
+    let count = read_presence_uint(bytes, &mut offset)?;
+    if count > MAX_PRESENCE_RECORDS_PER_CONNECTION {
+        return None;
+    }
+    let prefix = format!("{instance}-");
+    let mut changes = Vec::with_capacity(count);
+    for _ in 0..count {
+        let start = offset;
+        let key_bytes = read_presence_bytes(bytes, &mut offset, MAX_PRESENCE_KEY_BYTES)?;
+        let key = std::str::from_utf8(key_bytes).ok()?.to_owned();
+        if key_bytes.is_empty()
+            || !key.starts_with(&prefix)
+            || changes.iter().any(|(seen, _)| seen == &key)
+        {
+            return None;
+        }
+        match *bytes.get(offset)? {
+            1 => {
+                offset += 1;
+                changes.push((key, None));
+            }
+            0 => {
+                offset += 1;
+                read_presence_uint(bytes, &mut offset)?; // client-reported age
+                let json = read_presence_bytes(bytes, &mut offset, MAX_PRESENCE_VALUE_BYTES)?;
+                serde_json::from_slice::<serde_json::Value>(json).ok()?;
+                changes.push((key, Some(bytes[start..offset].to_vec())));
+            }
+            _ => return None,
+        }
+    }
+    (offset == bytes.len()).then_some(changes)
+}
+
+fn push_presence_uint(out: &mut Vec<u8>, mut value: usize) {
+    loop {
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        out.push(byte);
+        if value == 0 {
+            break;
+        }
+    }
+}
+
+fn encode_presence(records: &HashMap<String, Vec<u8>>) -> Vec<u8> {
+    let mut ordered: Vec<_> = records.iter().collect();
+    ordered.sort_unstable_by_key(|(key, _)| *key);
+    let mut out = vec![PRESENCE_SCHEMA_V1];
+    push_presence_uint(&mut out, ordered.len());
+    for (_, record) in ordered {
+        out.extend_from_slice(record);
+    }
+    out
+}
+
+fn encode_presence_changes(mut changes: Vec<(String, Option<Vec<u8>>)>) -> Vec<u8> {
+    changes.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    let mut out = vec![PRESENCE_SCHEMA_V1];
+    push_presence_uint(&mut out, changes.len());
+    for (key, record) in changes {
+        if let Some(record) = record {
+            out.extend_from_slice(&record);
+        } else {
+            push_presence_uint(&mut out, key.len());
+            out.extend_from_slice(key.as_bytes());
+            out.push(1);
+        }
+    }
+    out
+}
+
 struct Room {
     document_id: DocumentId,
     db: Arc<Db>,
@@ -120,6 +252,8 @@ struct Room {
     since_compact: u64,
     epoch: u64,
     sockets: HashMap<u64, Socket>,
+    /// Process-local only: never passed to `store` or an ESBT snapshot.
+    presence: HashMap<u64, PresenceState>,
     next_conn: u64,
     dead: Option<u16>,
     commit_batches: Arc<AtomicU64>,
@@ -154,6 +288,7 @@ pub(super) async fn run(
             since_compact: 0,
             epoch,
             sockets: HashMap::new(),
+            presence: HashMap::new(),
             next_conn: 1,
             dead: None,
             commit_batches,
@@ -227,7 +362,7 @@ pub(super) async fn run(
                 room.frames(frames);
             }
             RoomMsg::Leave { conn } => {
-                room.sockets.remove(&conn);
+                room.remove_socket(conn, None);
                 if room.sockets.is_empty() && room.dead.is_none() {
                     room.compact(true);
                 }
@@ -274,7 +409,16 @@ impl Room {
 
         // Initial sync: the server's version, then a delta when the client's
         // version still covers retained history, otherwise a full snapshot.
-        let mut initial = vec![frame(MSG_SERVER_VV, &self.document.version().encode())];
+        let mut initial = Vec::new();
+        // Presence bootstraps precede the durable synced boundary and carry a
+        // presence-specific tag, so they cannot be mistaken for ESBT state.
+        for state in self.presence.values() {
+            initial.push(frame(
+                MSG_PRESENCE_SNAPSHOT,
+                &encode_presence(&state.records),
+            ));
+        }
+        initial.push(frame(MSG_SERVER_VV, &self.document.version().encode()));
         let delta = client_version
             .as_ref()
             .and_then(|version| self.document.export_update(version).ok());
@@ -385,7 +529,7 @@ impl Room {
                         &mut seen,
                     );
                 }
-                MSG_EPHEMERAL => self.client_ephemeral(conn, payload),
+                MSG_EPHEMERAL | MSG_PRESENCE_DELTA => self.client_presence(conn, payload),
                 // These tags are server-to-client engine state. A stale client
                 // must fail closed instead of believing an unacknowledged
                 // legacy write was saved.
@@ -918,15 +1062,11 @@ impl Room {
         self.dead = Some(close_code);
     }
 
-    fn client_ephemeral(&mut self, conn: u64, payload: &[u8]) {
+    fn client_presence(&mut self, conn: u64, payload: &[u8]) {
         let Some(socket) = self.sockets.get(&conn) else {
             return;
         };
-        // Presence is best-effort, allowed for every admitted role, relayed
-        // only inside this room, and never persisted or snapshotted.
-        if payload.len() > MAX_EPHEMERAL_BYTES
-            || !authorize_room_action(&socket.actor, DocumentAction::PublishPresence)
-        {
+        if !authorize_room_action(&socket.actor, DocumentAction::PublishPresence) {
             return;
         }
         let identity = match &socket.actor {
@@ -934,9 +1074,28 @@ impl Room {
             RoomActor::Scratch(actor) => &actor.identity,
         };
         let Some(payload) = super::presence::bind(payload, conn, identity, socket.color) else {
+            self.close_one(conn, CLOSE_INVALID_PAYLOAD);
             return;
         };
-        self.broadcast(conn, frame(MSG_EPHEMERAL, &payload));
+        let instance = format!("connection-{conn}");
+        let Some(changes) = decode_presence(&payload, &instance) else {
+            self.close_one(conn, CLOSE_INVALID_PAYLOAD);
+            return;
+        };
+        let state = self.presence.entry(conn).or_default();
+        for (key, record) in changes {
+            match record {
+                Some(record) => { state.records.insert(key, record); }
+                None => { state.records.remove(&key); }
+            }
+        }
+        if state.records.len() > MAX_PRESENCE_RECORDS_PER_CONNECTION
+            || encode_presence(&state.records).len() > MAX_PRESENCE_BYTES_PER_CONNECTION
+        {
+            self.close_one(conn, CLOSE_CAPACITY);
+            return;
+        }
+        self.broadcast(conn, frame(MSG_PRESENCE_DELTA, &payload));
     }
 
     fn broadcast(&mut self, from: u64, message: Vec<u8>) {
@@ -1066,8 +1225,21 @@ impl Room {
     }
 
     fn close_one(&mut self, conn: u64, code: u16) {
-        if let Some(socket) = self.sockets.remove(&conn) {
+        self.remove_socket(conn, Some(code));
+    }
+
+    fn remove_socket(&mut self, conn: u64, code: Option<u16>) {
+        let removal = self.presence.remove(&conn).map(|state| {
+            let records = state.records.into_keys().map(|key| (key, None)).collect();
+            frame(MSG_PRESENCE_REMOVAL, &encode_presence_changes(records))
+        });
+        if let Some(socket) = self.sockets.remove(&conn)
+            && let Some(code) = code
+        {
             let _ = socket.out.try_send(OutMsg::Close(code));
+        }
+        if let Some(removal) = removal {
+            self.broadcast(conn, removal);
         }
     }
 
@@ -1320,6 +1492,50 @@ fn resource_pressure(code: &ErrorCode) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn presence_record(key: &str, json: &str) -> Vec<u8> {
+        let mut bytes = vec![PRESENCE_SCHEMA_V1, 1];
+        push_presence_uint(&mut bytes, key.len());
+        bytes.extend_from_slice(key.as_bytes());
+        bytes.push(0);
+        bytes.push(0);
+        push_presence_uint(&mut bytes, json.len());
+        bytes.extend_from_slice(json.as_bytes());
+        bytes
+    }
+
+    #[test]
+    fn presence_boundary_enforces_schema_ownership_and_limits() {
+        let valid = presence_record("42-cm-user", r#"{"name":"Viewer"}"#);
+        assert_eq!(decode_presence(&valid, "42").unwrap().len(), 1);
+        assert!(decode_presence(&valid, "43").is_none());
+
+        let mut wrong_schema = valid.clone();
+        wrong_schema[0] = PRESENCE_SCHEMA_V1 + 1;
+        assert!(decode_presence(&wrong_schema, "42").is_none());
+
+        let mut too_many = vec![PRESENCE_SCHEMA_V1];
+        push_presence_uint(&mut too_many, MAX_PRESENCE_RECORDS_PER_CONNECTION + 1);
+        assert!(decode_presence(&too_many, "42").is_none());
+        assert!(decode_presence(&vec![0; MAX_PRESENCE_BYTES_PER_CONNECTION + 1], "42").is_none());
+    }
+
+    #[test]
+    fn presence_registry_keeps_latest_state_and_makes_explicit_removal() {
+        let first = presence_record("42-cm-sel", r#"{"from":1,"to":1}"#);
+        let latest = presence_record("42-cm-sel", r#"{"from":9,"to":9}"#);
+        let mut state = PresenceState::default();
+        for bytes in [&first, &latest] {
+            for (key, record) in decode_presence(bytes, "42").unwrap() {
+                state.records.insert(key, record.unwrap());
+            }
+        }
+        assert_eq!(state.records.len(), 1, "cursor history is never retained");
+        let removals =
+            encode_presence_changes(state.records.into_keys().map(|key| (key, None)).collect());
+        let decoded = decode_presence(&removals, "42").unwrap();
+        assert!(matches!(&decoded[..], [(_, None)]));
+    }
 
     #[test]
     fn receipt_ranges_skip_sequences_already_known_sparse() {
