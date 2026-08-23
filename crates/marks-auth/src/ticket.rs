@@ -140,6 +140,7 @@ pub fn redeem_scratch_document_ticket(
         document_id: ticket.document_id.clone(),
         esbt_site: ticket.esbt_site,
         authorization_epoch: ticket.authorization_epoch,
+        identity: crate::RoomIdentity::default(),
     })
 }
 
@@ -270,6 +271,7 @@ pub fn redeem_document_ticket(
         esbt_site: ticket.esbt_site,
         role: ticket.role,
         authorization_epoch: ticket.authorization_epoch,
+        identity: crate::RoomIdentity::default(),
     })
 }
 

@@ -22,7 +22,10 @@ export interface DocumentCapabilities {
 export type ConnectionStatus = 'connecting' | 'saving' | 'connected' | 'offline';
 
 export interface Peer {
-  id: string;
+  /** Stable person identity; shared by that person's simultaneous tabs. */
+  participantId: string;
+  /** One admitted socket, used to keep simultaneous cursors distinct. */
+  connectionId: string;
   name: string;
   /** Palette index 1-8, matching the `.marks-user{n}` CSS classes. */
   colorIndex: number;
@@ -43,6 +46,12 @@ export interface RoomTicket {
   /** Validated server role; null only for scratch authority. */
   role: DocumentRole | null;
   authority: 'session' | 'scratch';
+  /** Public identity resolved by the same admission that minted this ticket. */
+  displayIdentity: {
+    participantId: string;
+    displayName: string;
+    avatar?: string | null;
+  };
 }
 
 export interface DocumentAccessProvider {

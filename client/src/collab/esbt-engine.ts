@@ -278,8 +278,8 @@ export class EsbtEngine implements CollabSession {
 
   private publishUser(): void {
     this.ephemeral.set(userKey(this.presenceSiteId()), {
-      name: this.user.name,
-      colorClassName: `marks-user${this.user.colorIndex}`,
+      active: true,
+      colorPreference: this.user.colorIndex,
     });
   }
 
@@ -1366,20 +1366,22 @@ export class EsbtEngine implements CollabSession {
 
     for (const [key, value] of Object.entries(states)) {
       if (!key.endsWith('-cm-user') || !value || typeof value !== 'object') continue;
-      const user = value as { name?: unknown; colorClassName?: unknown };
+      const user = value as { participantId?: unknown; connectionId?: unknown; name?: unknown; colorIndex?: unknown };
       const name = typeof user.name === 'string' ? user.name : 'Anonymous';
-      const match = /marks-user(\d)/.exec(String(user.colorClassName ?? ''));
+      const connectionId = typeof user.connectionId === 'string' ? user.connectionId : key.replace(/-cm-user$/, '');
       peers.push({
-        id: key.replace(/-cm-user$/, ''),
+        participantId: typeof user.participantId === 'string' ? user.participantId : connectionId,
+        connectionId,
         name,
-        colorIndex: match ? Number(match[1]) : 1,
+        colorIndex: typeof user.colorIndex === 'number' && user.colorIndex >= 1 && user.colorIndex <= 8 ? user.colorIndex : 1,
         self: key === selfKey,
       });
     }
 
     if (!peers.some((peer) => peer.self)) {
       peers.unshift({
-        id: this.presenceSiteId(),
+        participantId: `self-${this.presenceSiteId()}`,
+        connectionId: `self-${this.presenceSiteId()}`,
         name: this.user.name,
         colorIndex: this.user.colorIndex,
         self: true,
