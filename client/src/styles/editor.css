@@ -28,7 +28,7 @@
   line-height: 1.45;
   white-space: nowrap;
   opacity: 0;
-  transition: opacity 140ms ease;
+  transition: opacity var(--motion-fast) ease;
   pointer-events: none;
   user-select: none;
 }

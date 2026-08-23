@@ -47,7 +47,7 @@
     rotateY(calc(var(--tilt-x) * 13deg))
     translateZ(4px);
   transform-style: preserve-3d;
-  transition: transform 160ms var(--ease-out);
+  transition: transform var(--motion-fast) var(--ease-out);
 }
 
 .glyph-slab {
@@ -199,7 +199,7 @@
   color: var(--text-muted);
   box-shadow: 0 8px 18px -15px rgb(10 24 64 / 46%), inset 0 1px var(--glass-highlight);
   cursor: pointer;
-  transition: color var(--motion-fast) ease, background var(--motion-fast) ease, transform 70ms var(--ease-out);
+  transition: color var(--motion-fast) ease, background var(--motion-fast) ease, transform var(--motion-fast) var(--ease-out);
 }
 
 .ribbon-command-large {
@@ -294,10 +294,7 @@
 .style-h3 span { font-size: 12px; color: var(--accent); }
 .style-h4 span { font-size: 11px; }
 
-.ribbon-deck-enter { animation: ribbon-deck-in 170ms var(--ease-out) both; }
-@keyframes ribbon-deck-in {
-  from { opacity: 0; transform: translateY(4px); }
-}
+.ribbon-deck-enter { animation: motion-ribbon-replace var(--motion-fast) var(--ease-decelerate) both; }
 
 .mini-toolbar {
   position: absolute;
@@ -314,7 +311,7 @@
   background: var(--glass-refraction), var(--liquid-glass);
   box-shadow: var(--glass-shadow);
   transform: translateX(-50%);
-  animation: ribbon-deck-in 160ms var(--ease-out) both;
+  animation: motion-ribbon-replace var(--motion-fast) var(--ease-decelerate) both;
 }
 
 .mini-toolbar button {
@@ -555,7 +552,7 @@
   border-top: 1px solid var(--glass-border);
   border-radius: 22px 22px 0 0;
   background: var(--glass-refraction), var(--glass-strong);
-  animation: phone-sheet-in 220ms var(--ease-spring) both;
+  animation: motion-fade-rise-in var(--motion-medium) var(--ease-spring) both;
 }
 
 .phone-sheet header {
@@ -584,9 +581,6 @@
   font-size: 11px;
 }
 
-@keyframes phone-sheet-in {
-  from { transform: translateY(18px); opacity: 0; }
-}
 
 .phone-composer.keyboard-open .phone-nav span,
 .phone-composer.keyboard-open .phone-format-chips,

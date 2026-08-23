@@ -80,10 +80,26 @@
   --radius-lg: 14px;
   --radius-xl: 20px;
 
+  /* Motion primitives. Recipes live in motion.css; components never invent values. */
+  --motion-instant: 0ms;
   --motion-fast: 120ms;
   --motion-medium: 220ms;
-  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --motion-slow: 320ms;
+  --motion-deliberate: 680ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.2, 0, 0, 1.2);
+  --ease-decelerate: cubic-bezier(0, 0, 0, 1);
+  --ease-accelerate: cubic-bezier(0.3, 0, 1, 1);
   --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-translate-sm: 4px;
+  --motion-translate-md: 12px;
+  --motion-translate-lg: 18px;
+  --motion-scale-subtle: 0.985;
+  --motion-scale-popover: 0.97;
+  --motion-stagger: 40ms;
+
+  /* Compatibility alias for older interaction transitions. */
+  --ease-out: var(--ease-decelerate);
 
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
     'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';

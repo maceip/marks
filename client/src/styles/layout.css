@@ -235,7 +235,7 @@
   padding: 0;
   border: 0;
   background: rgb(7 9 13 / 34%);
-  animation: scrim-in var(--motion-medium) ease both;
+  animation: motion-scrim-in var(--motion-medium) var(--ease-standard) both;
   cursor: default;
 }
 
@@ -245,16 +245,9 @@
   z-index: 70;
   width: min(88vw, 310px);
   box-shadow: var(--shadow-lg);
-  animation: drawer-in var(--motion-medium) var(--ease-out) both;
+  animation: motion-drawer-in var(--motion-medium) var(--ease-decelerate) both;
 }
 
-@keyframes scrim-in {
-  from { opacity: 0; }
-}
-
-@keyframes drawer-in {
-  from { transform: translateX(-18px); opacity: 0; }
-}
 
 /* ----------------------------------------------------------- app ribbon */
 
@@ -452,7 +445,7 @@
   color: var(--text-muted);
   cursor: pointer;
   transition: color var(--motion-fast) ease, background var(--motion-fast) ease,
-    transform 70ms ease;
+    transform var(--motion-fast) ease;
 }
 
 .ribbon-command:hover:not(:disabled) {
@@ -671,7 +664,7 @@
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg), inset 0 1px var(--glass-highlight);
-  animation: panel-in var(--motion-medium) var(--ease-out) both;
+  animation: motion-fade-rise-in var(--motion-medium) var(--ease-decelerate) both;
 }
 
 .app.route-document .outline-drawer,
@@ -693,9 +686,6 @@
   max-height: calc(100vh - var(--ribbon-height) - var(--statusbar-height) - 16px);
 }
 
-@keyframes panel-in {
-  from { transform: translateY(-8px) scale(0.985); opacity: 0; }
-}
 
 .drawer-head,
 .hud-head {
@@ -1166,11 +1156,7 @@
 .ribbon-command .icon { width: 17px; height: 17px; }
 .ribbon-command-label { max-width: 68px; font-size: 8.8px; font-weight: 590; }
 .ribbon-group-label { font-family: var(--font-mono); font-size: 8px; font-weight: 650; letter-spacing: .08em; }
-.ribbon-deck-enter { animation: ribbon-deck-in 170ms var(--ease-out) both; }
-
-@keyframes ribbon-deck-in {
-  from { opacity: 0; transform: translateY(4px); }
-}
+.ribbon-deck-enter { animation: motion-ribbon-replace var(--motion-fast) var(--ease-decelerate) both; }
 
 .titlebar-menu { position: relative; }
 .popover-menu {
@@ -1185,7 +1171,7 @@
   border-radius: 15px;
   background: var(--glass-refraction), var(--glass-strong);
   box-shadow: var(--glass-shadow), var(--shadow-lg);
-  animation: popover-in 160ms var(--ease-spring) both;
+  animation: motion-popover-in var(--motion-fast) var(--ease-spring) both;
 }
 
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
@@ -1208,7 +1194,6 @@
 }
 
 .popover-menu button:hover { background: var(--accent-soft); color: var(--text); }
-@keyframes popover-in { from { opacity: 0; transform: translateY(-5px) scale(.97); } }
 
 .focus-exit {
   display: inline-flex;
@@ -1230,7 +1215,7 @@
 .focus-mode .app-ribbon .ribbon-body,
 .focus-mode .statusbar { display: none; }
 .focus-mode .titlebar { border-bottom: 1px solid var(--glass-border); }
-.focus-mode .workspace-shell { animation: focus-settle 260ms var(--ease-out) both; }
+.focus-mode .workspace-shell { animation: focus-settle var(--motion-medium) var(--ease-out) both; }
 @keyframes focus-settle { from { opacity: .82; transform: scale(.995); } }
 
 .ribbon-collapse .icon {
@@ -1250,11 +1235,11 @@
   }
 
   .ribbon-collapsed .app-ribbon.ribbon-document .ribbon-body { display: none; }
-  .ribbon-collapsed .workspace-shell { animation: focus-settle 180ms var(--ease-out) both; }
+  .ribbon-collapsed .workspace-shell { animation: focus-settle var(--motion-fast) var(--ease-out) both; }
 }
 
 .workspace.mode-edit .editor-pane,
-.workspace.mode-preview .preview-pane { animation: view-pane-in 180ms var(--ease-out) both; }
+.workspace.mode-preview .preview-pane { animation: view-pane-in var(--motion-fast) var(--ease-out) both; }
 @keyframes view-pane-in { from { opacity: .65; transform: translateY(2px); } }
 
 .toast-region {
@@ -1281,7 +1266,7 @@
   background: var(--glass-refraction), var(--glass-strong);
   box-shadow: var(--glass-shadow), var(--shadow-lg);
   pointer-events: auto;
-  animation: toast-in var(--motion-medium) var(--ease-spring) both;
+  animation: motion-toast-in var(--motion-medium) var(--ease-spring) both;
 }
 
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
@@ -1306,7 +1291,7 @@
   -webkit-backdrop-filter: blur(var(--glass-blur-floating)) saturate(var(--glass-saturation));
   backdrop-filter: blur(var(--glass-blur-floating)) saturate(var(--glass-saturation));
   transform: translateX(-50%);
-  animation: liquid-dock-in 320ms var(--ease-spring) both;
+  animation: motion-popover-in var(--motion-slow) var(--ease-spring) both;
 }
 
 .with-sidebar .liquid-dock { left: calc(50% + var(--sidebar-width) / 2); }
@@ -1323,7 +1308,7 @@
 .liquid-dock:hover::before,
 .liquid-dock:focus-within::before {
   transform: translateX(125%);
-  transition: transform 680ms var(--ease-out);
+  transition: transform var(--motion-deliberate) var(--ease-decelerate);
 }
 
 .liquid-dock button {
@@ -1377,9 +1362,6 @@
 
 .liquid-dock kbd { color: var(--text-faint); font: 9px var(--font-mono); }
 
-@keyframes liquid-dock-in {
-  from { opacity: 0; transform: translateX(-50%) translateY(12px) scale(.96); }
-}
 
 .toast-icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); }
 .toast-success .toast-icon { background: var(--success-soft); color: var(--success); }
@@ -1388,7 +1370,6 @@
 .toast-copy strong { font-size: 11.5px; }
 .toast-copy span { overflow: hidden; color: var(--text-muted); font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }
 .toast .icon-button { width: 32px; height: 32px; }
-@keyframes toast-in { from { opacity: 0; transform: translateX(14px) scale(.97); } }
 
 :root[data-density='compact'] {
   --ribbon-height: 132px;
@@ -1414,13 +1395,6 @@
   background: var(--surface-raised);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
-}
-
-:root[data-motion='reduced'] *,
-:root[data-motion='reduced'] *::before,
-:root[data-motion='reduced'] *::after {
-  animation-duration: .01ms !important;
-  transition-duration: .01ms !important;
 }
 
 @media (max-width: 720px), (max-height: 560px) and (pointer: coarse) {

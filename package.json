@@ -35,7 +35,8 @@
     "smoke:platforms": "node scripts/harness/run.mjs --driver=all",
     "measure": "node scripts/measure.mjs",
     "check:ui-budgets": "node scripts/check-ui-budgets.mjs",
-    "ci:service": "bash scripts/run-service-ci.sh"
+    "ci:service": "bash scripts/run-service-ci.sh",
+    "check:motion": "node scripts/check-motion-tokens.mjs"
   },
   "devDependencies": {
     "agent-browser": "^0.34.0",

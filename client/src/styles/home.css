@@ -137,7 +137,7 @@
   cursor: pointer;
   transition: transform var(--motion-medium) var(--ease-out), border-color var(--motion-fast), box-shadow var(--motion-medium);
   animation: home-item-in var(--motion-medium) var(--ease-out) both;
-  animation-delay: calc(var(--item-index, 0) * 35ms);
+  animation-delay: calc(var(--item-index, 0) * var(--motion-stagger));
 }
 
 .recent-card:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 30%, var(--border)); box-shadow: var(--shadow-md); }
@@ -150,7 +150,7 @@
 .recent-copy { display: grid; min-width: 0; gap: 4px; }
 .recent-copy strong { overflow: hidden; font-size: 13.5px; white-space: nowrap; text-overflow: ellipsis; }
 .recent-copy small { overflow: hidden; color: var(--text-faint); font-size: 10.5px; white-space: nowrap; text-overflow: ellipsis; }
-.recent-skeleton { min-height: 82px; background: linear-gradient(90deg, var(--surface-raised), var(--surface-sunken), var(--surface-raised)); background-size: 200% 100%; animation: skeleton 1.4s ease infinite; }
+.recent-skeleton { min-height: 82px; background: linear-gradient(90deg, var(--surface-raised), var(--surface-sunken), var(--surface-raised)); background-size: 200% 100%; animation: skeleton var(--motion-deliberate) ease infinite; }
 .recent-empty { grid-template-columns: auto 1fr; }
 .recent-empty > .icon { color: var(--accent); }
 
