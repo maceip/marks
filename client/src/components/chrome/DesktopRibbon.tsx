@@ -50,6 +50,7 @@ import type { UiActionId } from '../../lib/ui-actions';
 import type { ViewMode } from '../shell/TopBar';
 import { Glyph, type GlyphName } from '../glyphs/Glyph';
 import { RibbonCommand, RibbonGroup } from './RibbonCommand';
+import { getPresenceDisplay, setPresenceDisplay, type DocumentPresenceDisplay } from '../../collab/presence-display';
 
 export type RibbonTab =
   | 'file'
@@ -119,6 +120,8 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
   const lastCommand = useRef<StateCommand | null>(null);
   const [painterArmed, setPainterArmed] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [presenceDisplay, setPresenceState] = useState<DocumentPresenceDisplay>(() => getPresenceDisplay(props.mode === 'preview'));
+  const changePresence = (value: DocumentPresenceDisplay) => { setPresenceDisplay(value); setPresenceState(value); };
 
   useEffect(() => {
     const view = props.getView();
@@ -411,6 +414,11 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
                   pressed={props.mode === mode}
                   onClick={() => props.onModeChange(mode)}
                 />
+              ))}
+            </RibbonGroup>
+            <RibbonGroup label="Presence">
+              {(['exact', 'section', 'off'] as const).map((value) => (
+                <RibbonCommand key={value} glyph={value === 'off' ? 'clear' : value === 'exact' ? 'find' : 'outline'} label={value[0].toUpperCase() + value.slice(1)} pressed={presenceDisplay === value} onClick={() => changePresence(value)} />
               ))}
             </RibbonGroup>
             <RibbonGroup label="Workspace">

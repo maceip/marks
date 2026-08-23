@@ -443,3 +443,10 @@ h4:hover .marks-anchor {
     font-size: 15.5px;
   }
 }
+.preview-pane { position: relative; }
+.preview-presence-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
+.preview-presence { position: absolute; pointer-events: auto; border: 0; padding: 0; cursor: pointer; color: inherit; }
+.preview-presence.section { width: 4px; border-radius: 4px; background: var(--cursor-color); color: var(--cursor-color); }
+.preview-presence.exact { width: 2px; min-height: 18px; background: var(--cursor-color); color: var(--cursor-color); animation: caret-blink 1.1s step-end infinite; }
+.preview-presence span { position: absolute; top: 0; left: 5px; max-width: 9rem; padding: 2px 6px; border-radius: 8px; background: currentColor; color: white; font: 600 11px/1.4 var(--font-ui); white-space: nowrap; opacity: 0; transform: translateY(-100%); }
+.preview-presence:hover span, .preview-presence:focus-visible span { opacity: 1; }

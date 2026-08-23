@@ -220,6 +220,10 @@ export class PreviewRenderer {
       }
 
       node.dataset.line = String(block.line);
+      node.dataset.sourceStart = String(block.sourceStart);
+      node.dataset.sourceEnd = String(block.sourceEnd);
+      if (block.exactTextStart === undefined) delete node.dataset.exactTextStart;
+      else node.dataset.exactTextStart = String(block.exactTextStart);
 
       if (cursor === node) {
         cursor = cursor.nextElementSibling as HTMLElement | null;

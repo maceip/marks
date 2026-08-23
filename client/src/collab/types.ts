@@ -27,6 +27,27 @@ export interface Peer {
   /** Palette index 1-8, matching the `.marks-user{n}` CSS classes. */
   colorIndex: number;
   self: boolean;
+  /** Normalized presence; UI code never needs to inspect PresenceStore JSON. */
+  presence?: RemotePresence;
+}
+
+export interface PresenceLocation {
+  blockStart: number;
+  blockEnd: number;
+  blockKey: string;
+  heading?: string;
+  headingLine?: number;
+}
+
+export interface RemotePresence {
+  activity: 'active' | 'idle';
+  selection: { from: number; to: number } | null;
+  /** Stable ESBT anchors when supplied by a compatible peer. */
+  stableSelection?: { start: string; end: string };
+  location: PresenceLocation | null;
+  lastInteraction: number;
+  editing: boolean;
+  selecting: boolean;
 }
 
 export interface LocalUser {

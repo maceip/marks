@@ -6,6 +6,11 @@ export interface BlockPatch {
   key: string;
   /** Source line the block starts on, used for scroll sync. */
   line: number;
+  /** UTF-16 bounds in the Markdown source (end exclusive). */
+  sourceStart: number;
+  sourceEnd: number;
+  /** Offset where rendered plain text starts, or absent when exact mapping is ambiguous. */
+  exactTextStart?: number;
   /** Only present when the main thread does not already have this block. */
   html?: string;
 }

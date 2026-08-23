@@ -1366,11 +1366,24 @@ export class EsbtEngine implements CollabSession {
       const user = value as { name?: unknown; colorClassName?: unknown };
       const name = typeof user.name === 'string' ? user.name : 'Anonymous';
       const match = /marks-user(\d)/.exec(String(user.colorClassName ?? ''));
+      const site = key.replace(/-cm-user$/, '');
+      const rawSelection = states[`${site}-cm-sel`] as Record<string, unknown> | undefined;
+      const from = typeof rawSelection?.from === 'number' ? rawSelection.from : 0;
+      const to = typeof rawSelection?.to === 'number' ? rawSelection.to : from;
+      const lastInteraction = typeof rawSelection?.lastInteraction === 'number' ? rawSelection.lastInteraction : 0;
       peers.push({
-        id: key.replace(/-cm-user$/, ''),
+        id: site,
         name,
         colorIndex: match ? Number(match[1]) : 1,
         self: key === selfKey,
+        presence: rawSelection ? {
+          activity: Date.now() - lastInteraction < 30_000 ? 'active' : 'idle',
+          selection: { from, to },
+          location: rawSelection.location && typeof rawSelection.location === 'object' ? rawSelection.location as import('./types').PresenceLocation : null,
+          lastInteraction,
+          editing: rawSelection.editing === true,
+          selecting: rawSelection.selecting === true,
+        } : undefined,
       });
     }
 

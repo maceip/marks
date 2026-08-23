@@ -20,6 +20,7 @@ import {
   WidgetType,
 } from '@codemirror/view';
 import type { PresenceStoreApi } from './presence-store';
+import { sourcePresenceLocation } from './presence-location';
 
 export const HEARTBEAT_MS = 15_000;
 
@@ -147,7 +148,14 @@ export function esbtPresence(
 
     const publishSelection = (): void => {
       const main = view.state.selection.main;
-      presence.set(selectionKeyFor(), { from: main.from, to: main.to });
+      presence.set(selectionKeyFor(), {
+        from: main.from,
+        to: main.to,
+        location: sourcePresenceLocation(view.state.doc.toString(), main.head),
+        lastInteraction: Date.now(),
+        editing: view.hasFocus,
+        selecting: !main.empty,
+      });
     };
 
     const refresh = (): void => {
