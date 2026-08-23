@@ -111,6 +111,11 @@ class SurfaceRuntime {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') this.invalidate();
     });
+    visualViewport?.addEventListener('resize', () => {
+      const keyboard = innerHeight - (visualViewport?.height ?? innerHeight) > 120;
+      if (keyboard) this.cancel();
+      else this.invalidate();
+    });
   }
 
   get label(): string {

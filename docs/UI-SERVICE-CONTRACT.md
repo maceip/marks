@@ -140,7 +140,7 @@ under `components/`.
 | `client/src/lib/api.ts` | Catalog/document HTTP | Headers done; CSRF/share/pairing not wired |
 | `client/src/data/documents.ts` | `DocumentRepository` local vs service | Service path uses `api.ts` |
 | `client/src/hooks/useSession.ts` | Opens `CollabSession` only with a provider | Service requires `documentAccess` |
-| `client/src/collab/` | `CollabSession` + current TS engine | Local collab works; service room bytes wait on Rust/Wasm |
+| `client/src/collab/` | `CollabSession` + Wasm `EsbtEngine` + journal | Local and service rooms speak canonical `ESBM`/`ESBS`/`ESBF` |
 
 Presentation (`App.tsx`, ribbon, overlays) consumes these modules. It does
 not parse cookies, mint tickets, or choose `/v1` vs `/v1/scratch` itself
@@ -451,6 +451,12 @@ These are UI jobs. The server already implements the other side.
 10. **Errors:** map §3.4 to toasts; never dump `{ "error": … }` strings that
     leak which record failed.
 
+Presentation surfaces for every item in this list exist on desktop, phone, and
+fold: Temporary chip, Keep workspace with a real `/link` QR, phone confirmation
+at `/link`, Account devices/controllers/sessions, Share with principal grants
+and link TTL, mapped §3.4 toasts, local comments/history, and reconnect copy.
+They stay honest. They do not mint pairings, send CSRF, or claim a session.
+
 ## 9. What the UI must not invent
 
 - A `MarksSession` Authorization scheme
@@ -474,10 +480,10 @@ Use this as the frontend checklist. Server boxes are closed unless noted.
 | Catalog / CRUD / export | Yes | Partial (`api.ts`); needs origin-safe mutations and service-mode UX |
 | Snapshot + ticket mint | Yes, both prefixes | Yes (`room-access.ts`) |
 | Pending device bind | Yes | Key exists; bind-on-paint not wired |
-| QR pairing + finalize | Yes | No product UI |
-| Silent device redeem | Yes | No product UI |
-| Logout / device revoke + CSRF | Yes | No product UI |
-| Shares / link grants | Yes | Local staging only |
+| QR pairing + finalize | Yes | Product UI at Keep + `/link`; local mode does not mint |
+| Silent device redeem | Yes | Account explains the rail; no redeem call in local mode |
+| Logout / device revoke + CSRF | Yes | Account / Sign out chrome; no CSRF in local mode |
+| Shares / link grants | Yes | Product UI; local staging only |
 | Room bytes / multi-peer | Yes (native ESBT) | Yes (Wasm `EsbtEngine` + journal) |
 | Comments / history service | No | Local adapters only |
 | EVT | Flagged | Do not prioritize |

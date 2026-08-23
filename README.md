@@ -1,3 +1,6 @@
+<img width="256" src="https://github.com/user-attachments/assets/05ea452b-25a8-441e-bafc-41cf8b802c5b" />
+
+
 # marks
 
 Collaborative Markdown editing designed to stay responsive on large documents.
@@ -76,8 +79,10 @@ people to expect:
 - **Synchronised scrolling** mapped by source line, not by percentage
 - **Formatting toolbar** and shortcuts — bold, italic, strikethrough, highlight,
   headings, links, lists, task lists, quotes, tables, code blocks
-- **Adaptive command ribbon** — File, Home, Insert, Review, and View decks;
-  collapsible on desktop/foldables and fixed to the safe-area bottom on phones
+- **Adaptive command ribbon** — File, Home, Insert, Draw, AI, Review, and View
+  decks plus contextual Picture / Table / Shape tools; 3D folded-glass glyphs;
+  a phone composer and a hinge-aware foldable companion instead of squeezed
+  breakpoints
 - **Local comments and version history** — complete interaction scaffolding
   behind replaceable review/session adapters
 - **Live outline** built from the document's headings (`Ctrl`/`Cmd` + `Shift` + `O`)
@@ -108,7 +113,15 @@ client/                     Vite + React + TypeScript
   workers/                  markdown.worker.ts, bench.worker.ts
   public/esbt.wasm          Rust core, same git rev as marks-server
   editor/                   CodeMirror 6 setup, commands, theme
-  components/ pages/        UI
+  pages/                    route screens: Home, Benchmark
+  content/                  canonical documents (About opens in the editor)
+  components/shell/         app frame: titlebar, sidebar, dock
+  components/chrome/        Word-inspired ribbon, phone composer
+  components/workspace/     editor, preview, outline, status
+  components/overlays/      dialogs, toasts, context menu, HUD
+  components/identity/      keep-workspace and account sheets
+  components/glyphs/        3D folded-glass command icons
+  components/ui/            primitives: mark, icons, modal, glass host
 esbt/                       TypeScript presence store + contract tests
 crates/marks-auth/          identity/authorization validators
 crates/marks-server/        the only HTTP/WebSocket process
@@ -224,12 +237,21 @@ npm run smoke:platforms  # portable glass checks on Playwright, Puppeteer, agent
 npm run measure          # latency on a large generated document
 ```
 
-GitHub Actions (`.github/workflows/ci.yml`) runs the commands above that do not
-need a browser or a running server, including `test:wasm` against the checked-in
-`esbt.wasm`, on the Rust version in `rust-toolchain.toml` (the same pin as
-`workspace.package.rust-version`). It does **not** run `smoke` /
-`smoke:platforms` / `measure`. A green CI check is not proof of a live
-two-browser room against `marks-server`.
+GitHub Actions (`.github/workflows/ci.yml`) has two required jobs on the Rust
+version in `rust-toolchain.toml` (the same pin as
+`workspace.package.rust-version`):
+
+- `test` — format, clippy, workspace tests (including in-process
+  `room_collab`), Node unit suites including `test:wasm` against the
+  checked-in `esbt.wasm`, and the default local client build.
+- `service-collab` — builds `marks-server` plus `VITE_MARKS_DATA_MODE=service`,
+  boots the binary, drives first-paint `/v1` from Playwright, then runs two
+  native ESBT peers against the UI-created document (`npm run ci:service`).
+
+A green workflow is proof of service-mode admission, native multi-peer room
+convergence, and the Wasm client plumbing tests. It is not a two-browser
+preview-sync run of the Wasm `CollabSession`; `smoke` / `smoke:platforms` /
+`measure` stay local for that.
 
 
 `npm run smoke` is Playwright-only and checks the things that need two real
@@ -260,10 +282,10 @@ MARKS_URL=http://127.0.0.1:3000 npm run smoke
   churn; format v3 already front-codes and dictionary-codes update payloads,
   which is the compact encoding the paper called future work. Further
   identifier compression remains engine research, not a Marks wiring gap.
-- Local mode is a real Wasm replica with an IndexedDB journal. It is still
-  not a substitute for service-mode proof of remote admission, invitations,
-  or multi-peer rooms — run `VITE_MARKS_DATA_MODE=service` against
-  `marks-server` for those claims.
+- Local mode is a real Wasm replica with an IndexedDB journal. Service-mode
+  admission and native multi-peer rooms are proven in the `service-collab`
+  CI job. Two-browser preview sync through the Wasm `CollabSession` is still
+  the local `npm run smoke` suite.
 
 ## Built on
 

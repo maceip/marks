@@ -13,7 +13,13 @@ export type UiActionId =
   | 'preferences'
   | 'focus'
   | 'benchmark'
-  | 'about';
+  | 'about'
+  | 'keep-workspace'
+  | 'account'
+  | 'pairing'
+  | 'logout'
+  | 'find'
+  | 'ai-compose';
 
 export interface UiActionDescriptor {
   id: UiActionId;
@@ -38,5 +44,11 @@ export const UI_ACTIONS: UiActionDescriptor[] = [
   { id: 'preferences', label: 'Appearance preferences', description: 'Tune density, glass, and motion', group: 'Workspace' },
   { id: 'command-palette', label: 'Command palette', description: 'Search every Marks command', group: 'Workspace', shortcut: '⌘⇧P' },
   { id: 'benchmark', label: 'Open performance receipt', description: 'Run the in-browser engine benchmark', group: 'Navigate' },
-  { id: 'about', label: 'About Marks', description: 'Open the product and performance story', group: 'Navigate' },
+  { id: 'about', label: 'About Marks', description: 'Open the product story in the editor', group: 'Navigate' },
+  { id: 'keep-workspace', label: 'Keep this workspace', description: 'See how a temporary tab becomes a durable principal', group: 'Workspace' },
+  { id: 'account', label: 'Account and devices', description: 'Scratch, phone controller, and this browser', group: 'Workspace' },
+  { id: 'pairing', label: 'Phone confirmation', description: 'Open the /link pairing surface', group: 'Workspace' },
+  { id: 'logout', label: 'Sign out', description: 'Revoke the session cookie when one exists', group: 'Workspace' },
+  { id: 'find', label: 'Find in document', description: 'Open the editor search panel', group: 'Workspace', shortcut: '⌘F' },
+  { id: 'ai-compose', label: 'AI compose', description: 'Rewrite, outline, or continue this page locally', group: 'Workspace' },
 ];

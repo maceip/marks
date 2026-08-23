@@ -17,7 +17,7 @@ import {
   type VoiceStatus,
 } from '../browser';
 import type { CollabSession } from '../collab/types';
-import type { ContextMenuAction } from '../components/ContextMenu';
+import type { ContextMenuAction } from '../components/overlays/ContextMenu';
 import { VoiceSession } from '../browser/voice';
 
 export interface ContextMenuState {

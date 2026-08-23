@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import BenchWorker from '../workers/bench.worker?worker';
 import type { BenchMessage, BenchOptions, BenchRow } from '../bench/types';
-import { Icon, icons } from '../components/Icon';
+import { Icon, icons } from '../components/ui/Icon';
 import { formatBytes, formatCount, formatMs } from '../lib/format';
 import '../styles/benchmark.css';
 

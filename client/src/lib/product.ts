@@ -2,8 +2,8 @@ export const PRODUCT_NAME = 'marks';
 
 /** Latest deterministic level-9 gzip receipt from `npm run check:ui-budgets`. */
 export const UI_PERFORMANCE_RECEIPT = {
-  appCriticalKb: '94.28',
-  marketingCriticalKb: '11.77',
+  appCriticalKb: '99.12',
+  marketingCriticalKb: '0.57',
 } as const;
 
 /**
@@ -29,4 +29,6 @@ export const UI_BREAKPOINTS = {
 export const UI_MEDIA = {
   phone: `(max-width: ${UI_BREAKPOINTS.phone}px), (max-height: 560px) and (pointer: coarse)`,
   overlayNavigation: `(max-width: ${UI_BREAKPOINTS.overlayNavigation}px)`,
+  foldBook: '(horizontal-viewport-segments: 2), (spanning: single-fold-vertical)',
+  foldLaptop: '(vertical-viewport-segments: 2), (spanning: single-fold-horizontal)',
 } as const;
