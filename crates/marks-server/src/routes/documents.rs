@@ -742,6 +742,7 @@ fn ticket_response(
     secret: &[u8; 32],
     role: Option<DocumentRole>,
     site: EsbtSiteId,
+    identity: &marks_auth::RoomIdentity,
 ) -> Response {
     Json(json!({
         "roomUrl": format!("/collab/esbt/{}", document_id.as_str()),
@@ -749,6 +750,11 @@ fn ticket_response(
         "ticketSecret": encode_bearer_secret(secret),
         "role": role.map(store::role_to_str),
         "siteId": site.as_u32().to_string(),
+        "displayIdentity": {
+            "participantId": identity.participant_id,
+            "displayName": identity.display_name,
+            "avatar": identity.avatar,
+        },
     }))
     .into_response()
 }
@@ -804,6 +810,7 @@ pub async fn principal_room_session(
         &secret,
         Some(role),
         site,
+        &crate::room::ws::principal_identity(cookie.session.principal_id().as_str()),
     ))
 }
 
@@ -853,6 +860,10 @@ pub async fn scratch_room_session(
         &secret,
         None,
         site,
+        &crate::room::ws::scratch_identity(
+            document_id.as_str(),
+            scratch.authority.scratch_id.as_str(),
+        ),
     ))
 }
 

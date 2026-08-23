@@ -8,6 +8,7 @@ import {
 import { encodeBase64Url } from './protocol.ts';
 
 const ticketSecret = encodeBase64Url(new Uint8Array(32).fill(9));
+const displayIdentity = { participantId: 'principal_1234', displayName: 'Member 1234', avatar: null };
 
 test('session admission mints a ticket and keeps it out of the room URL', async () => {
   const calls: Array<{ input: string; init?: RequestInit }> = [];
@@ -22,6 +23,7 @@ test('session admission mints a ticket and keeps it out of the room URL', async 
         ticketSecret,
         role: 'editor',
         siteId: '2',
+        displayIdentity,
       });
     },
   });
@@ -34,6 +36,7 @@ test('session admission mints a ticket and keeps it out of the room URL', async 
     siteId: '2',
     role: 'editor',
     authority: 'session',
+    displayIdentity,
   });
   assert.equal(calls[0].input, '/v1/documents/document_1234/session');
   assert.equal(calls[0].init?.method, 'POST');
@@ -70,6 +73,7 @@ test('scratch authority is explicit on snapshot and admission requests', async (
         ticketSecret,
         role: null,
         siteId: '3',
+        displayIdentity,
       });
     },
   });
@@ -119,6 +123,7 @@ test('admission omits siteId when the replica has not been assigned one', async 
         ticketSecret,
         role: 'owner',
         siteId: '4',
+        displayIdentity,
       });
     },
   });

@@ -15,10 +15,11 @@ use axum::response::{IntoResponse, Response};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use futures_util::{SinkExt, StreamExt};
 use marks_auth::{
-    DocumentId, ESBT_SUBPROTOCOL, RoomActor, TICKET_SUBPROTOCOL_PREFIX, parse_ticket_subprotocol,
-    redeem_document_ticket, redeem_scratch_document_ticket,
+    DocumentId, ESBT_SUBPROTOCOL, RoomActor, RoomIdentity, TICKET_SUBPROTOCOL_PREFIX,
+    parse_ticket_subprotocol, redeem_document_ticket, redeem_scratch_document_ticket,
 };
 use rusqlite::params;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -101,7 +102,8 @@ fn admit(
                     now,
                 )
                 .map_err(|_| ApiError::unauthenticated())?;
-                RoomActor::Principal(actor)
+                let identity = principal_identity(actor.principal_id.as_str());
+                RoomActor::Principal(marks_auth::Actor { identity, ..actor })
             }
             store::StoredTicket::Scratch(stored) => {
                 let scratch = store::load_scratch(conn, &stored.record.scratch_id)?
@@ -115,7 +117,8 @@ fn admit(
                     now,
                 )
                 .map_err(|_| ApiError::unauthenticated())?;
-                RoomActor::Scratch(actor)
+                let identity = scratch_identity(document_id.as_str(), actor.scratch_id.as_str());
+                RoomActor::Scratch(marks_auth::ScratchActor { identity, ..actor })
             }
         };
         // Consume atomically: a validation that raced another upgrade loses
@@ -132,6 +135,69 @@ fn admit(
     })?;
 
     Ok((actor, client_version))
+}
+
+pub(crate) fn principal_identity(principal_id: &str) -> RoomIdentity {
+    let digest = Sha256::digest(principal_id.as_bytes());
+    RoomIdentity {
+        participant_id: principal_id.to_owned(),
+        display_name: normalize_display_name(&format!("Member {:02X}{:02X}", digest[0], digest[1])),
+        avatar: None,
+        preferred_color: digest[2] % 8 + 1,
+    }
+}
+
+fn normalize_display_name(input: &str) -> String {
+    let mut out = String::new();
+    for scalar in input.trim().chars().filter(|ch| !ch.is_control() && !matches!(*ch, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')).take(64) {
+        if out.len() + scalar.len_utf8() > 128 { break; }
+        out.push(scalar);
+    }
+    if out.trim().is_empty() {
+        "Anonymous".to_owned()
+    } else {
+        out
+    }
+}
+
+pub(crate) fn scratch_identity(room_id: &str, scratch_id: &str) -> RoomIdentity {
+    const ANIMALS: [&str; 8] = [
+        "Otter", "Heron", "Fox", "Ibex", "Marten", "Falcon", "Lynx", "Tapir",
+    ];
+    let digest = Sha256::digest(format!("{room_id}\0{scratch_id}").as_bytes());
+    RoomIdentity {
+        // A one-way room-scoped pseudonym: neither scratch nor device id is exposed.
+        participant_id: format!("guest-{}", Base64UrlUnpadded::encode_string(&digest[..8])),
+        display_name: normalize_display_name(&format!(
+            "Anonymous {}",
+            ANIMALS[digest[8] as usize % ANIMALS.len()]
+        )),
+        avatar: None,
+        preferred_color: digest[9] % 8 + 1,
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    #[test]
+    fn malicious_names_are_bounded_and_direction_controls_are_removed() {
+        let name = normalize_display_name(&format!("A\u{202e}<script>\n{}", "🦀".repeat(100)));
+        assert!(!name.contains('\u{202e}'));
+        assert!(!name.contains('\n'));
+        assert!(name.chars().count() <= 64);
+        assert!(name.len() <= 128);
+    }
+
+    #[test]
+    fn scratch_identity_is_room_scoped_and_does_not_reveal_authority() {
+        let first = scratch_identity("room-a", "raw-device-secret");
+        let second = scratch_identity("room-b", "raw-device-secret");
+        assert_ne!(first.participant_id, second.participant_id);
+        assert!(!first.participant_id.contains("raw-device-secret"));
+        assert!(first.display_name.starts_with("Anonymous "));
+    }
 }
 
 fn offered_protocols(headers: &HeaderMap) -> Vec<String> {

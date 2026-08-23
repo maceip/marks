@@ -37,6 +37,7 @@ const IDEMPOTENCY_RECEIPT_WINDOW: u64 = 65_536;
 
 struct Socket {
     actor: RoomActor,
+    color: u8,
     out: mpsc::Sender<OutMsg>,
     mutation_window: u64,
     mutations_in_window: u32,
@@ -305,10 +306,34 @@ impl Room {
 
         let conn = self.next_conn;
         self.next_conn += 1;
+        let identity = match &actor {
+            RoomActor::Principal(a) => &a.identity,
+            RoomActor::Scratch(a) => &a.identity,
+        };
+        let color = self
+            .sockets
+            .values()
+            .find_map(|socket| {
+                let other = match &socket.actor {
+                    RoomActor::Principal(a) => &a.identity,
+                    RoomActor::Scratch(a) => &a.identity,
+                };
+                (other.participant_id == identity.participant_id).then_some(socket.color)
+            })
+            .unwrap_or_else(|| {
+                let used: std::collections::HashSet<u8> =
+                    self.sockets.values().map(|socket| socket.color).collect();
+                let preferred = identity.preferred_color.clamp(1, 8);
+                (0..8)
+                    .map(|offset| (preferred - 1 + offset) % 8 + 1)
+                    .find(|candidate| !used.contains(candidate))
+                    .unwrap_or(preferred)
+            });
         self.sockets.insert(
             conn,
             Socket {
                 actor,
+                color,
                 out,
                 mutation_window: now_ms() / 1_000,
                 mutations_in_window: 0,
@@ -904,7 +929,14 @@ impl Room {
         {
             return;
         }
-        self.broadcast(conn, frame(MSG_EPHEMERAL, payload));
+        let identity = match &socket.actor {
+            RoomActor::Principal(actor) => &actor.identity,
+            RoomActor::Scratch(actor) => &actor.identity,
+        };
+        let Some(payload) = super::presence::bind(payload, conn, identity, socket.color) else {
+            return;
+        };
+        self.broadcast(conn, frame(MSG_EPHEMERAL, &payload));
     }
 
     fn broadcast(&mut self, from: u64, message: Vec<u8>) {

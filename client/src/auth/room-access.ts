@@ -20,6 +20,7 @@ interface TicketResponse {
   ticketSecret: string;
   siteId: string;
   role: DocumentRole | null;
+  displayIdentity: { participantId: string; displayName: string; avatar?: string | null };
 }
 
 export class RoomAccessError extends Error {
@@ -120,7 +121,7 @@ function validateTicketResponse(
 ): RoomTicket {
   if (!isRecord(value)) throw new RoomAccessError('invalid room admission response', false);
 
-  const { roomUrl, ticketId, ticketSecret, siteId, role } = value as Partial<TicketResponse>;
+  const { roomUrl, ticketId, ticketSecret, siteId, role, displayIdentity } = value as Partial<TicketResponse>;
   if (typeof roomUrl !== 'string' || typeof ticketId !== 'string' || typeof ticketSecret !== 'string') {
     throw new RoomAccessError('invalid room admission response', false);
   }
@@ -133,6 +134,16 @@ function validateTicketResponse(
   }
   if (!OPAQUE_ID_PATTERN.test(ticketId)) throw new RoomAccessError('invalid room ticket ID', false);
   assertTicketSecret(ticketSecret);
+  if (!isRecord(displayIdentity) || typeof displayIdentity.participantId !== 'string' || typeof displayIdentity.displayName !== 'string') {
+    throw new RoomAccessError('invalid room display identity', false);
+  }
+  const nameBytes = new TextEncoder().encode(displayIdentity.displayName).byteLength;
+  if (Array.from(displayIdentity.displayName).length > 64 || nameBytes > 128 || /[\p{Cc}\p{Cf}]/u.test(displayIdentity.displayName)) {
+    throw new RoomAccessError('invalid room display name', false);
+  }
+  if (displayIdentity.avatar != null && typeof displayIdentity.avatar !== 'string') {
+    throw new RoomAccessError('invalid room avatar', false);
+  }
 
   let expected: URL;
   let resolved: URL;
@@ -165,6 +176,7 @@ function validateTicketResponse(
     siteId,
     role: validRole ? role : null,
     authority,
+    displayIdentity,
   };
 }
 

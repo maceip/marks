@@ -2,6 +2,7 @@
 //! room consumes only validated `RoomActor`s from the Marks auth boundary;
 //! ESBT receives site IDs and bytes, never identity.
 
+mod presence;
 pub mod protocol;
 mod task;
 pub mod ws;
