@@ -865,6 +865,9 @@ export class EsbtEngine implements CollabSession {
   }
 
   private openSocket(ticket: RoomTicket): void {
+    // A presence instance is scoped to exactly one WebSocket lifecycle. This
+    // happens before construction so even a failed handshake cannot reuse it.
+    this.ephemeral.beginConnectionLifecycle();
     const url = new URL(ticket.roomUrl);
     try {
       const vv = this.doc?.version() ?? new Uint8Array();
