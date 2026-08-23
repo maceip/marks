@@ -2,10 +2,11 @@
 /**
  * Prove the service-mode browser talks to a live marks-server.
  *
- * This is not the two-browser TypeScript smoke. Room bytes stay native ESBT;
- * this script only checks first-paint identity, catalog create, snapshot
- * fetch, and ticket mint. Pair it with `live_service` for two-peer
- * convergence on the same document.
+ * This is not the two-browser preview-sync smoke. The Wasm CollabSession
+ * mints a site-bound ticket, then fetches the scratch snapshot, then
+ * connects. This script only checks first-paint identity, catalog create,
+ * snapshot fetch, and ticket mint. Pair it with `live_service` for two-peer
+ * native convergence on the same document.
  *
  * Examples:
  *   MARKS_URL=http://127.0.0.1:3000 node scripts/ci-service-ui.mjs
@@ -130,6 +131,21 @@ try {
       response.request().method() === 'POST' && pathnameOf(response.url()) === '/v1/documents',
     { timeout: 30_000 },
   );
+  // Register before the click: the Wasm session admits (binds site) then
+  // fetches the snapshot, and either request can fire as soon as the
+  // editor route mounts.
+  const snapshotWait = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'GET' &&
+      /\/v1\/scratch\/documents\/[^/]+\/snapshot/.test(pathnameOf(response.url())),
+    { timeout: 30_000 },
+  );
+  const ticketWait = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      /\/v1\/scratch\/documents\/[^/]+\/session$/.test(pathnameOf(response.url())),
+    { timeout: 30_000 },
+  );
   await page.locator('.home-actions .button.primary, .new-doc .button.primary').first().click();
   const createdResponse = await created;
   check('New document POSTs /v1/documents', createdResponse.status() === 201, `status ${createdResponse.status()}`);
@@ -140,21 +156,17 @@ try {
   await page.waitForURL((url) => url.pathname === `/d/${documentId}`, { timeout: 30_000 });
   check('router opens the server-created document', page.url().includes(`/d/${documentId}`));
 
-  const snapshot = await page.waitForResponse(
-    (response) =>
-      response.request().method() === 'GET' &&
-      pathnameOf(response.url()) === `/v1/scratch/documents/${documentId}/snapshot`,
-    { timeout: 30_000 },
+  const [snapshot, ticket] = await Promise.all([snapshotWait, ticketWait]);
+  check(
+    'editor fetches the scratch snapshot prefix',
+    snapshot.ok() && pathnameOf(snapshot.url()).includes(documentId),
+    `status ${snapshot.status()} ${pathnameOf(snapshot.url())}`,
   );
-  check('editor fetches the scratch snapshot prefix', snapshot.ok(), `status ${snapshot.status()}`);
-
-  const ticket = await page.waitForResponse(
-    (response) =>
-      response.request().method() === 'POST' &&
-      pathnameOf(response.url()) === `/v1/scratch/documents/${documentId}/session`,
-    { timeout: 30_000 },
+  check(
+    'editor mints a one-use room ticket',
+    ticket.ok() && pathnameOf(ticket.url()).includes(documentId),
+    `status ${ticket.status()} ${pathnameOf(ticket.url())}`,
   );
-  check('editor mints a one-use room ticket', ticket.ok(), `status ${ticket.status()}`);
 
   const credential = await page.evaluate(() => {
     const raw = sessionStorage.getItem('marks.auth.scratch.v1');
