@@ -144,10 +144,34 @@ export function esbtPresence(
   const plugin = ViewPlugin.define((view) => {
     let destroyed = false;
     let scheduled = false;
+    let publishTimer: number | null = null;
+    let publishFrame: number | null = null;
+    let lastPublishedAt = 0;
+    let dragging = false;
+    const pointerDown = () => { dragging = true; };
+    const pointerUp = () => { dragging = false; };
+    view.dom.addEventListener('pointerdown', pointerDown);
+    view.dom.ownerDocument.addEventListener('pointerup', pointerUp);
 
     const publishSelection = (): void => {
+      if (publishTimer !== null) clearTimeout(publishTimer);
+      if (publishFrame !== null) cancelAnimationFrame(publishFrame);
+      publishTimer = null;
+      publishFrame = null;
       const main = view.state.selection.main;
       presence.set(selectionKeyFor(), { from: main.from, to: main.to });
+      lastPublishedAt = performance.now();
+    };
+
+    const scheduleSelection = (dragging: boolean): void => {
+      if (dragging) {
+        if (publishFrame === null) publishFrame = requestAnimationFrame(publishSelection);
+        return;
+      }
+      // Keyboard/typing cursor movement is capped at approximately 20 Hz.
+      if (publishTimer !== null) return;
+      const wait = Math.max(0, 50 - (performance.now() - lastPublishedAt));
+      publishTimer = window.setTimeout(publishSelection, wait);
     };
 
     const refresh = (): void => {
@@ -181,12 +205,16 @@ export function esbtPresence(
     return {
       update(update) {
         if (update.selectionSet || update.docChanged || update.focusChanged) {
-          publishSelection();
+          scheduleSelection(dragging);
         }
       },
       destroy() {
         destroyed = true;
         clearInterval(heartbeat);
+        if (publishTimer !== null) clearTimeout(publishTimer);
+        if (publishFrame !== null) cancelAnimationFrame(publishFrame);
+        view.dom.removeEventListener('pointerdown', pointerDown);
+        view.dom.ownerDocument.removeEventListener('pointerup', pointerUp);
         unsubscribe();
         presence.delete(selectionKeyFor());
       },

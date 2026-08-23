@@ -29,7 +29,7 @@ test('presence roundtrips, deletes, and never re-emits remote state', () => {
 test('presence decoding is atomic and rejects trailing or non-canonical input', () => {
   const source = new PresenceStore(30_000);
   const target = new PresenceStore(30_000);
-  source.set('peer-cm-user', { name: 'Peer' });
+  source.set('peer-cm-user', { name: 'Peer', colorClassName: 'marks-user1' });
   const valid = source.encodeAll();
 
   const trailing = new Uint8Array(valid.byteLength + 1);
@@ -37,8 +37,7 @@ test('presence decoding is atomic and rejects trailing or non-canonical input', 
   assert.throws(() => target.apply(trailing), /trailing/);
   assert.deepEqual(target.getAllStates(), {});
 
-  // tag 5, overlong ULEB128 encoding of a zero entry count.
-  assert.throws(() => target.apply(new Uint8Array([5, 0x80, 0x00])), /non-canonical/);
+  assert.throws(() => target.apply(new Uint8Array([0x4d, 99])), /unsupported|truncated/);
   assert.deepEqual(target.getAllStates(), {});
 
   source.destroy();
@@ -47,11 +46,9 @@ test('presence decoding is atomic and rejects trailing or non-canonical input', 
 
 test('presence validates values before changing local state', () => {
   const store = new PresenceStore(30_000);
-  const cyclic: { self?: unknown } = {};
-  cyclic.self = cyclic;
-  assert.throws(() => store.set('bad', cyclic));
+  assert.throws(() => store.set('bad', { from: 1, to: 2 }), /section/);
   assert.deepEqual(store.getAllStates(), {});
-  assert.throws(() => store.set('huge', 'x'.repeat(17 * 1024)), /16 KiB/);
+  assert.throws(() => store.set('peer-cm-user', { name: 'x'.repeat(129), colorClassName: 'marks-user1' }), /limit/);
   assert.deepEqual(store.getAllStates(), {});
   store.destroy();
 });
@@ -62,10 +59,10 @@ test('presence expiry removes stale peers and notifies subscribers', async () =>
   store.subscribe(() => {
     notifications += 1;
   });
-  store.set('peer', 'online');
+  store.set('peer-cm-user', { name: 'Peer', colorClassName: 'marks-user1' });
   const afterSet = notifications;
   await new Promise((resolve) => setTimeout(resolve, 560));
-  assert.equal(store.get('peer'), undefined);
+  assert.equal(store.get('peer-cm-user'), undefined);
   assert.ok(notifications > afterSet);
   store.destroy();
 });

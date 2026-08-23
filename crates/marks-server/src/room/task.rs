@@ -10,8 +10,8 @@ use super::protocol::{Mutation, MutationKind, decode_mutation, encode_committed}
 use super::{
     CLOSE_CAPACITY, CLOSE_DOCUMENT_DELETED, CLOSE_FORBIDDEN_WRITE, CLOSE_INTERNAL,
     CLOSE_INVALID_PAYLOAD, CLOSE_UNAUTHORIZED, Control, JoinRefusal, MSG_COMMITTED, MSG_EPHEMERAL,
-    MSG_MUTATION, MSG_SERVER_VV, MSG_SNAPSHOT, MSG_SYNCED, MSG_UPDATE, OutMsg, RoomMsg, RoomRead,
-    frame,
+    MSG_MUTATION, MSG_SERVER_VV, MSG_SNAPSHOT, MSG_SYNCED, MSG_UPDATE, OutMsg, PresenceCounters,
+    RoomMsg, RoomRead, frame,
 };
 use crate::config::Config;
 use crate::db::Db;
@@ -30,7 +30,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
 
 /// Presence frames are relayed, never persisted; bound them separately.
-const MAX_EPHEMERAL_BYTES: usize = 64 * 1024;
+const MAX_EPHEMERAL_BYTES: usize = 1536;
+const EPHEMERAL_FRAMES_PER_SECOND: f64 = 30.0;
+const EPHEMERAL_BYTES_PER_SECOND: f64 = 24.0 * 1024.0;
+/// Slots held back for commit receipts, snapshots, and durable updates.
+const DURABLE_QUEUE_RESERVE: usize = 16;
 /// Receipts older than this window may be recreated as duplicate CRDT commits;
 /// their operations remain idempotent even after the receipt row is pruned.
 const IDEMPOTENCY_RECEIPT_WINDOW: u64 = 65_536;
@@ -41,6 +45,9 @@ struct Socket {
     mutation_window: u64,
     mutations_in_window: u32,
     mutation_bytes_in_window: usize,
+    ephemeral_frames: f64,
+    ephemeral_bytes: f64,
+    ephemeral_refill: std::time::Instant,
 }
 
 enum CommitLookup {
@@ -123,6 +130,7 @@ struct Room {
     dead: Option<u16>,
     commit_batches: Arc<AtomicU64>,
     committed_mutations: Arc<AtomicU64>,
+    presence: Arc<PresenceCounters>,
 }
 
 pub(super) async fn run(
@@ -132,6 +140,7 @@ pub(super) async fn run(
     limits: esbt::ResourceLimits,
     commit_batches: Arc<AtomicU64>,
     committed_mutations: Arc<AtomicU64>,
+    presence: Arc<PresenceCounters>,
     mut rx: mpsc::Receiver<RoomMsg>,
 ) {
     let hydrated = db.read(|conn| {
@@ -157,6 +166,7 @@ pub(super) async fn run(
             dead: None,
             commit_batches,
             committed_mutations,
+            presence,
         },
         Err(_) => {
             // Refuse every join and drain; the manager entry drops with us.
@@ -313,6 +323,9 @@ impl Room {
                 mutation_window: now_ms() / 1_000,
                 mutations_in_window: 0,
                 mutation_bytes_in_window: 0,
+                ephemeral_frames: EPHEMERAL_FRAMES_PER_SECOND,
+                ephemeral_bytes: EPHEMERAL_BYTES_PER_SECOND,
+                ephemeral_refill: std::time::Instant::now(),
             },
         );
         Ok(conn)
@@ -894,17 +907,44 @@ impl Room {
     }
 
     fn client_ephemeral(&mut self, conn: u64, payload: &[u8]) {
-        let Some(socket) = self.sockets.get(&conn) else {
+        self.presence.received.fetch_add(1, Ordering::Relaxed);
+        let Some(socket) = self.sockets.get_mut(&conn) else {
             return;
         };
         // Presence is best-effort, allowed for every admitted role, relayed
         // only inside this room, and never persisted or snapshotted.
+        let now = std::time::Instant::now();
+        let elapsed = now.duration_since(socket.ephemeral_refill).as_secs_f64();
+        socket.ephemeral_refill = now;
+        socket.ephemeral_frames = (socket.ephemeral_frames + elapsed * EPHEMERAL_FRAMES_PER_SECOND)
+            .min(EPHEMERAL_FRAMES_PER_SECOND);
+        socket.ephemeral_bytes = (socket.ephemeral_bytes + elapsed * EPHEMERAL_BYTES_PER_SECOND)
+            .min(EPHEMERAL_BYTES_PER_SECOND);
         if payload.len() > MAX_EPHEMERAL_BYTES
             || !authorize_room_action(&socket.actor, DocumentAction::PublishPresence)
+            || socket.ephemeral_frames < 1.0
+            || socket.ephemeral_bytes < payload.len() as f64
         {
+            self.presence.dropped.fetch_add(1, Ordering::Relaxed);
             return;
         }
-        self.broadcast(conn, frame(MSG_EPHEMERAL, payload));
+        socket.ephemeral_frames -= 1.0;
+        socket.ephemeral_bytes -= payload.len() as f64;
+        self.broadcast_ephemeral(conn, frame(MSG_EPHEMERAL, payload));
+    }
+
+    fn broadcast_ephemeral(&mut self, from: u64, message: Vec<u8>) {
+        self.presence.broadcast.fetch_add(1, Ordering::Relaxed);
+        for (&conn, socket) in &self.sockets {
+            if conn != from
+                && (socket.out.capacity() <= DURABLE_QUEUE_RESERVE
+                    || socket.out.try_send(OutMsg::Frame(message.clone())).is_err())
+            {
+                // The ephemeral lane is replaceable: never evict a collaborator or
+                // delay a durable acknowledgement because its cursor queue is full.
+                self.presence.coalesced.fetch_add(1, Ordering::Relaxed);
+            }
+        }
     }
 
     fn broadcast(&mut self, from: u64, message: Vec<u8>) {

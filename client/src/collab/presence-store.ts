@@ -1,23 +1,14 @@
-/**
- * Marks-owned transient presence state.
- *
- * Presence is deliberately outside ESBT: it is lossy, expires locally, is
- * never part of document history, and is only relayed by a room.  Keeping the
- * codec here prevents a second CRDT implementation from becoming an accidental
- * production dependency.
- *
- * Wire format v1 is retained from the original Marks client so rolling deploys
- * can exchange presence:
- *   tag:u8 (=5), count:uleb128,
- *   repeated key:utf8, flags:u8, [age_ms:uleb128, value:json-utf8]
- */
-
-const PRESENCE_TAG = 5;
-const FLAG_DELETED = 1;
-const MAX_PRESENCE_BYTES = 64 * 1024;
-const MAX_PRESENCE_ENTRIES = 256;
-const MAX_KEY_BYTES = 256;
-const MAX_VALUE_BYTES = 16 * 1024;
+/** Compact, lossy presence state. This is deliberately not a generic map codec. */
+const TAG = 0x4d;
+const VERSION = 2;
+const KIND_IDENTITY = 1;
+const KIND_SELECTION = 2;
+const FLAG_ACTIVE = 1;
+const FLAG_REMOVED = 2;
+export const MAX_PRESENCE_BYTES = 1536;
+const MAX_ACTOR_BYTES = 64;
+const MAX_NAME_BYTES = 128;
+const LEASE_RENEW_MS = 15_000;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
@@ -35,336 +26,141 @@ export interface PresenceStoreApi {
   destroy(): void;
 }
 
-interface Entry {
-  value: unknown;
-  at: number;
-  /** A short-lived removal marker which is sent once, then swept. */
-  deleted: boolean;
+interface Entry { value: unknown; at: number; deleted: boolean; sequence: number }
+interface KeyParts { actor: string; kind: number }
+
+function parts(key: string): KeyParts {
+  const suffix = key.endsWith('-cm-user') ? '-cm-user' : key.endsWith('-cm-sel') ? '-cm-sel' : '';
+  if (!suffix) throw new TypeError('marks: unsupported presence section');
+  const actor = key.slice(0, -suffix.length);
+  const size = encoder.encode(actor).byteLength;
+  if (size === 0 || size > MAX_ACTOR_BYTES) throw new RangeError('marks: invalid presence actor');
+  return { actor, kind: suffix === '-cm-user' ? KIND_IDENTITY : KIND_SELECTION };
 }
 
-interface DecodedEntry {
-  key: string;
-  deleted: boolean;
-  age: number;
-  value?: unknown;
+function keyFor(actor: string, kind: number): string {
+  return `${actor}${kind === KIND_IDENTITY ? '-cm-user' : '-cm-sel'}`;
 }
 
 class Writer {
-  private buffer = new Uint8Array(256);
-  private length = 0;
-
-  private grow(extra: number): void {
-    const required = this.length + extra;
-    if (required > MAX_PRESENCE_BYTES) {
-      throw new RangeError('marks: presence payload exceeds 64 KiB');
-    }
-    if (required <= this.buffer.length) return;
-    let next = this.buffer.length;
-    while (next < required) next = Math.min(MAX_PRESENCE_BYTES, next * 2);
-    const grown = new Uint8Array(next);
-    grown.set(this.buffer.subarray(0, this.length));
-    this.buffer = grown;
+  readonly bytes: number[] = [];
+  u8(n: number) { this.bytes.push(n & 255); }
+  uint(n: number) {
+    if (!Number.isSafeInteger(n) || n < 0) throw new RangeError('marks: invalid presence integer');
+    do { const b = n % 128; n = Math.floor(n / 128); this.u8(b | (n ? 128 : 0)); } while (n);
   }
-
-  u8(value: number): void {
-    this.grow(1);
-    this.buffer[this.length] = value & 0xff;
-    this.length += 1;
+  string(value: string, max: number) {
+    const bytes = encoder.encode(value);
+    if (bytes.byteLength > max) throw new RangeError('marks: presence metadata exceeds limit');
+    this.uint(bytes.byteLength); this.bytes.push(...bytes);
   }
-
-  uint(value: number): void {
-    if (!Number.isSafeInteger(value) || value < 0) {
-      throw new RangeError('marks: invalid presence integer');
-    }
-    do {
-      const byte = value % 128;
-      value = Math.floor(value / 128);
-      this.u8(byte | (value > 0 ? 0x80 : 0));
-    } while (value > 0);
-  }
-
-  bytes(value: Uint8Array, maximum: number): void {
-    if (value.byteLength > maximum) {
-      throw new RangeError('marks: presence field exceeds its limit');
-    }
-    this.uint(value.byteLength);
-    this.grow(value.byteLength);
-    this.buffer.set(value, this.length);
-    this.length += value.byteLength;
-  }
-
-  string(value: string, maximum: number): void {
-    this.bytes(encoder.encode(value), maximum);
-  }
-
   done(): Uint8Array {
-    return this.buffer.slice(0, this.length);
+    if (this.bytes.length > MAX_PRESENCE_BYTES) throw new RangeError('marks: presence exceeds 1536 bytes');
+    return Uint8Array.from(this.bytes);
   }
 }
 
 class Reader {
-  private offset = 0;
-  private readonly buffer: Uint8Array;
-
-  constructor(buffer: Uint8Array) {
-    this.buffer = buffer;
-    if (buffer.byteLength === 0 || buffer.byteLength > MAX_PRESENCE_BYTES) {
-      throw new RangeError('marks: invalid presence payload length');
-    }
+  private at = 0;
+  private readonly bytes: Uint8Array;
+  constructor(bytes: Uint8Array) {
+    this.bytes = bytes;
+    if (!bytes.length || bytes.length > MAX_PRESENCE_BYTES) throw new RangeError('marks: invalid presence length');
   }
-
-  u8(): number {
-    if (this.offset >= this.buffer.byteLength) {
-      throw new TypeError('marks: truncated presence payload');
-    }
-    const value = this.buffer[this.offset];
-    this.offset += 1;
-    return value;
-  }
-
+  u8(): number { if (this.at >= this.bytes.length) throw new TypeError('marks: truncated presence'); return this.bytes[this.at++]; }
   uint(): number {
-    let value = 0;
-    let factor = 1;
-    let encodedBytes = 0;
-    for (;;) {
-      const byte = this.u8();
-      encodedBytes += 1;
-      value += (byte & 0x7f) * factor;
-      if (!Number.isSafeInteger(value)) {
-        throw new RangeError('marks: presence integer overflow');
-      }
-      if ((byte & 0x80) === 0) {
-        if (encodedBytes > 1 && byte === 0) {
-          throw new TypeError('marks: non-canonical presence integer');
-        }
-        return value;
-      }
+    let value = 0, factor = 1;
+    for (let count = 0; count < 8; count += 1) {
+      const b = this.u8(); value += (b & 127) * factor;
+      if (!Number.isSafeInteger(value)) break;
+      if (!(b & 128)) return value;
       factor *= 128;
-      if (!Number.isSafeInteger(factor)) {
-        throw new RangeError('marks: presence integer overflow');
-      }
     }
+    throw new RangeError('marks: invalid presence integer');
   }
-
-  bytes(maximum: number): Uint8Array {
+  string(max: number): string {
     const length = this.uint();
-    if (length > maximum || this.offset + length > this.buffer.byteLength) {
-      throw new TypeError('marks: invalid presence field length');
-    }
-    const value = this.buffer.subarray(this.offset, this.offset + length);
-    this.offset += length;
-    return value;
+    if (length > max || this.at + length > this.bytes.length) throw new TypeError('marks: invalid presence string');
+    const value = decoder.decode(this.bytes.subarray(this.at, this.at + length)); this.at += length; return value;
   }
-
-  string(maximum: number): string {
-    return decoder.decode(this.bytes(maximum));
-  }
-
-  finish(): void {
-    if (this.offset !== this.buffer.byteLength) {
-      throw new TypeError('marks: trailing presence bytes');
-    }
-  }
+  finish() { if (this.at !== this.bytes.length) throw new TypeError('marks: trailing presence bytes'); }
 }
 
-function serializableValue(value: unknown): unknown {
-  const json = JSON.stringify(value ?? null);
-  if (json === undefined) throw new TypeError('marks: presence value is not serializable');
-  const encoded = encoder.encode(json);
-  if (encoded.byteLength > MAX_VALUE_BYTES) {
-    throw new RangeError('marks: presence value exceeds 16 KiB');
-  }
-  return JSON.parse(json) as unknown;
-}
-
-function decodeFrame(bytes: Uint8Array): DecodedEntry[] {
-  const reader = new Reader(bytes);
-  if (reader.u8() !== PRESENCE_TAG) {
-    throw new TypeError('marks: unsupported presence payload');
-  }
-  const count = reader.uint();
-  if (count > MAX_PRESENCE_ENTRIES) {
-    throw new RangeError('marks: too many presence entries');
-  }
-
-  const entries: DecodedEntry[] = [];
-  for (let index = 0; index < count; index += 1) {
-    const key = reader.string(MAX_KEY_BYTES);
-    if (key.length === 0) throw new TypeError('marks: empty presence key');
-    const flags = reader.u8();
-    if (flags === FLAG_DELETED) {
-      entries.push({ key, deleted: true, age: 0 });
-      continue;
-    }
-    if (flags !== 0) throw new TypeError('marks: unsupported presence flags');
-    const age = reader.uint();
-    const json = reader.string(MAX_VALUE_BYTES);
-    entries.push({ key, deleted: false, age, value: JSON.parse(json) as unknown });
-  }
-  reader.finish();
-  return entries;
+function same(a: unknown, b: unknown): boolean {
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return a === b;
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 export class PresenceStore implements PresenceStoreApi {
   private readonly entries = new Map<string, Entry>();
   private readonly listeners = new Set<() => void>();
-  private readonly updateListeners = new Set<(bytes: Uint8Array) => void>();
+  private readonly updates = new Set<(bytes: Uint8Array) => void>();
   private readonly timer: ReturnType<typeof setInterval>;
-  private readonly ttlMs: number;
+  private sequence = 0;
   private destroyed = false;
-
+  private readonly ttlMs: number;
   constructor(ttlMs: number) {
-    if (!Number.isFinite(ttlMs) || ttlMs < 1) {
-      throw new RangeError('marks: presence TTL must be positive');
-    }
+    if (!Number.isFinite(ttlMs) || ttlMs < 1) throw new RangeError('marks: presence TTL must be positive');
     this.ttlMs = ttlMs;
-    const interval = Math.min(Math.max(500, Math.floor(ttlMs / 2)), 5_000);
-    this.timer = setInterval(() => this.sweep(), interval);
+    this.timer = setInterval(() => this.sweep(), Math.min(5000, Math.max(500, ttlMs / 2)));
     (this.timer as { unref?: () => void }).unref?.();
   }
-
-  private live(entry: Entry | undefined, now: number): entry is Entry {
-    return entry !== undefined && !entry.deleted && now - entry.at <= this.ttlMs;
+  private notify() { for (const listener of this.listeners) listener(); }
+  private sweep() {
+    const now = Date.now(); let changed = false;
+    for (const [key, entry] of this.entries) if (entry.deleted || now - entry.at > this.ttlMs) { this.entries.delete(key); changed ||= !entry.deleted; }
+    if (changed) this.notify();
   }
-
-  private sweep(): void {
-    const now = Date.now();
-    let visibleChanged = false;
-    for (const [key, entry] of this.entries) {
-      if (entry.deleted || now - entry.at > this.ttlMs) {
-        this.entries.delete(key);
-        if (!entry.deleted) visibleChanged = true;
-      }
-    }
-    if (visibleChanged) this.notify();
-  }
-
-  private notify(): void {
-    for (const listener of this.listeners) listener();
-  }
-
-  private encodeKeys(keys: readonly string[]): Uint8Array {
-    if (keys.length > MAX_PRESENCE_ENTRIES) {
-      throw new RangeError('marks: too many presence entries');
-    }
-    const writer = new Writer();
-    writer.u8(PRESENCE_TAG);
-    writer.uint(keys.length);
-    const now = Date.now();
-    for (const key of keys) {
-      if (key.length === 0) throw new TypeError('marks: empty presence key');
-      writer.string(key, MAX_KEY_BYTES);
-      const entry = this.entries.get(key);
-      if (!entry || entry.deleted) {
-        writer.u8(FLAG_DELETED);
-        continue;
-      }
-      writer.u8(0);
-      writer.uint(Math.max(0, now - entry.at));
-      writer.string(JSON.stringify(entry.value), MAX_VALUE_BYTES);
+  private encode(key: string, entry: Entry): Uint8Array {
+    const { actor, kind } = parts(key); const writer = new Writer();
+    writer.u8(TAG); writer.u8(VERSION); writer.u8(kind);
+    writer.u8(entry.deleted ? FLAG_REMOVED : FLAG_ACTIVE); writer.uint(entry.sequence); writer.string(actor, MAX_ACTOR_BYTES);
+    if (!entry.deleted && kind === KIND_SELECTION) {
+      const selection = entry.value as { from?: unknown; to?: unknown };
+      if (!Number.isSafeInteger(selection?.from) || !Number.isSafeInteger(selection?.to) || Number(selection.from) < 0 || Number(selection.to) < 0) throw new TypeError('marks: invalid selection');
+      writer.uint(Number(selection.from)); writer.uint(Number(selection.to));
+    } else if (!entry.deleted) {
+      const identity = entry.value as { name?: unknown; colorClassName?: unknown };
+      if (typeof identity?.name !== 'string') throw new TypeError('marks: invalid identity');
+      const match = /^marks-user([1-9])$/.exec(String(identity.colorClassName));
+      if (!match) throw new TypeError('marks: invalid identity color');
+      writer.string(identity.name, MAX_NAME_BYTES); writer.u8(Number(match[1]));
     }
     return writer.done();
   }
-
-  private emitLocal(keys: readonly string[]): void {
-    if (this.updateListeners.size === 0) return;
-    const bytes = this.encodeKeys(keys);
-    for (const listener of this.updateListeners) listener(bytes);
-  }
-
+  private emit(key: string, entry: Entry) { const bytes = this.encode(key, entry); for (const listener of this.updates) listener(bytes); }
   set(key: string, value: unknown): void {
-    if (this.destroyed) return;
-    if (!this.entries.has(key) && this.entries.size >= MAX_PRESENCE_ENTRIES) {
-      throw new RangeError('marks: too many presence entries');
-    }
-    const stored = serializableValue(value);
-    // Validate the key before changing observable state.
-    if (encoder.encode(key).byteLength === 0 || encoder.encode(key).byteLength > MAX_KEY_BYTES) {
-      throw new RangeError('marks: invalid presence key length');
-    }
-    this.entries.set(key, { value: stored, at: Date.now(), deleted: false });
-    this.emitLocal([key]);
-    this.notify();
+    if (this.destroyed) return; parts(key);
+    const previous = this.entries.get(key); const now = Date.now();
+    if (previous && !previous.deleted && same(previous.value, value) && now - previous.at < LEASE_RENEW_MS) return;
+    const entry = { value, at: now, deleted: false, sequence: ++this.sequence };
+    // Validate before observable state changes.
+    const encoded = this.encode(key, entry); this.entries.set(key, entry);
+    for (const listener of this.updates) listener(encoded); this.notify();
   }
-
-  get(key: string): unknown {
-    const entry = this.entries.get(key);
-    return this.live(entry, Date.now()) ? entry.value : undefined;
-  }
-
+  get(key: string): unknown { const e = this.entries.get(key); return e && !e.deleted && Date.now() - e.at <= this.ttlMs ? e.value : undefined; }
   delete(key: string): void {
-    if (this.destroyed) return;
-    const entry = this.entries.get(key);
-    if (!entry || entry.deleted) return;
-    this.entries.set(key, { value: undefined, at: Date.now(), deleted: true });
-    this.emitLocal([key]);
+    if (this.destroyed) return; const old = this.entries.get(key); if (!old || old.deleted) return;
+    const entry = { value: undefined, at: Date.now(), deleted: true, sequence: ++this.sequence };
+    this.entries.set(key, entry); this.emit(key, entry); this.notify();
+  }
+  keys(): string[] { return [...this.entries].filter(([, e]) => !e.deleted && Date.now() - e.at <= this.ttlMs).map(([k]) => k); }
+  getAllStates(): Record<string, unknown> { return Object.fromEntries(this.keys().map((key) => [key, this.entries.get(key)!.value])); }
+  encodeAll(): Uint8Array { const key = this.keys()[0]; return key ? this.encode(key, this.entries.get(key)!) : new Uint8Array(); }
+  apply(bytes: Uint8Array): void {
+    if (this.destroyed) return; const reader = new Reader(bytes);
+    if (reader.u8() !== TAG || reader.u8() !== VERSION) throw new TypeError('marks: unsupported presence version');
+    const kind = reader.u8(); const flags = reader.u8();
+    if ((kind !== KIND_IDENTITY && kind !== KIND_SELECTION) || (flags !== FLAG_ACTIVE && flags !== FLAG_REMOVED)) throw new TypeError('marks: invalid presence record');
+    const sequence = reader.uint(); const actor = reader.string(MAX_ACTOR_BYTES); const key = keyFor(actor, kind);
+    let value: unknown;
+    if (flags === FLAG_ACTIVE && kind === KIND_SELECTION) value = { from: reader.uint(), to: reader.uint() };
+    else if (flags === FLAG_ACTIVE) value = { name: reader.string(MAX_NAME_BYTES), colorClassName: `marks-user${reader.u8()}` };
+    reader.finish(); const old = this.entries.get(key); if (old && sequence <= old.sequence) return;
+    if (flags === FLAG_REMOVED) this.entries.delete(key); else this.entries.set(key, { value, at: Date.now(), deleted: false, sequence });
     this.notify();
   }
-
-  keys(): string[] {
-    const now = Date.now();
-    const keys: string[] = [];
-    for (const [key, entry] of this.entries) {
-      if (this.live(entry, now)) keys.push(key);
-    }
-    return keys;
-  }
-
-  getAllStates(): Record<string, unknown> {
-    const now = Date.now();
-    const states: Record<string, unknown> = {};
-    for (const [key, entry] of this.entries) {
-      if (this.live(entry, now)) states[key] = entry.value;
-    }
-    return states;
-  }
-
-  encodeAll(): Uint8Array {
-    return this.encodeKeys(this.keys());
-  }
-
-  apply(bytes: Uint8Array): void {
-    if (this.destroyed) return;
-    // Decode the complete frame first. A malformed tail can never half-apply.
-    const decoded = decodeFrame(bytes);
-    const now = Date.now();
-    let changed = false;
-    for (const incoming of decoded) {
-      if (incoming.deleted) {
-        const existing = this.entries.get(incoming.key);
-        if (existing && !existing.deleted) {
-          this.entries.delete(incoming.key);
-          changed = true;
-        }
-        continue;
-      }
-      if (incoming.age > this.ttlMs) continue;
-      const at = now - incoming.age;
-      const existing = this.entries.get(incoming.key);
-      if (!existing || existing.deleted || at > existing.at) {
-        this.entries.set(incoming.key, { value: incoming.value, at, deleted: false });
-        changed = true;
-      }
-    }
-    if (changed) this.notify();
-  }
-
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  subscribeLocalUpdates(listener: (bytes: Uint8Array) => void): () => void {
-    this.updateListeners.add(listener);
-    return () => this.updateListeners.delete(listener);
-  }
-
-  destroy(): void {
-    if (this.destroyed) return;
-    this.destroyed = true;
-    clearInterval(this.timer);
-    this.entries.clear();
-    this.listeners.clear();
-    this.updateListeners.clear();
-  }
+  subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
+  subscribeLocalUpdates(listener: (bytes: Uint8Array) => void): () => void { this.updates.add(listener); return () => this.updates.delete(listener); }
+  destroy(): void { if (this.destroyed) return; this.destroyed = true; clearInterval(this.timer); this.entries.clear(); this.listeners.clear(); this.updates.clear(); }
 }
