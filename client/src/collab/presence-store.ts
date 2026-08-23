@@ -187,7 +187,8 @@ function serializableValue(value: unknown): unknown {
   return JSON.parse(json) as unknown;
 }
 
-function decodeFrame(bytes: Uint8Array): DecodedFrame {
+export function decodePresenceFrame(bytes: Uint8Array): DecodedFrame {
+
   const reader = new Reader(bytes);
   if (reader.u8() !== PRESENCE_TAG || reader.u8() !== PROTOCOL_VERSION)
     throw new TypeError("marks: unsupported presence payload");
@@ -365,10 +366,12 @@ export class PresenceStore implements PresenceStoreApi {
   }
   apply(bytes: Uint8Array): void {
     if (this.destroyed) return;
-    const frame = decodeFrame(bytes);
+
+    const frame = decodePresenceFrame(bytes);
     const greatest = this.greatestSequence.get(frame.instanceKey) ?? 0;
     if (frame.sequence <= greatest) return;
     const now = this.now();
+
     let changed = false;
     for (const incoming of frame.entries) {
       const existing = this.entries.get(incoming.key);
