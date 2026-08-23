@@ -7,6 +7,7 @@
 //! supplies what those deliberately leave out: HTTP, randomness, storage,
 //! transactions, rate limits, rooms, and live-socket revocation.
 
+pub mod agent;
 pub mod app;
 pub mod artifact;
 pub mod assets;
@@ -64,6 +65,7 @@ pub async fn serve(
         let _ = backup.await;
     }
     result?;
+    app.agents.shutdown().await;
     app.rooms.shutdown().await;
     Ok(())
 }

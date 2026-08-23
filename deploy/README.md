@@ -45,6 +45,38 @@ sniffing, framing, referrer and origin isolation) exists in both marks-server
 and Caddy so bypassing either layer cannot silently weaken the app. CrowdSec
 already parses Caddy logs for HTTP floods.
 
+## Optional in-page agent provider
+
+The checked-in unit leaves the paid hosted planner disabled. The local,
+browser-only planner remains available without a provider or network request.
+To opt a deployment into OpenAI, install a root-managed key file outside the
+repository and add a systemd override; do not put the key in an environment
+line or the unit file:
+
+```bash
+sudo install -d -o root -g devuser -m 0750 /etc/marks
+sudo install -o devuser -g devuser -m 0600 /path/to/openai-key /etc/marks/openai-api-key
+sudo systemctl edit marks.service
+```
+
+The override contains non-secret policy and a path to the secret:
+
+```ini
+[Service]
+Environment=MARKS_AGENT_PROVIDER=openai
+Environment=MARKS_OPENAI_MODEL=<approved-model-id>
+Environment=MARKS_OPENAI_API_KEY_FILE=/etc/marks/openai-api-key
+ReadOnlyPaths=/etc/marks/openai-api-key
+```
+
+Then run `sudo systemctl daemon-reload && sudo systemctl restart marks.service`
+and confirm an authenticated `GET /v1/agent/capabilities` reports the intended
+provider. The server refuses a group/world-readable key file. Provider traffic
+contains the user's pill prompt and bounded ribbon tool schemas, but not the
+document Markdown or selection. See
+[`RIBBON-PRACTICAL-INTERFACES.md`](../docs/RIBBON-PRACTICAL-INTERFACES.md) for
+the protocol, persistence, cancellation, and rate-limit boundary.
+
 Image responses and portable ZIPs stream instead of materializing whole files
 or archives in process memory. `MARKS_MAX_BUNDLE_EXPORTS` (four in the unit)
 bounds concurrent archive verification/compression and returns `503` when all

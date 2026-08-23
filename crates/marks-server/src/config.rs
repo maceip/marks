@@ -1,6 +1,45 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AgentProviderKind {
+    Disabled,
+    OpenAi,
+}
+
+/// Server-owned agent configuration. Provider credentials and model selection
+/// are deployment policy: neither is accepted from a browser request.
+#[derive(Clone, Debug)]
+pub struct AgentConfig {
+    pub provider: AgentProviderKind,
+    pub openai_api_key_file: Option<PathBuf>,
+    pub openai_model: Option<String>,
+    pub max_concurrent_runs: usize,
+    pub max_concurrent_runs_per_session: usize,
+    pub max_runs_per_hour: u32,
+    pub max_runtime_ms: u64,
+    pub event_retention_ms: u64,
+    pub tool_wait_ms: u64,
+    pub max_output_tokens: u32,
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            provider: AgentProviderKind::Disabled,
+            openai_api_key_file: None,
+            openai_model: None,
+            max_concurrent_runs: 8,
+            max_concurrent_runs_per_session: 2,
+            max_runs_per_hour: 30,
+            max_runtime_ms: 10 * 60 * 1_000,
+            event_retention_ms: 15 * 60 * 1_000,
+            tool_wait_ms: 2 * 60 * 1_000,
+            max_output_tokens: 4_096,
+        }
+    }
+}
+
 /// Runtime configuration. Everything is supplied by environment variables so
 /// the production artifact has exactly one configuration mechanism.
 #[derive(Clone, Debug)]
@@ -74,6 +113,8 @@ pub struct Config {
     pub database_heartbeat_stale_ms: u64,
     /// Upper bound for one WebSocket frame accepted from a client.
     pub max_frame_bytes: usize,
+    /// Optional, session-only in-page agent gateway. Disabled by default.
+    pub agent: AgentConfig,
 }
 
 impl Config {
@@ -128,6 +169,34 @@ impl Config {
             env_u64("MARKS_DB_HEARTBEAT_STALE_MS", 45_000, 2_000, 900_000)?;
         if database_heartbeat_stale_ms <= database_heartbeat_ms {
             return Err("MARKS_DB_HEARTBEAT_STALE_MS must exceed MARKS_DB_HEARTBEAT_MS".to_owned());
+        }
+        let agent_provider = match std::env::var("MARKS_AGENT_PROVIDER") {
+            Err(std::env::VarError::NotPresent) => AgentProviderKind::Disabled,
+            Ok(value) if value == "disabled" => AgentProviderKind::Disabled,
+            Ok(value) if value == "openai" => AgentProviderKind::OpenAi,
+            Ok(value) => {
+                return Err(format!(
+                    "MARKS_AGENT_PROVIDER must be disabled or openai, got {value:?}"
+                ));
+            }
+            Err(error) => return Err(format!("cannot read MARKS_AGENT_PROVIDER: {error}")),
+        };
+        let openai_api_key_file = std::env::var("MARKS_OPENAI_API_KEY_FILE")
+            .ok()
+            .map(PathBuf::from);
+        let openai_model = std::env::var("MARKS_OPENAI_MODEL").ok();
+        if agent_provider == AgentProviderKind::OpenAi {
+            if openai_api_key_file.is_none() {
+                return Err(
+                    "MARKS_OPENAI_API_KEY_FILE is required when MARKS_AGENT_PROVIDER=openai".into(),
+                );
+            }
+            let Some(model) = openai_model.as_deref() else {
+                return Err(
+                    "MARKS_OPENAI_MODEL is required when MARKS_AGENT_PROVIDER=openai".into(),
+                );
+            };
+            validate_model_name(model)?;
         }
         Ok(Self {
             listen,
@@ -185,6 +254,38 @@ impl Config {
             database_heartbeat_ms,
             database_heartbeat_stale_ms,
             max_frame_bytes: crate::engine_profile::get()?.max_frame_bytes,
+            agent: AgentConfig {
+                provider: agent_provider,
+                openai_api_key_file,
+                openai_model,
+                max_concurrent_runs: env_usize("MARKS_AGENT_MAX_CONCURRENT_RUNS", 8, 1, 64)?,
+                max_concurrent_runs_per_session: env_usize(
+                    "MARKS_AGENT_MAX_RUNS_PER_SESSION",
+                    2,
+                    1,
+                    8,
+                )?,
+                max_runs_per_hour: env_u32("MARKS_AGENT_MAX_RUNS_PER_HOUR", 30, 1, 1_000)?,
+                max_runtime_ms: env_u64(
+                    "MARKS_AGENT_MAX_RUNTIME_MS",
+                    10 * 60 * 1_000,
+                    5_000,
+                    30 * 60 * 1_000,
+                )?,
+                event_retention_ms: env_u64(
+                    "MARKS_AGENT_EVENT_RETENTION_MS",
+                    15 * 60 * 1_000,
+                    60_000,
+                    24 * 60 * 60 * 1_000,
+                )?,
+                tool_wait_ms: env_u64(
+                    "MARKS_AGENT_TOOL_WAIT_MS",
+                    2 * 60 * 1_000,
+                    5_000,
+                    10 * 60 * 1_000,
+                )?,
+                max_output_tokens: env_u32("MARKS_AGENT_MAX_OUTPUT_TOKENS", 4_096, 128, 32_768)?,
+            },
         })
     }
 }
@@ -220,6 +321,18 @@ fn validate_origin(origin: &str) -> Result<(), String> {
         return Err(format!(
             "MARKS_ORIGIN must be a bare origin, got {origin:?}"
         ));
+    }
+    Ok(())
+}
+
+fn validate_model_name(model: &str) -> Result<(), String> {
+    if model.is_empty()
+        || model.len() > 128
+        || !model
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+    {
+        return Err("MARKS_OPENAI_MODEL is invalid".to_owned());
     }
     Ok(())
 }

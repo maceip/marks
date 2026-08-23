@@ -508,4 +508,68 @@ const MIGRATIONS: &[(i64, &str)] = &[
         ON document_assets(document_id, created_at ASC);
     ",
     ),
+    (
+        10,
+        "
+    -- Agent runs are session-owned, document-authorized, and exactly
+    -- idempotent. Events are a bounded semantic journal so an SSE reconnect
+    -- and a process restart can replay the same terminal receipt.
+    CREATE TABLE agent_runs (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id),
+        principal_id TEXT NOT NULL REFERENCES principals(id),
+        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        request_id TEXT NOT NULL,
+        request_hash BLOB NOT NULL CHECK(length(request_hash) = 32),
+        provider TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN (
+            'queued', 'running', 'waiting_for_tool',
+            'completed', 'failed', 'cancelled'
+        )),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        terminal_code TEXT,
+        output_text TEXT,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(session_id, request_id)
+    );
+    CREATE INDEX agent_runs_by_session
+        ON agent_runs(session_id, created_at DESC);
+    CREATE INDEX agent_runs_by_expiry
+        ON agent_runs(expires_at);
+
+    CREATE TABLE agent_events (
+        run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+        sequence INTEGER NOT NULL CHECK(sequence > 0),
+        kind TEXT NOT NULL,
+        data_json TEXT NOT NULL,
+        bytes INTEGER NOT NULL CHECK(bytes >= 0),
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY(run_id, sequence)
+    );
+
+    CREATE TABLE agent_tool_receipts (
+        run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+        call_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        request_hash BLOB NOT NULL CHECK(length(request_hash) = 32),
+        status TEXT NOT NULL CHECK(status IN ('succeeded', 'failed', 'cancelled')),
+        output_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY(run_id, call_id),
+        UNIQUE(run_id, request_id)
+    );
+
+    CREATE TABLE agent_usage_daily (
+        principal_id TEXT NOT NULL REFERENCES principals(id),
+        day INTEGER NOT NULL,
+        run_count INTEGER NOT NULL DEFAULT 0,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY(principal_id, day)
+    );
+    ",
+    ),
 ];

@@ -25,10 +25,20 @@ cargo run -p marks-server
 | `MARKS_STATIC_DIR` | unset | Built browser client to serve with an SPA fallback |
 | `MARKS_EVT_ENABLED` | off | Feature flag for the experimental Chrome EVT rail |
 | `MARKS_EVT_LOCATOR_KEY` | — | Hex HMAC key (≥32 bytes) for verified-email locators; required when EVT is on |
+| `MARKS_AGENT_PROVIDER` | `disabled` | Optional in-page planner: `disabled` or `openai` |
+| `MARKS_OPENAI_API_KEY_FILE` | — | OpenAI key file (regular file, ≤16 KiB, mode `0600` or stricter); required with the OpenAI provider |
+| `MARKS_OPENAI_MODEL` | — | Server-owned OpenAI model identifier; required with the OpenAI provider |
 
 The EVT redeem endpoint additionally refuses to run without a trusted issuer
 adapter; `MARKS_EVT_INSECURE_TEST_ADAPTER=1` enables the test-only shim that
 integration tests use to exercise the transaction path.
+
+The optional agent gateway is disabled unless all three provider settings are
+explicitly configured. The browser cannot provide or override the key, model,
+or endpoint and does not send Markdown source to the planner. Admission,
+timeouts, event retention, and output ceilings have additional bounded
+`MARKS_AGENT_*` variables documented in
+[`RIBBON-PRACTICAL-INTERFACES.md`](../../docs/RIBBON-PRACTICAL-INTERFACES.md).
 
 Production on `marks.secure.build` is documented in [`deploy/`](../../deploy/).
 
@@ -51,6 +61,12 @@ document's authorization epoch so live sockets re-resolve or close.
 
 Unknown, deleted, and unauthorized documents are one indistinguishable 404.
 Authentication failures are one indistinguishable 401.
+
+The session-only agent surface is `GET /v1/agent/capabilities`,
+`POST /v1/agent/runs`, `GET /v1/agent/runs/{id}/events`,
+`POST /v1/agent/runs/{id}/tool-results`, and
+`DELETE /v1/agent/runs/{id}`. Mutations use the existing exact-origin and CSRF
+guards; run creation also performs the existing document read-ACL check.
 
 ## Rooms
 
@@ -77,7 +93,9 @@ One SQLite database owns ordered migrations for the protocol schema
 (principals, scratch workspaces, pending devices, devices, controllers,
 sessions, pairings, challenges, locators, documents, ACLs, link grants,
 replica sites, tickets, the update journal, and the `op_authors` authorship
-sidecar). Documents keep a compacted full snapshot plus every journaled update
+sidecar). Migration 10 additionally owns bounded agent run/event/tool-receipt
+metadata when the optional gateway is used; it stores no Markdown or tool
+arguments. Documents keep a compacted full snapshot plus every journaled update
 above it; rooms rehydrate by replaying exactly those bytes.
 
 ## Tests

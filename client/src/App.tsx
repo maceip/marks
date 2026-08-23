@@ -980,7 +980,7 @@ export function App() {
 
       {route.name === 'document' && session && !focusMode && (
         <Suspense fallback={null}>
-          <AgentPill />
+          <AgentPill documentId={route.id} />
         </Suspense>
       )}
 
