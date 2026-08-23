@@ -1,3 +1,6 @@
+<img width="256" src="https://github.com/user-attachments/assets/05ea452b-25a8-441e-bafc-41cf8b802c5b" />
+
+
 # marks
 
 Collaborative Markdown editing designed to stay responsive on large documents.
