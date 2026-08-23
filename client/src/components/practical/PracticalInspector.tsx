@@ -10,7 +10,7 @@ import { listLocalAssets } from '../../data/assets.ts';
 import { documentRepository } from '../../data/documents.ts';
 import { reviewRepository, type DocumentVersion } from '../../data/review.ts';
 import { readLocalDocumentText } from '../../demo/workspace.ts';
-import { applySourceFix, findingCounts } from '../../intelligence/analyze.ts';
+import { analyzeDocument, applySourceFix, findingCounts } from '../../intelligence/analyze.ts';
 import { updateFrontMatter, type FrontMatterPatch } from '../../intelligence/frontmatter.ts';
 import {
   crossDocumentBlock,
@@ -35,7 +35,7 @@ import { formatBytes } from '../../lib/format.ts';
 import type { DocumentAssetDto, DocumentMeta, ExternalLinkCheckDto } from '../../lib/api.ts';
 import { loadServiceApi } from '../../lib/service-api.ts';
 import { UI_DATA_MODE } from '../../lib/product.ts';
-import { PRACTICAL_SURFACES } from '../../lib/practical.ts';
+import { PRACTICAL_SURFACES } from '../../lib/practical-surfaces.ts';
 import type { Shell } from '../../lib/posture.ts';
 import type { ViewMode } from '../shell/TopBar.tsx';
 import { Glyph } from '../glyphs/Glyph.tsx';
@@ -831,7 +831,7 @@ function BlocksSurface({
     const load = UI_DATA_MODE === 'service'
       ? loadServiceApi().then((api) => api.downloadDocumentMarkdown(documentId))
       : Promise.resolve(readLocalDocumentText(documentId));
-    void load.then((text) => import('../../intelligence/analyze.ts').then(({ analyzeDocument }) => analyzeDocument(text).headings.map((item) => item.text))).then((items) => { if (active) setTargetHeadings(items); }).catch(() => { if (active) { setTargetHeadings([]); onNotify('Target unavailable', 'The selected document cannot be read by this workspace.', 'danger'); } });
+    void load.then((text) => analyzeDocument(text).headings.map((item) => item.text)).then((items) => { if (active) setTargetHeadings(items); }).catch(() => { if (active) { setTargetHeadings([]); onNotify('Target unavailable', 'The selected document cannot be read by this workspace.', 'danger'); } });
     return () => { active = false; };
   }, [documentId, onNotify]);
   return (

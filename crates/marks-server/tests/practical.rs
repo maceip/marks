@@ -7,11 +7,7 @@ mod common;
 use common::{Principal, TestServer, create_principal, temp_db};
 use serde_json::{Value, json};
 
-async fn create_document(
-    base: &str,
-    http: &reqwest::Client,
-    owner: &Principal,
-) -> String {
+async fn create_document(base: &str, http: &reqwest::Client, owner: &Principal) -> String {
     let response = http
         .post(format!("{base}/v1/documents"))
         .header("Cookie", &owner.cookie)
@@ -116,7 +112,8 @@ async fn link_checker_is_bounded_and_refuses_non_public_destinations_without_fet
             .as_array()
             .unwrap()
             .iter()
-            .all(|item| item["status"] == "blocked")
+            .all(|item| item["status"] == "blocked"),
+        "unexpected link-check result: {body}"
     );
 
     let too_many = (0..33)
@@ -134,9 +131,7 @@ async fn link_checker_is_bounded_and_refuses_non_public_destinations_without_fet
     assert_eq!(bounded.status(), 400);
 
     let malformed_doi = http
-        .post(format!(
-            "{base}/v1/documents/{document_id}/citation-lookup"
-        ))
+        .post(format!("{base}/v1/documents/{document_id}/citation-lookup"))
         .header("Cookie", &owner.cookie)
         .header("Origin", &base)
         .header("X-Marks-CSRF", &owner.csrf)

@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   PRACTICAL_ACTIONS,
-  PRACTICAL_SURFACES,
   practicalCapabilityForAction,
 } from './practical.ts';
+import { PRACTICAL_SURFACES } from './practical-surfaces.ts';
 import { UI_ACTIONS } from './ui-actions.ts';
 
 test('all eighteen practical capabilities have a unique ribbon action and inspector destination', () => {

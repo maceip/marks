@@ -80,10 +80,13 @@ pub async fn check_links(
         }
         urls.push(raw);
     }
-    let checks = stream::iter(urls.into_iter().map(|url| async move { check_url(url).await }))
-        .buffer_unordered(4)
-        .collect::<Vec<_>>()
-        .await;
+    let checks = stream::iter(
+        urls.into_iter()
+            .map(|url| async move { check_url(url).await }),
+    )
+    .buffer_unordered(4)
+    .collect::<Vec<_>>()
+    .await;
     Ok(Json(json!({ "checks": checks })).into_response())
 }
 
@@ -95,8 +98,8 @@ pub async fn citation_lookup(
 ) -> ApiResult<Response> {
     let _ = authorize_lookup(&app, &headers, id)?;
     let doi = normalize_doi(&body.doi).ok_or_else(|| ApiError::bad_request("invalid DOI"))?;
-    let mut url = Url::parse("https://api.crossref.org/works/")
-        .map_err(|_| ApiError::internal())?;
+    let mut url =
+        Url::parse("https://api.crossref.org/works/").map_err(|_| ApiError::internal())?;
     url.path_segments_mut()
         .map_err(|_| ApiError::internal())?
         .push(&doi);
@@ -144,7 +147,11 @@ pub async fn citation_lookup(
         .filter_map(|author| {
             let given = author.get("given").and_then(Value::as_str).unwrap_or("");
             let family = author.get("family").and_then(Value::as_str).unwrap_or("");
-            let name = format!("{given} {family}").trim().chars().take(200).collect::<String>();
+            let name = format!("{given} {family}")
+                .trim()
+                .chars()
+                .take(200)
+                .collect::<String>();
             (!name.is_empty()).then_some(name)
         })
         .collect::<Vec<_>>();
@@ -173,7 +180,10 @@ pub async fn citation_lookup(
     let citation = format!(
         "{author_text}. “{title}.” {}{} https://doi.org/{doi}.",
         publisher,
-        published.as_deref().map(|year| format!(", {year}.")).unwrap_or_default(),
+        published
+            .as_deref()
+            .map(|year| format!(", {year}."))
+            .unwrap_or_default(),
     )
     .replace("  ", " ");
     Ok(Json(json!({
@@ -191,19 +201,27 @@ pub async fn citation_lookup(
 }
 
 async fn bounded_json(response: reqwest::Response, limit: usize) -> ApiResult<Value> {
-    if response.content_length().is_some_and(|length| length > limit as u64) {
-        return Err(ApiError::unavailable("citation provider response is too large"));
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
+    {
+        return Err(ApiError::unavailable(
+            "citation provider response is too large",
+        ));
     }
     let mut body = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|_| ApiError::unavailable("citation provider unavailable"))?;
         if body.len().saturating_add(chunk.len()) > limit {
-            return Err(ApiError::unavailable("citation provider response is too large"));
+            return Err(ApiError::unavailable(
+                "citation provider response is too large",
+            ));
         }
         body.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&body).map_err(|_| ApiError::unavailable("citation provider response is invalid"))
+    serde_json::from_slice(&body)
+        .map_err(|_| ApiError::unavailable("citation provider response is invalid"))
 }
 
 fn normalize_doi(raw: &str) -> Option<String> {
@@ -236,7 +254,11 @@ async fn check_url(raw: String) -> Value {
             let state = if status == StatusCode::NOT_FOUND || status == StatusCode::GONE {
                 "missing"
             } else if status.is_success() || status.is_redirection() {
-                if redirected { "redirected" } else { "reachable" }
+                if redirected {
+                    "redirected"
+                } else {
+                    "reachable"
+                }
             } else {
                 "unavailable"
             };
@@ -248,8 +270,12 @@ async fn check_url(raw: String) -> Value {
                 "checkedAtMs": checked_at,
             })
         }
-        Err(CheckError::Blocked) => json!({ "url": raw, "status": "blocked", "httpStatus": null, "finalUrl": null, "checkedAtMs": checked_at }),
-        Err(CheckError::Unavailable) => json!({ "url": raw, "status": "unavailable", "httpStatus": null, "finalUrl": null, "checkedAtMs": checked_at }),
+        Err(CheckError::Blocked) => {
+            json!({ "url": raw, "status": "blocked", "httpStatus": null, "finalUrl": null, "checkedAtMs": checked_at })
+        }
+        Err(CheckError::Unavailable) => {
+            json!({ "url": raw, "status": "unavailable", "httpStatus": null, "finalUrl": null, "checkedAtMs": checked_at })
+        }
     }
 }
 
@@ -279,7 +305,11 @@ async fn follow_url(raw: &str) -> Result<(StatusCode, String, bool), CheckError>
             .get(reqwest::header::LOCATION)
             .and_then(|value| value.to_str().ok())
             .ok_or(CheckError::Unavailable)?;
-        url = parse_public_url(url.join(location).map_err(|_| CheckError::Blocked)?.as_str())?;
+        url = parse_public_url(
+            url.join(location)
+                .map_err(|_| CheckError::Blocked)?
+                .as_str(),
+        )?;
         redirected = true;
     }
     Err(CheckError::Unavailable)
@@ -304,25 +334,42 @@ fn parse_public_url(raw: &str) -> Result<Url, CheckError> {
 async fn pinned_request(url: &Url, head: bool) -> Result<reqwest::Response, CheckError> {
     let host = url.host_str().ok_or(CheckError::Blocked)?;
     let port = url.port_or_known_default().ok_or(CheckError::Blocked)?;
-    let addresses = tokio::net::lookup_host((host, port))
-        .await
-        .map_err(|_| CheckError::Unavailable)?
-        .collect::<Vec<_>>();
-    let address = addresses
-        .into_iter()
-        .find(|address| public_ip(address.ip()))
-        .ok_or(CheckError::Blocked)?;
-    let client = Client::builder()
+    let literal_ip = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host)
+        .parse::<IpAddr>()
+        .ok();
+    let address = match literal_ip {
+        Some(address) if public_ip(address) => SocketAddr::new(address, port),
+        Some(_) => return Err(CheckError::Blocked),
+        None => tokio::net::lookup_host((host, port))
+            .await
+            .map_err(|_| CheckError::Unavailable)?
+            .find(|address| public_ip(address.ip()))
+            .ok_or(CheckError::Blocked)?,
+    };
+    let mut client = Client::builder()
         .redirect(Policy::none())
         .no_proxy()
-        .resolve(host, SocketAddr::new(address.ip(), port))
         .connect_timeout(Duration::from_secs(4))
-        .timeout(Duration::from_secs(8))
-        .build()
-        .map_err(|_| CheckError::Unavailable)?;
-    let request = if head { client.head(url.clone()) } else { client.get(url.clone()).header(reqwest::header::RANGE, "bytes=0-0") };
+        .timeout(Duration::from_secs(8));
+    if literal_ip.is_none() {
+        client = client.resolve(host, address);
+    }
+    let client = client.build().map_err(|_| CheckError::Unavailable)?;
+    let request = if head {
+        client.head(url.clone())
+    } else {
+        client
+            .get(url.clone())
+            .header(reqwest::header::RANGE, "bytes=0-0")
+    };
     request
-        .header(reqwest::header::ACCEPT, "text/html,application/xhtml+xml;q=0.8,*/*;q=0.1")
+        .header(
+            reqwest::header::ACCEPT,
+            "text/html,application/xhtml+xml;q=0.8,*/*;q=0.1",
+        )
         .header(reqwest::header::USER_AGENT, "Marks-Link-Inspector/0.1")
         .send()
         .await
@@ -382,7 +429,23 @@ mod tests {
 
     #[test]
     fn private_and_documentation_networks_are_not_public() {
-        for address in ["127.0.0.1", "10.0.0.1", "100.64.1.1", "169.254.1.1", "192.0.2.1", "198.51.100.4", "203.0.113.9", "::1", "fd00::1", "fe80::1", "64:ff9b::7f00:1", "2001::1", "2001:10::1", "2001:db8::1", "2002:7f00:1::"] {
+        for address in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "100.64.1.1",
+            "169.254.1.1",
+            "192.0.2.1",
+            "198.51.100.4",
+            "203.0.113.9",
+            "::1",
+            "fd00::1",
+            "fe80::1",
+            "64:ff9b::7f00:1",
+            "2001::1",
+            "2001:10::1",
+            "2001:db8::1",
+            "2002:7f00:1::",
+        ] {
             assert!(!public_ip(address.parse().unwrap()), "{address}");
         }
         assert!(public_ip("1.1.1.1".parse().unwrap()));
@@ -391,7 +454,10 @@ mod tests {
 
     #[test]
     fn doi_normalization_is_narrow() {
-        assert_eq!(normalize_doi("https://doi.org/10.1000/example."), Some("10.1000/example".into()));
+        assert_eq!(
+            normalize_doi("https://doi.org/10.1000/example."),
+            Some("10.1000/example".into())
+        );
         assert_eq!(normalize_doi("http://127.0.0.1/no"), None);
         assert_eq!(normalize_doi("10.x/no"), None);
     }

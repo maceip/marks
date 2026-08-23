@@ -37,7 +37,7 @@ interface LineRecord {
   code: boolean;
 }
 
-function scanLines(text: string): LineRecord[] {
+function scanLines(text: string, markdownFrom = 0): LineRecord[] {
   const records: LineRecord[] = [];
   let from = 0;
   let line = 1;
@@ -46,8 +46,9 @@ function scanLines(text: string): LineRecord[] {
     const newline = text.indexOf('\n', from);
     const to = newline < 0 ? text.length : newline;
     const value = text.slice(from, to).replace(/\r$/, '');
-    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(value);
-    const wasCode = fence !== null;
+    const bodyLine = from >= markdownFrom;
+    const marker = bodyLine ? /^ {0,3}(`{3,}|~{3,})/.exec(value) : null;
+    const wasCode = bodyLine && fence !== null;
     if (marker) {
       const kind = marker[1][0] as '`' | '~';
       if (!fence) fence = { marker: kind, length: marker[1].length };
@@ -170,8 +171,8 @@ function decodedAnchor(value: string): string {
 export function analyzeDocument(markdown: string, revision = 0): DocumentIntelligence {
   const truncated = markdown.length > MAX_ANALYZED_CHARS;
   const text = truncated ? markdown.slice(0, MAX_ANALYZED_CHARS) : markdown;
-  const lines = scanLines(text);
   const frontMatter = inspectFrontMatter(text);
+  const lines = scanLines(text, frontMatter.bodyFrom);
   const headings: IntelligenceHeading[] = [];
   const links: IntelligenceLink[] = [];
   const images: IntelligenceImage[] = [];
@@ -220,14 +221,15 @@ export function analyzeDocument(markdown: string, revision = 0): DocumentIntelli
 
   for (const line of lines) {
     const value = line.text;
-    const fence = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(value);
+    const bodyLine = line.from >= frontMatter.bodyFrom;
+    const fence = bodyLine ? /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(value) : null;
     if (fence) {
       if (!openFence) openFence = { line, marker: fence[1] };
       else if (openFence.marker[0] === fence[1][0] && fence[1].length >= openFence.marker.length) openFence = null;
       continue;
     }
 
-    if (!line.code) {
+    if (bodyLine && !line.code) {
       const heading = /^( {0,3})(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$/.exec(value);
       if (heading && headings.length < MAX_ITEMS) {
         const textValue = heading[3].trim();
@@ -537,7 +539,7 @@ export function analyzeDocument(markdown: string, revision = 0): DocumentIntelli
     addFinding('quality', 'warning', 'quality.reading-grade', 'Reading level exceeds the contract', `Estimated grade ${metrics.estimatedGrade.toFixed(1)} is above the target of ${quality.readingGrade}.`);
   }
   const longSentence = lines.find((line) => {
-    if (line.code) return false;
+    if (line.code || line.from < frontMatter.bodyFrom) return false;
     return stripMarkdownForReading(line.text).split(/\s+/).filter(Boolean).length > quality.maxSentenceWords;
   });
   if (longSentence) {

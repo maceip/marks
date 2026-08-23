@@ -186,7 +186,7 @@ export function lineDiff(before: string, after: string): LineDiffChunk[] {
       pushChunk(chunks, 'equal', left[i]);
       i += 1;
       j += 1;
-    } else if (j < right.length && (i >= left.length || rows[i][j + 1] >= rows[i + 1][j])) {
+    } else if (j < right.length && (i >= left.length || rows[i][j + 1] > rows[i + 1][j])) {
       pushChunk(chunks, 'added', right[j]);
       j += 1;
     } else {

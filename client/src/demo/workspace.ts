@@ -1,4 +1,4 @@
-import { ABOUT_DOCUMENT, ABOUT_DOCUMENT_ID, ABOUT_DOCUMENT_TITLE } from '../content/about';
+import { ABOUT_DOCUMENT, ABOUT_DOCUMENT_ID, ABOUT_DOCUMENT_TITLE } from '../content/about.ts';
 import type { DocumentMeta } from '../lib/api';
 
 export { ABOUT_DOCUMENT_ID, ABOUT_DOCUMENT_TITLE };

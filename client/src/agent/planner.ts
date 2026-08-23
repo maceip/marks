@@ -55,7 +55,7 @@ const PATTERNS: Pattern[] = [
   { commandId: 'tools.front-matter', expressions: [/\b(?:open|edit|show).*(?:front ?matter|document schema|metadata)\b/i], reason: 'Open portable front matter and schema.' },
   { commandId: 'document.publish-profile', expressions: [/\b(?:publish|publishing) (?:profile|settings|intent)\b/i, /\b(?:export|compile).*(?:web|readme|slides?)\b/i], reason: 'Open publish profiles.' },
   { commandId: 'review.link-intelligence', expressions: [/\b(?:check|audit|inspect|show).*(?:broken )?links?\b/i], reason: 'Open link intelligence.' },
-  { commandId: 'review.citation-ledger', expressions: [/\b(?:check|audit|show|insert).*(?:citations?|sources?|doi|footnotes?)\b/i], reason: 'Open the citation and source ledger.' },
+  { commandId: 'review.citation-ledger', expressions: [/\b(?:check|audit|show|insert|open).*(?:citations?|sources|source (?:ledger|records?)|doi|footnotes?)\b/i], reason: 'Open the citation and source ledger.' },
   { commandId: 'tools.structure', expressions: [/\b(?:refactor|reorganize|inspect|change).*(?:structure|sections?|headings?)\b/i], reason: 'Open structural refactoring.' },
   { commandId: 'review.collaboration-console', expressions: [/\b(?:show|inspect|open).*(?:collaborators?|peers?|who is here|collaboration)\b/i], reason: 'Open live collaboration state.' },
   { commandId: 'document.recovery', expressions: [/\b(?:recovery|checkpoint|durability|savedness|is (?:this|it) saved)\b/i], reason: 'Open durability and recovery.' },

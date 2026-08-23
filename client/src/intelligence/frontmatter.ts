@@ -109,7 +109,6 @@ function parseYaml(source: string): { document: Document<Node, true>; errors: st
   const document = parseDocument(source, {
     strict: true,
     uniqueKeys: true,
-    maxAliasCount: 20,
     prettyErrors: false,
   }) as Document<Node, true>;
   const errors = document.errors.map((error) => error.message.split('\n')[0].slice(0, 240));
