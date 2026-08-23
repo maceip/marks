@@ -171,7 +171,7 @@ export function Sidebar({
             Benchmark
           </button>
           <a href="/d/about-marks" onClick={(event) => { event.preventDefault(); onOpenAbout(); }}>
-            About marks
+            Google Docs for Markdown
           </a>
         </div>
       </aside>

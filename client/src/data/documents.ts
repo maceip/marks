@@ -1,3 +1,4 @@
+import { aboutDocumentMeta, isAboutDocument } from '../content/about';
 import {
   createLocalDocument,
   deleteLocalDocument,
@@ -5,6 +6,7 @@ import {
   getLocalDocument,
   loadLocalDocuments,
   renameLocalDocument,
+  seedAboutDocumentText,
   WORKSPACE_EVENT,
   type LocalDocumentDraft,
 } from '../demo/workspace';
@@ -70,9 +72,15 @@ function createDocumentRepository(): DocumentRepository {
     mode: 'service',
     async list() {
       const { documents } = await listDocuments();
-      return documents;
+      seedAboutDocumentText();
+      const about = aboutDocumentMeta();
+      return [about, ...documents.filter((document) => !isAboutDocument(document.id))];
     },
     async get(id) {
+      if (isAboutDocument(id)) {
+        seedAboutDocumentText();
+        return aboutDocumentMeta();
+      }
       try {
         const { document } = await getDocument(id);
         return document;

@@ -216,8 +216,13 @@ function seedWorkspace(): DocumentMeta[] {
   return documents;
 }
 
-function ensureAboutDocument(documents: DocumentMeta[]): DocumentMeta[] {
+/** Write the canonical marketing Markdown without seeding the local catalog. */
+export function seedAboutDocumentText(): void {
   localStorage.setItem(textKey(ABOUT_DOCUMENT_ID), ABOUT_DOCUMENT);
+}
+
+function ensureAboutDocument(documents: DocumentMeta[]): DocumentMeta[] {
+  seedAboutDocumentText();
   const existing = documents.find((document) => document.id === ABOUT_DOCUMENT_ID);
   if (existing) {
     if (existing.title === ABOUT_DOCUMENT_TITLE && existing.chars === ABOUT_DOCUMENT.length) {

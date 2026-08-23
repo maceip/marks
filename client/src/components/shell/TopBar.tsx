@@ -210,7 +210,7 @@ export function TopBar(props: TopBarProps) {
                 <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('logout'); }}><Icon path={icons.close} /> Sign out</button>
                 <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('preferences'); }}><Icon path={icons.settings} /> Appearance</button>
                 <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('benchmark'); }}><Icon path={icons.gauge} /> Performance</button>
-                <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('about'); }}><Icon path={icons.bolt} /> About marks</button>
+                <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('about'); }}><Icon path={icons.bolt} /> Google Docs for Markdown</button>
               </div>
             )}
           </div>

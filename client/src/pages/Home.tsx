@@ -111,7 +111,7 @@ export function Home({
       <footer className="home-footer-card">
         <span><Icon path={icons.check} size={14} /> <strong>UI prototype mode</strong> · real local persistence, replaceable data adapters</span>
         <div className="home-footer-actions">
-          <button type="button" onClick={() => onOpen(ABOUT_DOCUMENT_ID)}>About Marks</button>
+          <button type="button" onClick={() => onOpen(ABOUT_DOCUMENT_ID)}>Google Docs for Markdown</button>
           <button type="button" onClick={onOpenPreferences}><Icon path={icons.settings} size={14} /> Appearance</button>
         </div>
       </footer>

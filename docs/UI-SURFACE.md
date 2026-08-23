@@ -21,7 +21,8 @@ Marks has one web application implementation:
   `identity/` for keep-workspace and account sheets, `glyphs/` for 3D command
   icons, and `ui/` for shared primitives.
 - `client/src/content/` owns canonical documents that are themselves product
-  surfaces. About Marks lives here and opens in the real editor.
+  surfaces. The marketing page (`Google Docs for Markdown`) lives here as
+  Markdown and opens in the real editor.
 - `client/src/styles/` owns the single token and component-style stack.
 - `client/index.html` is the application entry.
 
@@ -68,7 +69,7 @@ directional references, not source code or pixel-exact specifications.
 | Workspace home | `/` | App shell, local catalog, and home CSS only | `App` + `pages/Home` |
 | Document | `/d/:id` | Session, CodeMirror, workspace, preview, and review overlays load on demand | `App` + `TopBar` + `components/workspace` |
 | Benchmark | `/bench` | Benchmark view, CSS, and worker load only on this route | `pages/Benchmark` |
-| About / welcome | `/welcome/` → `/d/about-marks` | Tiny HTML bounce, then the real document editor | `content/about.ts` + document chrome |
+| About / welcome | `/welcome/` → `/d/about-marks` | Tiny HTML bounce, then the real document editor showing the Markdown marketing page | `content/about.ts` + document chrome |
 
 The welcome URL exists so a public deployment can keep a stable marketing
 address. The page people read is a Marks document: source, preview, ribbon,
