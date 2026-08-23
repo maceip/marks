@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { fetchSession, listDevices, logout, revokeDevice, type DeviceInventory, type SessionInfo } from '../../auth/identity';
+import { storagePersisted } from '../../auth/durable-storage';
 import { keys } from 'idb-keyval';
 import { LOGOUT_LOCAL_LINE, RETURN_VISIT_STEPS, REVOKE_LOCAL_LINE, ROLE_COPY, SCRATCH_HONEST_LINE } from '../../lib/identity-copy';
 import { UI_DATA_MODE } from '../../lib/product';
@@ -15,6 +16,7 @@ interface AccountSheetProps {
 export function AccountSheet({ onNotify, onKeep, onSignedOut }: AccountSheetProps) {
   const service = UI_DATA_MODE === 'service';
   const [deviceKeyPresent, setDeviceKeyPresent] = useState(false);
+  const [persisted, setPersisted] = useState(false);
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [inventory, setInventory] = useState<DeviceInventory | null>(null);
 
@@ -22,6 +24,7 @@ export function AccountSheet({ onNotify, onKeep, onSignedOut }: AccountSheetProp
     void keys().then((stored) => {
       setDeviceKeyPresent(stored.some((key) => String(key).startsWith('marks.auth.device-key.v1.')));
     });
+    void storagePersisted().then(setPersisted);
   }, []);
 
   useEffect(() => {
@@ -125,6 +128,14 @@ export function AccountSheet({ onNotify, onKeep, onSignedOut }: AccountSheetProp
                 </small>
               </li>
             )}
+          <li>
+            <strong>{persisted ? 'Storage is protected' : 'Storage is best-effort'}</strong>
+            <small>
+              {persisted
+                ? 'This browser granted persistent storage: the device key is exempt from automatic eviction.'
+                : 'The browser may evict this origin’s storage when unused. Keeping a workspace requests persistence; installing the app strengthens the grant.'}
+            </small>
+          </li>
         </ul>
       </section>
 
@@ -158,7 +169,12 @@ export function AccountSheet({ onNotify, onKeep, onSignedOut }: AccountSheetProp
                 .map((entry) => (
                   <li key={entry.sessionId}>
                     <strong>{entry.sessionId === session?.sessionId ? 'This tab' : 'Another session'}</strong>
-                    <small>CSRF for logout and revoke stays in memory. It is not persisted.</small>
+                    <small>
+                      {entry.deviceBound
+                        ? 'Bound to a hardware key (DBSC): stolen cookies expire against the device. '
+                        : ''}
+                      CSRF for logout and revoke stays in memory. It is not persisted.
+                    </small>
                   </li>
                 ))
             : (

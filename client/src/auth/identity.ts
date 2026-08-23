@@ -8,6 +8,7 @@ import {
   signSelfBootstrap,
 } from './device-key.ts';
 import { markController, markDeviceEnrolled } from './active-device.ts';
+import { requestDurableStorage } from './durable-storage.ts';
 import { bindPendingDevice } from './pending-device.ts';
 import {
   DEVICE_CAPABILITIES_MEMBER,
@@ -60,6 +61,7 @@ export interface DeviceInventory {
     createdAtMs: number;
     expiresAtMs: number;
     revokedAtMs: number | null;
+    deviceBound: boolean;
   }>;
 }
 
@@ -199,6 +201,7 @@ export async function bootstrapPairing(
   cacheSession(session);
   setActiveCaller({ kind: 'session' });
   await markController(controllerId, deviceId);
+  void requestDurableStorage();
   return session;
 }
 
@@ -252,6 +255,7 @@ export async function selfBootstrap(): Promise<SessionInfo> {
   setActiveCaller({ kind: 'session' });
   clearScratchCredential(sessionStorage);
   await markController(controllerId, key.deviceId);
+  void requestDurableStorage();
   return session;
 }
 
@@ -327,6 +331,7 @@ export async function finalizePairing(pairingId: string): Promise<SessionInfo | 
     cacheSession(session);
     setActiveCaller({ kind: 'session' });
     await markDeviceEnrolled(session.deviceId);
+    void requestDurableStorage();
     return session;
   }
   if (response.status === 401 || response.status === 409) {

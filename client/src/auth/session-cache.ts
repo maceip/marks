@@ -3,6 +3,8 @@ export interface SessionInfo {
   deviceId: string;
   sessionId: string;
   csrf: string;
+  /** DBSC: the session is bound to a browser-managed hardware key. */
+  deviceBound: boolean;
 }
 
 let cached: SessionInfo | null = null;
@@ -35,5 +37,6 @@ export function sessionFromUnknown(body: unknown): SessionInfo | null {
     deviceId: record.deviceId,
     sessionId: record.sessionId,
     csrf: record.csrf,
+    deviceBound: record.deviceBound === true,
   };
 }

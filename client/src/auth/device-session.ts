@@ -1,5 +1,6 @@
 import { loadActiveDevice, markDeviceEnrolled } from './active-device.ts';
 import { loadDeviceKey, signDeviceSessionProof } from './device-key.ts';
+import { requestDurableStorage } from './durable-storage.ts';
 import { decodeBase64Url, encodeBase64Url } from './protocol.ts';
 import { cacheSession, sessionFromUnknown, type SessionInfo } from './session-cache.ts';
 
@@ -72,5 +73,6 @@ export async function redeemEnrolledDevice(
   if (!session) return null;
   cacheSession(session);
   await markDeviceEnrolled(session.deviceId);
+  void requestDurableStorage();
   return session;
 }
