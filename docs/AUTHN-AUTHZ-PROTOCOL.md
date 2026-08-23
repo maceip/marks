@@ -445,9 +445,20 @@ The cookie wire form is:
 __Host-marks_session=<sessionId>.<base64url-256-bit-secret>
 ```
 
-Attributes are `Secure; HttpOnly; SameSite=Lax; Path=/` with no `Domain`.
-Production never accepts it over HTTP. The database stores the secret digest,
-principal ID, device ID, creation/rotation/expiry times, and revocation time.
+Attributes are `Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=<session TTL>`
+with no `Domain`. Production never accepts it over HTTP. The database stores
+the secret digest, principal ID, device ID, creation/rotation/expiry times,
+and revocation time.
+
+The explicit `Max-Age` matters twice. Without it the cookie is a
+browser-session cookie that can vanish on browser exit while the server row
+is still live. And because the cookie is server-set, it is exempt from
+Safari's seven-day proactive eviction of script-writable storage, so on a
+device whose IndexedDB key was evicted the cookie remains the working
+credential until its own expiry. The TTL defaults to 180 days
+(`MARKS_SESSION_TTL_DAYS`, at most 400 per browser cookie caps) and every
+rotation re-issues the cookie with a fresh lifetime, so an active device
+never lapses.
 
 The server rotates the secret after login, privilege change, recovery, and a
 bounded sliding interval. Rotation uses an overlap window only for in-flight
@@ -480,7 +491,38 @@ When the session cookie is absent but IndexedDB contains an enrolled key:
 No user gesture or WebAuthn API is involved. A challenge or signature replay
 cannot mint a second session.
 
-## 8. Authorization and document admission
+### Device Bound Session Credentials (hardware binding)
+
+On browsers that ship DBSC, the browser itself — never page JavaScript —
+maintains a hardware-held P-256 key (TPM or Secure Enclave) per registered
+session. Marks participates as follows when `MARKS_DBSC_ENABLED` is not `0`:
+
+1. Every session-issuing response carries
+   `Secure-Session-Registration: (ES256);challenge="…";path="/v1/auth/dbsc/register"`
+   plus a one-use challenge row bound to that session. Session rotation
+   repeats the invitation for sessions that never bound.
+2. A DBSC-capable browser answers at the registration endpoint with a
+   `dbsc+jwt` whose header carries the new public key as a JWK and whose
+   `jti` answers the challenge. One transaction consumes the challenge,
+   stores the key on the session row, and issues a ten-minute
+   `__Host-marks_bound` cookie alongside the session-scope configuration.
+3. When the bound cookie expires, the browser calls the refresh endpoint;
+   the server answers `403` plus `Secure-Session-Challenge`, the browser
+   re-signs with the hardware key, and the server rotates the bound cookie.
+   A dead session answers `{"continue": false}` so the browser stops.
+
+The token format is owned by the browser vendor, so unknown JWT claims are
+ignored; algorithm (`ES256`), token type, challenge digest, session binding,
+expiry, and one-use consumption are validated in `marks-auth`. Proof replay,
+key substitution, and cross-session challenges fail closed.
+
+Fallback is quiet and deliberate: browsers without DBSC never see anything
+but an ignorable response header, and request authorization never requires
+the bound cookie — `__Host-marks_session` remains the authority the guards
+check. The binding is recorded (`deviceBound` on session JSON and the device
+list) as observable defense-in-depth; requiring a live bound cookie for
+sensitive operations is a future, separately flagged enforcement step, not
+part of this protocol version.
 
 ### Role matrix
 
@@ -594,7 +636,9 @@ controllers(
 
 sessions(
   id PK, principal_id FK, device_id FK, secret_hash BINARY(32),
-  created_at, rotated_at, expires_at, revoked_at
+  created_at, rotated_at, expires_at, revoked_at,
+  dbsc_public_key_sec1 NULL, dbsc_bound_at NULL,
+  dbsc_refreshed_at NULL, dbsc_cookie_hash BINARY(32) NULL
 )
 
 pairings(
@@ -663,6 +707,8 @@ reconstruct credentials.
 | `POST /v1/auth/evt/redeem` | fresh verified evidence + scratch | Promote or recover through locator |
 | `POST /v1/auth/device/challenges` | device ID, rate limited | Create silent-login challenge |
 | `POST /v1/auth/device/redeem` | signed device proof | Issue rotating session |
+| `POST /v1/auth/dbsc/register` | session cookie + `dbsc+jwt` | Browser-called: bind a hardware key to the session |
+| `POST /v1/auth/dbsc/refresh` | session cookie + `dbsc+jwt` | Browser-called: rotate the short-lived bound cookie |
 | `GET /v1/auth/session` | session | Return principal/device/recovery state and CSRF token |
 | `DELETE /v1/auth/session` | session + CSRF | Revoke current session |
 | `GET /v1/auth/devices` | session | List controllers/devices/sessions |

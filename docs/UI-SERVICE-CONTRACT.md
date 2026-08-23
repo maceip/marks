@@ -190,13 +190,33 @@ cookie, or analytics.
   "principalId": "principal_…",
   "deviceId": "device_…",
   "sessionId": "session_…",
-  "csrf": "<b64url>"
+  "csrf": "<b64url>",
+  "deviceBound": false
 }
 ```
 
 - Response `401`: no live session. Fall through to scratch.
+- `deviceBound` reports a browser-managed DBSC hardware binding. Session
+  cookies carry an explicit `Max-Age` (180-day default TTL, refreshed on
+  rotation); the browser keeps them across restarts.
 
 Cache `csrf` in memory for logout / device revoke. Do not persist it.
+
+#### DBSC endpoints are browser-managed — the UI must not call them
+
+`POST /v1/auth/dbsc/register` and `POST /v1/auth/dbsc/refresh` exist for the
+browser's own Device Bound Session Credentials machinery, triggered by the
+`Secure-Session-Registration` response header on login. Page JavaScript never
+fetches them, never reads `__Host-marks_bound`, and never breaks when a
+browser lacks DBSC: absence of the binding changes nothing. The UI's only
+job is honest chrome — surface `deviceBound` where sessions are listed.
+
+#### Storage durability the UI does owe
+
+Call `requestDurableStorage()` (`client/src/auth/durable-storage.ts`) when a
+device becomes durable — self-bootstrap, bootstrap, finalize, silent redeem
+already do — and surface `storagePersisted()` in the Account sheet. Never
+block authentication on the grant.
 
 #### `DELETE /v1/auth/session`
 
@@ -318,7 +338,7 @@ No WebAuthn, no user-presence prompt, no password. Challenge replay is `401`.
 {
   "devices": [{ "deviceId", "capabilities", "keyEpoch", "createdAtMs", "lastUsedAtMs", "revokedAtMs" }],
   "controllers": [{ "controllerId", "deviceId", "createdAtMs", "revokedAtMs" }],
-  "sessions": [{ "sessionId", "deviceId", "createdAtMs", "expiresAtMs", "revokedAtMs" }]
+  "sessions": [{ "sessionId", "deviceId", "createdAtMs", "expiresAtMs", "revokedAtMs", "deviceBound" }]
 }
 ```
 
@@ -513,6 +533,8 @@ Use this as the frontend checklist. Server boxes are closed unless noted.
 | Pending device bind | Yes | Yes (`pending-device.ts`, first paint in service mode) |
 | QR pairing + finalize | Yes | Yes (`identity.ts`, Keep workspace); local mode does not mint |
 | Single-device keep (phone-only signup) | Yes (`/scratch/{id}/bootstrap`) | Yes (`selfBootstrap`, Keep workspace phone posture) |
+| DBSC hardware session binding | Yes (register/refresh, quiet fallback) | Browser-managed; UI surfaces `deviceBound` only |
+| Durable storage request | n/a | Yes (`durable-storage.ts` on promotion + redeem) |
 | Four-word pairing | Yes (`/lookup`) | Yes (Keep + `/link`) |
 | Silent device redeem | Yes | Yes (`device-session.ts` before scratch mint) |
 | Logout / device revoke + CSRF | Yes | Yes (Account / Sign out in service mode) |
