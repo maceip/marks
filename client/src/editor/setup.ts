@@ -15,6 +15,7 @@ import {
   rectangularSelection,
 } from '@codemirror/view';
 import type { CollabSession } from '../collab/types';
+import { handleImageTransfer } from './actions';
 import { handleEditorCopy, handleEditorCut, handleEditorPaste, markdownKeymap } from './commands';
 import { editorTheme, markdownHighlighting } from './theme';
 
@@ -39,12 +40,14 @@ export interface EditorSetupOptions {
   session: CollabSession;
   onScroll?: (view: EditorView) => void;
   onSelectionChange?: (view: EditorView) => void;
+  onAssetError?: (error: Error) => void;
 }
 
 export function createEditorExtensions({
   session,
   onScroll,
   onSelectionChange,
+  onAssetError,
 }: EditorSetupOptions): Extension[] {
   return [
     exceptionSink,
@@ -80,7 +83,9 @@ export function createEditorExtensions({
       translate: 'no',
     }),
     EditorView.domEventHandlers({
-      paste: (event, view) => handleEditorPaste(event, view),
+      paste: (event, view) =>
+        handleImageTransfer(event, view, session, onAssetError) || handleEditorPaste(event, view),
+      drop: (event, view) => handleImageTransfer(event, view, session, onAssetError),
       copy: (event, view) => handleEditorCopy(event, view),
       cut: (event, view) => handleEditorCut(event, view),
       contextmenu: (event) => {

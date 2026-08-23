@@ -2,16 +2,17 @@
 //! room consumes only validated `RoomActor`s from the Marks auth boundary;
 //! ESBT receives site IDs and bytes, never identity.
 
+pub mod protocol;
 mod task;
 pub mod ws;
 
 use crate::config::Config;
 use crate::db::Db;
-use crate::error::{ApiError, ApiResult};
 use crate::store;
 use marks_auth::{DocumentId, RoomActor};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
@@ -21,12 +22,19 @@ pub const MSG_EPHEMERAL: u8 = 0x02;
 pub const MSG_SERVER_VV: u8 = 0x03;
 pub const MSG_SNAPSHOT: u8 = 0x04;
 pub const MSG_SYNCED: u8 = 0x05;
+/// Versioned client-to-server durable mutation envelope.
+pub const MSG_MUTATION: u8 = 0x06;
+/// Server-to-origin durable commit receipt.
+pub const MSG_COMMITTED: u8 = 0x07;
 
 /// Close codes. `4404` is the one the browser treats as "document deleted".
 pub const CLOSE_INVALID_PAYLOAD: u16 = 4400;
 pub const CLOSE_UNAUTHORIZED: u16 = 4401;
 pub const CLOSE_FORBIDDEN_WRITE: u16 = 4403;
 pub const CLOSE_DOCUMENT_DELETED: u16 = 4404;
+/// Admission/rate capacity exhausted. Clients may retry with backoff and a new
+/// one-use room ticket; the mutation remains in their durable local journal.
+pub const CLOSE_CAPACITY: u16 = 4429;
 pub const CLOSE_INTERNAL: u16 = 1011;
 
 pub fn frame(tag: u8, payload: &[u8]) -> Vec<u8> {
@@ -62,6 +70,7 @@ pub struct RoomRead {
 pub enum JoinRefusal {
     Gone,
     Stale,
+    Capacity,
     Internal,
 }
 
@@ -99,7 +108,15 @@ pub struct Rooms {
     db: Arc<Db>,
     config: Arc<Config>,
     limits: esbt::ResourceLimits,
-    map: Mutex<HashMap<String, RoomEntry>>,
+    map: Arc<Mutex<HashMap<String, RoomEntry>>>,
+    commit_batches: Arc<AtomicU64>,
+    committed_mutations: Arc<AtomicU64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CommitStats {
+    pub batches: u64,
+    pub mutations: u64,
 }
 
 pub struct JoinedRoom {
@@ -113,11 +130,16 @@ impl Rooms {
             db,
             config,
             limits,
-            map: Mutex::new(HashMap::new()),
+            map: Arc::new(Mutex::new(HashMap::new())),
+            commit_batches: Arc::new(AtomicU64::new(0)),
+            committed_mutations: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    async fn entry_tx(&self, document_id: &DocumentId) -> ApiResult<mpsc::Sender<RoomMsg>> {
+    async fn entry_tx(
+        &self,
+        document_id: &DocumentId,
+    ) -> Result<mpsc::Sender<RoomMsg>, JoinRefusal> {
         let mut map = self.map.lock().await;
         if let Some(entry) = map.get(document_id.as_str()) {
             if !entry.tx.is_closed() {
@@ -125,22 +147,49 @@ impl Rooms {
             }
             map.remove(document_id.as_str());
         }
+        if map.len() >= self.config.max_resident_rooms {
+            return Err(JoinRefusal::Capacity);
+        }
         // Never create rooms for unknown or deleted documents.
-        let live = self.db.read(|conn| {
-            Ok(store::load_document(conn, document_id)?
-                .is_some_and(|row| row.record.deleted_at_ms.is_none()))
-        })?;
+        let live = self
+            .db
+            .read(|conn| {
+                Ok(store::load_document(conn, document_id)?
+                    .is_some_and(|row| row.record.deleted_at_ms.is_none()))
+            })
+            .map_err(|_| JoinRefusal::Internal)?;
         if !live {
-            return Err(ApiError::not_found());
+            return Err(JoinRefusal::Gone);
         }
         let (tx, rx) = mpsc::channel(1024);
-        let handle = tokio::spawn(task::run(
-            document_id.clone(),
-            self.db.clone(),
-            self.config.clone(),
-            self.limits.clone(),
-            rx,
-        ));
+        let room_id = document_id.as_str().to_owned();
+        let cleanup_map = self.map.clone();
+        let room_tx = tx.clone();
+        let task_document_id = document_id.clone();
+        let task_db = self.db.clone();
+        let task_config = self.config.clone();
+        let task_limits = self.limits.clone();
+        let task_commit_batches = self.commit_batches.clone();
+        let task_committed_mutations = self.committed_mutations.clone();
+        let handle = tokio::spawn(async move {
+            task::run(
+                task_document_id,
+                task_db,
+                task_config,
+                task_limits,
+                task_commit_batches,
+                task_committed_mutations,
+                rx,
+            )
+            .await;
+            let mut map = cleanup_map.lock().await;
+            if map
+                .get(&room_id)
+                .is_some_and(|entry| entry.tx.same_channel(&room_tx))
+            {
+                map.remove(&room_id);
+            }
+        });
         map.insert(
             document_id.as_str().to_owned(),
             RoomEntry {
@@ -151,6 +200,19 @@ impl Rooms {
         Ok(tx)
     }
 
+    pub async fn resident_count(&self) -> usize {
+        self.map.lock().await.len()
+    }
+
+    /// Process-lifetime counters make group-commit effectiveness observable
+    /// without placing metrics or timestamps in the CRDT protocol.
+    pub fn commit_stats(&self) -> CommitStats {
+        CommitStats {
+            batches: self.commit_batches.load(Ordering::Relaxed),
+            mutations: self.committed_mutations.load(Ordering::Relaxed),
+        }
+    }
+
     pub async fn join(
         &self,
         document_id: &DocumentId,
@@ -158,10 +220,7 @@ impl Rooms {
         client_version: Option<esbt::clock::Version>,
         out: mpsc::Sender<OutMsg>,
     ) -> Result<JoinedRoom, JoinRefusal> {
-        let tx = self
-            .entry_tx(document_id)
-            .await
-            .map_err(|_| JoinRefusal::Gone)?;
+        let tx = self.entry_tx(document_id).await?;
         let (resp, rx) = oneshot::channel();
         tx.send(RoomMsg::Join {
             actor,

@@ -16,6 +16,7 @@ interface SidebarProps {
   onOpen: (id: string) => void;
   onCreate: () => void;
   onDelete: (id: string) => void;
+  onOpenTrash: () => void;
   onOpenBenchmark: () => void;
   onOpenAbout: () => void;
 }
@@ -31,6 +32,7 @@ export function Sidebar({
   onOpen,
   onCreate,
   onDelete,
+  onOpenTrash,
   onOpenBenchmark,
   onOpenAbout,
 }: SidebarProps) {
@@ -166,6 +168,10 @@ export function Sidebar({
         </div>
 
         <div className="sidebar-foot">
+          <button type="button" onClick={onOpenTrash}>
+            <Icon path={icons.trash} />
+            Trash
+          </button>
           <button type="button" onClick={onOpenBenchmark}>
             <Icon path={icons.gauge} />
             Benchmark

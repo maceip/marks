@@ -112,6 +112,16 @@
 .confirm-content p strong { color: var(--text); }
 .confirm-content .dialog-actions { width: 100%; margin-top: 3px; }
 
+.trash-surface { display: grid; gap: 14px; }
+.trash-surface > p { color: var(--text-muted); font-size: 11.5px; line-height: 1.55; }
+.trash-list { display: grid; gap: 8px; }
+.trash-list article { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface-sunken); }
+.trash-list article > span { display: grid; min-width: 0; }
+.trash-list strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.trash-list small { color: var(--text-faint); font-size: 9.5px; }
+.trash-list article > div { display: flex; flex: 0 0 auto; gap: 6px; }
+.trash-list .button { min-height: 32px; padding-inline: 10px; }
+
 /* -------------------------------------------------------------- templates */
 
 .template-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
@@ -266,6 +276,9 @@
 .comment-compose textarea { width: 100%; min-height: 82px; padding: 11px; resize: vertical; border: 1px solid var(--border); border-radius: 13px; outline: 0; background: color-mix(in srgb, var(--surface) 82%, transparent); font-size: 12px; }
 .comment-compose textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .comment-compose .button { min-height: 34px; border-radius: 999px; }
+.comment-anchor-preview { display: grid; justify-self: stretch; gap: 4px; padding: 9px 10px; border-left: 3px solid var(--brand-teal); border-radius: 7px; background: var(--surface-sunken); }
+.comment-anchor-preview strong { color: var(--text-faint); font-size: 9px; letter-spacing: .05em; text-transform: uppercase; }
+.comment-anchor-preview q { overflow: hidden; color: var(--text-muted); font: 10.5px/1.45 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
 .comment-list { display: grid; gap: 9px; padding: 12px; }
 .comment-card { display: grid; gap: 10px; padding: 13px; border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--surface-raised) 78%, transparent); box-shadow: var(--shadow-sm); }
 .comment-card.resolved { opacity: .64; }
@@ -275,7 +288,24 @@
 .comment-card strong { font-size: 11px; }
 .comment-card small { color: var(--text-faint); font-size: 9.5px; }
 .comment-card p { color: var(--text-muted); font-size: 11.5px; line-height: 1.6; }
-.comment-card > button { display: flex; align-items: center; gap: 5px; justify-self: start; padding: 0; border: 0; background: none; color: var(--brand-green); font-size: 10.5px; cursor: pointer; }
+.comment-anchor { display: grid; gap: 3px; padding: 8px 9px; overflow: hidden; border: 1px solid var(--glass-border); border-radius: 9px; background: var(--surface-sunken); color: var(--text-muted); text-align: left; cursor: pointer; }
+.comment-anchor span { color: var(--brand-teal); font-size: 9px; font-weight: 700; text-transform: uppercase; }
+.comment-anchor q { overflow: hidden; font: 10px/1.4 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.comment-actions { display: flex; align-items: center; gap: 10px; }
+.comment-actions button { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; color: var(--brand-green); font-size: 10px; cursor: pointer; }
+.comment-actions button:disabled { opacity: .45; cursor: default; }
+.comment-replies { display: grid; gap: 8px; padding-left: 12px; border-left: 2px solid var(--glass-border); }
+.comment-reply { display: grid; gap: 5px; }
+.comment-reply header { justify-content: space-between; }
+.comment-reply p { margin: 0; }
+.comment-card .deleted-message { color: var(--text-faint); font-style: italic; }
+.reply-compose { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.reply-compose input { min-width: 0; min-height: 32px; padding: 6px 9px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: inherit; font: inherit; }
+.reply-compose button { border: 0; background: transparent; color: var(--accent); font-size: 10px; font-weight: 700; cursor: pointer; }
+.comment-edit { display: grid; gap: 6px; }
+.comment-edit textarea { min-height: 64px; padding: 8px; resize: vertical; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: inherit; font: inherit; }
+.comment-edit > span { display: flex; gap: 6px; }
+.comment-edit .button { min-height: 28px; padding-inline: 9px; }
 .version-compose { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; padding: 13px; border-bottom: 1px solid var(--glass-border); }
 .version-compose input { min-height: 38px; }
 .version-compose .button { border-radius: 999px; }

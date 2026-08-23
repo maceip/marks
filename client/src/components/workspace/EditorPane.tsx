@@ -15,6 +15,7 @@ interface EditorPaneProps {
   onView: (view: EditorView | null) => void;
   onScroll: () => void;
   onCursor: (info: CursorInfo) => void;
+  onAssetError?: (error: Error) => void;
 }
 
 export function EditorPane({
@@ -22,6 +23,7 @@ export function EditorPane({
   onView,
   onScroll,
   onCursor,
+  onAssetError,
 }: EditorPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -29,8 +31,8 @@ export function EditorPane({
   // Keep the latest callbacks reachable without rebuilding the editor. An
   // editor rebuild loses focus, cursor and scroll position, so it must happen
   // only when the document itself changes.
-  const handlers = useRef({ onScroll, onCursor, onView });
-  handlers.current = { onScroll, onCursor, onView };
+  const handlers = useRef({ onScroll, onCursor, onView, onAssetError });
+  handlers.current = { onScroll, onCursor, onView, onAssetError };
 
   // A layout effect, not a passive one: React detaches DOM nodes before
   // passive cleanups run, and a CRDT update dispatching into a detached
@@ -58,6 +60,7 @@ export function EditorPane({
               selected: Math.abs(range.to - range.from),
             });
           },
+          onAssetError: (error) => handlers.current.onAssetError?.(error),
         }),
       }),
     });

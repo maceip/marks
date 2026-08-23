@@ -4,6 +4,8 @@ import { collectHeadings, envSignature, groupTokens, hashString } from '../markd
 import { incrementalParseSafe, splitSourceBlocks } from '../markdown/incremental';
 import { createMarkdownIt, type MarkdownRendererFeatures } from '../markdown/md';
 import type { BlockPatch, Heading, RenderRequest, RenderResponse } from '../markdown/types';
+import { countWords } from '../lib/format';
+import { applyTextEdits } from '../text/change';
 
 /**
  * Markdown rendering, off the main thread.
@@ -156,6 +158,7 @@ async function render(seq: number, text: string): Promise<RenderResponse> {
       renderMs,
       bytes,
       chars: text.length,
+      words: countWords(text),
     },
   };
 }
@@ -212,6 +215,7 @@ function renderIncremental(seq: number, text: string, dirtyKeys: string[]): Rend
       renderMs,
       bytes,
       chars: text.length,
+      words: countWords(text),
     },
   };
 }
@@ -232,10 +236,17 @@ self.onmessage = async (event: MessageEvent<RenderRequest>) => {
     return;
   }
 
-  if (message.type === 'render') {
+  if (message.type === 'render' || message.type === 'patch') {
+    let text = lastText;
+    let textAccepted = false;
     try {
-      (self as unknown as Worker).postMessage(await render(message.seq, message.text));
+      text = message.type === 'render' ? message.text : applyTextEdits(lastText, message.edits);
+      textAccepted = true;
+      (self as unknown as Worker).postMessage(await render(message.seq, text));
     } catch (error) {
+      // A renderer/plugin failure must not desynchronize subsequent delta
+      // coordinates from the authoritative source held by this worker.
+      if (textAccepted) lastText = text;
       console.error('[marks] markdown render failed', error);
       const response: RenderResponse = {
         type: 'rendered',
@@ -248,7 +259,15 @@ self.onmessage = async (event: MessageEvent<RenderRequest>) => {
           },
         ],
         headings: [],
-        stats: { blocks: 1, dirty: 1, parseMs: 0, renderMs: 0, bytes: 0, chars: message.text.length },
+        stats: {
+          blocks: 1,
+          dirty: 1,
+          parseMs: 0,
+          renderMs: 0,
+          bytes: 0,
+          chars: text.length,
+          words: countWords(text),
+        },
       };
       (self as unknown as Worker).postMessage(response);
     }

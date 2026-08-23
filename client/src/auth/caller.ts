@@ -1,6 +1,6 @@
 import { redeemEnrolledDevice } from './device-session.ts';
 import type { RoomAuthority } from './room-access.ts';
-import { cacheSession, clearCachedSession, sessionFromUnknown } from './session-cache.ts';
+import { cacheSession, clearCachedSession, hasSeenSession, sessionFromUnknown } from './session-cache.ts';
 import {
   clearScratchCredential,
   loadScratchCredential,
@@ -57,6 +57,7 @@ export interface EnsureServiceCallerOptions {
   fetch?: typeof fetch;
   storage?: Storage;
   forceProbe?: boolean;
+  persistentStorage?: Storage;
 }
 
 export async function ensureServiceCaller(
@@ -78,12 +79,21 @@ export async function ensureServiceCaller(
 async function resolveFromNetwork(options: EnsureServiceCallerOptions): Promise<ServiceCaller> {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const storage = options.storage ?? sessionStorage;
+  const persistentStorage = options.persistentStorage;
 
-  const session = await fetchImpl('/v1/auth/session', { credentials: 'same-origin' });
+  let session: Response;
+  try {
+    session = await fetchImpl('/v1/auth/session', { credentials: 'same-origin' });
+  } catch (error) {
+    const scratch = loadScratchCredential(storage);
+    if (scratch) return { kind: 'scratch', credential: scratch };
+    if (hasSeenSession(persistentStorage)) return { kind: 'session' };
+    throw error;
+  }
   if (session.ok) {
     clearScratchCredential(storage);
     const info = sessionFromUnknown(await session.json().catch(() => null));
-    if (info) cacheSession(info);
+    if (info) cacheSession(info, persistentStorage);
     return { kind: 'session' };
   }
 

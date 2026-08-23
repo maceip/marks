@@ -20,8 +20,10 @@ export interface LocalDocumentDraft {
 }
 
 const WORKSPACE_KEY = 'marks:ui-workspace:v1';
+const TRASH_KEY = 'marks:ui-trash:v1';
 const WORKSPACE_READY_KEY = 'marks:ui-workspace-ready:v1';
 const TEXT_PREFIX = 'marks:ui-document:v1:';
+export const LOCAL_TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 export const WORKSPACE_EVENT = 'marks:workspace-change';
 
 export const DOCUMENT_TEMPLATES: DocumentTemplate[] = [
@@ -177,6 +179,11 @@ function saveDocuments(documents: DocumentMeta[]): void {
   emitWorkspaceChange();
 }
 
+function saveTrash(documents: DocumentMeta[]): void {
+  localStorage.setItem(TRASH_KEY, JSON.stringify(documents));
+  emitWorkspaceChange();
+}
+
 function seedWorkspace(): DocumentMeta[] {
   const now = Date.now();
   const seeds: Array<{ id: string; title: string; content: string; minutesAgo: number }> = [
@@ -265,6 +272,18 @@ export function loadLocalDocuments(): DocumentMeta[] {
   return seedWorkspace();
 }
 
+export function loadLocalTrash(): DocumentMeta[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TRASH_KEY) ?? '[]') as DocumentMeta[];
+    return Array.isArray(parsed)
+      ? parsed.sort((a, b) => (b.deleted_at ?? 0) - (a.deleted_at ?? 0))
+      : [];
+  } catch {
+    localStorage.removeItem(TRASH_KEY);
+    return [];
+  }
+}
+
 export function getLocalDocument(id: string): DocumentMeta | null {
   return loadLocalDocuments().find((document) => document.id === id) ?? null;
 }
@@ -289,7 +308,6 @@ export function writeLocalDocumentText(id: string, markdown: string): void {
   const current = documents[index];
   documents[index] = {
     ...current,
-    title: deriveTitle(markdown, current.title),
     chars: markdown.length,
     updated_at: Date.now(),
   };
@@ -335,13 +353,52 @@ export function duplicateLocalDocument(id: string, markdown?: string): DocumentM
 }
 
 export function deleteLocalDocument(id: string): void {
-  saveDocuments(loadLocalDocuments().filter((document) => document.id !== id));
+  const documents = loadLocalDocuments();
+  const document = documents.find((item) => item.id === id);
+  if (!document) return;
+  const deletedAt = Date.now();
+  saveDocuments(documents.filter((item) => item.id !== id));
+  saveTrash([
+    {
+      ...document,
+      deleted_at: deletedAt,
+      purge_at: deletedAt + LOCAL_TRASH_RETENTION_MS,
+    },
+    ...loadLocalTrash().filter((item) => item.id !== id),
+  ]);
+}
+
+export function restoreLocalDocument(id: string): DocumentMeta | null {
+  const trash = loadLocalTrash();
+  const document = trash.find((item) => item.id === id);
+  if (!document) return null;
+  const restored: DocumentMeta = {
+    ...document,
+    updated_at: Date.now(),
+    deleted_at: null,
+    purge_at: null,
+  };
+  saveTrash(trash.filter((item) => item.id !== id));
+  saveDocuments([restored, ...loadLocalDocuments().filter((item) => item.id !== id)]);
+  return restored;
+}
+
+export function purgeLocalDocument(id: string): void {
+  const trash = loadLocalTrash();
+  const document = trash.find((item) => item.id === id);
+  if (!document) return;
+  if ((document.purge_at ?? Number.POSITIVE_INFINITY) > Date.now()) {
+    throw new Error('local trash retention has not elapsed');
+  }
+  saveTrash(trash.filter((item) => item.id !== id));
   localStorage.removeItem(textKey(id));
 }
 
 export function resetLocalWorkspace(): DocumentMeta[] {
   for (const document of loadLocalDocuments()) localStorage.removeItem(textKey(document.id));
+  for (const document of loadLocalTrash()) localStorage.removeItem(textKey(document.id));
   localStorage.removeItem(WORKSPACE_KEY);
+  localStorage.removeItem(TRASH_KEY);
   localStorage.removeItem(WORKSPACE_READY_KEY);
   return seedWorkspace();
 }

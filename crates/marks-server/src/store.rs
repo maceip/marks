@@ -15,6 +15,12 @@ pub fn ms(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
+/// Exact unsigned values used as SQLite identities must never alias through
+/// the timestamp-oriented saturating conversion above.
+pub fn exact_i64(value: u64) -> ApiResult<i64> {
+    i64::try_from(value).map_err(|_| ApiError::internal())
+}
+
 pub fn from_ms(value: i64) -> u64 {
     u64::try_from(value).unwrap_or_default()
 }
@@ -688,23 +694,4 @@ fn corrupt(document_id: &DocumentId, stage: &str, error: esbt::EngineError) -> A
         "durable document state failed to replay"
     );
     ApiError::internal()
-}
-
-/// Derived presentation title: the first ATX heading, else the first
-/// non-empty line, else "Untitled". Explicit renames always win over this.
-pub fn derive_title(text: &str) -> String {
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let heading = trimmed.trim_start_matches('#').trim();
-        let title = if heading.is_empty() { trimmed } else { heading };
-        let mut out: String = title.chars().take(120).collect();
-        if out.is_empty() {
-            out = "Untitled".to_owned();
-        }
-        return out;
-    }
-    "Untitled".to_owned()
 }

@@ -21,6 +21,10 @@ marks is exercised on three local browser platforms:
 | **Puppeteer** | Same portable surface suite | `puppeteer-core` (preferred) or `puppeteer`. Never downloads Chrome; it launches the system binary. |
 | **agent-browser** | Same portable surface suite | The Vercel Labs CLI (`node_modules/.bin/agent-browser` or `PATH`). A CLI, not a Node library — the harness wraps it. |
 
+That driver portability suite is distinct from the production service matrix.
+`scripts/ci-service-ui.mjs` runs the built service client in Playwright's
+Chromium, Firefox, and WebKit engines against one live Rust binary.
+
 `npm run harness:probe` prints what this machine actually has.
 
 ## Chrome this environment ships
@@ -47,6 +51,7 @@ Override any of this with `CHROMIUM_PATH`, `CHROME_PATH`, `PUPPETEER_EXECUTABLE_
 npm run harness:probe              # discover platforms (no browser)
 npm run harness:probe -- --launch  # plus a userAgent check on each driver
 npm run test:harness               # chrome-discovery, measure budgets, wait-for-server
+npm run test:bench                 # deterministic engine fixture + receipt statistics
 
 # app must already be running
 npm run measure                    # large-doc preview latency (print only)
@@ -65,11 +70,13 @@ npm run dev
 MARKS_URL=http://127.0.0.1:5173 npm run smoke:platforms
 
 # CI-shaped proof: live binary + service-mode UI + native two-peer room.
-VITE_MARKS_DATA_MODE=service npm run build
+VITE_MARKS_DATA_MODE=service VITE_MARKS_TEST_SERVICE_WORKER=1 npm run build
 cargo build -p marks-server
-npm run ci:service -- --bin target/debug/marks-server --static-dir client/dist
+MARKS_TEST_SERVICE_WORKER=1 npm run ci:service -- --bin target/debug/marks-server --static-dir client/dist --browser chromium
+MARKS_TEST_SERVICE_WORKER=1 npm run ci:service -- --bin target/debug/marks-server --static-dir client/dist --browser firefox
+MARKS_TEST_SERVICE_WORKER=1 npm run ci:service -- --bin target/debug/marks-server --static-dir client/dist --browser webkit
 
-# The deeper two-browser TypeScript smoke is service-only and still local.
+# The deeper two-browser smoke is service-only and still local.
 # Start the Rust Marks server separately on :3000, then:
 MARKS_URL=http://127.0.0.1:3000 npm run smoke
 ```
@@ -87,6 +94,20 @@ green on all three platforms.
 
 **Playwright smoke** (`scripts/smoke.mjs`) — the above plus incremental preview, two ESBT peers, per-user undo, checkbox write-back, outline, scroll sync, snapshot/export REST, live-room delete, retired-engine refusal.
 
+**Production service matrix** (`scripts/ci-service-ui.mjs` plus
+`crates/marks-server/tests/live_service.rs`) — coherent runtime artifact,
+session/scratch first paint, atomic document creation, snapshot and one-use
+ticket admission, writable CodeMirror, durable server-visible mutation,
+reload recovery, IndexedDB checkpoint, Markdown import/export, and absence of
+uncaught application errors or `/api` aliases. With
+`MARKS_TEST_SERVICE_WORKER=1`, Chromium and Firefox additionally prove a cold
+offline service-worker boot, offline journal edit, reconnect, and commit.
+Playwright WebKit aborts offline top-level navigation before a controlling
+worker can answer, so its honest branch proves real network isolation, an
+offline edit in the already-mounted Wasm replica, and reconnect commit. The
+receipt then admits two native peers to the same UI-created document and proves
+convergence.
+
 **Measure** (`scripts/measure.mjs`) — types a ~60 KB document, then 60
 keystrokes in the middle, and prints the HUD. `--budget-*` flags fail the
 process when first-render, p50/p95, dirty blocks, or DOM ops exceed a cap. The
@@ -96,4 +117,8 @@ remains the bounded readiness helper for that workflow.
 
 ## Adding a check
 
-Put a policy unit test in `client/src/browser/*.test.ts` when the logic is a function. Put a DOM/gesture check in `scripts/harness/suites/surface.mjs` when all three platforms should run it. Put a two-browser or HTTP check in `scripts/smoke.mjs`.
+Put a policy unit test in `client/src/browser/*.test.ts` when the logic is a
+function. Put a DOM/gesture check in `scripts/harness/suites/surface.mjs` when
+all three drivers should run it. Put service durability, reload, offline, and
+import/export checks in `scripts/ci-service-ui.mjs`; put live native-peer room
+invariants in `live_service.rs` or `room_collab.rs`.

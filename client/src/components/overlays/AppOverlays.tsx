@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CollabSession } from '../../collab/types';
-import { reviewRepository, type DocumentVersion, type ReviewComment } from '../../data/review';
+import type { CollabSession, DocumentCapabilities } from '../../collab/types';
+import {
+  reviewRange,
+  reviewRepository,
+  type DocumentVersion,
+  type ReviewComment,
+} from '../../data/review';
+import { documentRepository } from '../../data/documents';
 import { DOCUMENT_TEMPLATES, type TemplateId } from '../../demo/workspace';
 import type { UiPreferences } from '../../hooks/useUiPreferences';
 import { formatRelativeTime } from '../../lib/format';
@@ -19,6 +25,7 @@ export type AppDialog =
   | { type: 'templates' }
   | { type: 'rename'; documentId: string; title: string }
   | { type: 'delete'; documentId: string; title: string }
+  | { type: 'trash' }
   | { type: 'share'; documentId: string; title: string }
   | { type: 'preferences' }
   | { type: 'command-palette' }
@@ -38,12 +45,15 @@ interface AppOverlaysProps {
   theme: 'light' | 'dark';
   preferences: UiPreferences;
   hasDocument: boolean;
+  dataMode: 'local' | 'service';
+  capabilities: DocumentCapabilities | null;
   onCloseDialog: () => void;
   onCloseReview: () => void;
   onAction: (action: UiActionId) => void;
   onCreateFromTemplate: (templateId: TemplateId) => void;
   onRename: (documentId: string, title: string) => void;
   onDelete: (documentId: string) => void;
+  onDocumentsChanged: () => void;
   onTheme: (theme: 'light' | 'dark') => void;
   onPreferences: (patch: Partial<UiPreferences>) => void;
   onNotify: (title: string, detail?: string, tone?: 'neutral' | 'success' | 'danger') => void;
@@ -62,7 +72,7 @@ const DOCUMENT_ACTIONS = new Set<UiActionId>([
   'history',
   'focus',
   'find',
-  'ai-compose',
+  'draft-tools',
 ]);
 
 function TemplatesDialog({
@@ -131,9 +141,11 @@ function RenameDialog({
 function DeleteDialog({
   dialog,
   onDelete,
+  dataMode,
 }: {
   dialog: Extract<AppDialog, { type: 'delete' }>;
   onDelete: (documentId: string) => void;
+  dataMode: AppOverlaysProps['dataMode'];
 }) {
   return (
     <div className="confirm-content">
@@ -141,13 +153,71 @@ function DeleteDialog({
         <Icon path={icons.trash} size={20} />
       </span>
       <p>
-        <strong>“{dialog.title}”</strong> will be removed from this browser. This prototype does not
-        have a remote trash yet.
+        <strong>“{dialog.title}”</strong>{' '}
+        {dataMode === 'service'
+          ? 'will move to durable trash for 30 days and any live collaborators will be disconnected.'
+          : 'will move to this browser’s trash for 30 days.'}
       </p>
       <div className="dialog-actions">
         <button type="button" className="button danger-button" data-autofocus onClick={() => onDelete(dialog.documentId)}>
-          Delete document
+          Move to trash
         </button>
+      </div>
+    </div>
+  );
+}
+
+function TrashDialog({
+  onChanged,
+  onNotify,
+}: {
+  onChanged: () => void;
+  onNotify: AppOverlaysProps['onNotify'];
+}) {
+  const [documents, setDocuments] = useState<Awaited<ReturnType<typeof documentRepository.listTrash>>>([]);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = () => {
+    setLoading(true);
+    void documentRepository.listTrash()
+      .then(setDocuments)
+      .catch(() => onNotify('Trash unavailable', 'The recovery index could not be loaded.', 'danger'))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(refresh, []);
+
+  return (
+    <div className="trash-surface">
+      <p>Documents remain recoverable for 30 days. Permanent deletion is disabled until each document’s retention date.</p>
+      {loading && <p className="hint">Loading trash…</p>}
+      {!loading && documents.length === 0 && <p className="hint">Trash is empty.</p>}
+      <div className="trash-list">
+        {documents.map((document) => {
+          const canPurge = (document.purge_at ?? Number.POSITIVE_INFINITY) <= Date.now();
+          return (
+            <article key={document.id}>
+              <span><strong>{document.title}</strong><small>Trashed {formatRelativeTime(document.deleted_at ?? Date.now())} · permanent deletion {new Date(document.purge_at ?? Date.now()).toLocaleDateString()}</small></span>
+              <div>
+                <button type="button" className="button" onClick={() => {
+                  void documentRepository.restore(document.id).then((restored) => {
+                    if (!restored) throw new Error('restore refused');
+                    onChanged();
+                    refresh();
+                    onNotify('Document restored', `“${restored.title}” is back in the workspace.`, 'success');
+                  }).catch(() => onNotify('Restore unavailable', 'Only the owner can restore this document.', 'danger'));
+                }}>Restore</button>
+                <button type="button" className="button danger-button" disabled={!canPurge} title={canPurge ? 'Permanently delete' : 'Available after the 30-day retention window'} onClick={() => {
+                  void documentRepository.purge(document.id).then(() => {
+                    onChanged();
+                    refresh();
+                    onNotify('Document permanently deleted', 'Its document, review, and collaboration records were reclaimed.', 'success');
+                  }).catch(() => onNotify('Permanent deletion unavailable', 'The retention window has not elapsed.', 'danger'));
+                }}>Delete forever</button>
+              </div>
+            </article>
+          );
+        })}
       </div>
     </div>
   );
@@ -268,10 +338,23 @@ function ReviewDrawer({
   const [rendered, setRendered] = useState<ReviewSurface | null>(review);
   const [closing, setClosing] = useState(false);
   const [comments, setComments] = useState<ReviewComment[]>([]);
+  const [commentCursor, setCommentCursor] = useState<string | null>(null);
+  const [loadingEarlierComments, setLoadingEarlierComments] = useState(false);
   const [versions, setVersions] = useState<DocumentVersion[]>([]);
   const [comment, setComment] = useState('');
   const [versionLabel, setVersionLabel] = useState('');
   const [selectedVersion, setSelectedVersion] = useState<string | null>(null);
+  const [loadingVersion, setLoadingVersion] = useState(false);
+  const [savingVersion, setSavingVersion] = useState(false);
+  const [restoringVersion, setRestoringVersion] = useState(false);
+  const [capturedRange, setCapturedRange] = useState<ReturnType<CollabSession['captureReviewRange']> | null>(null);
+  const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
+  const [editing, setEditing] = useState<{
+    kind: 'comment' | 'reply';
+    commentId: string;
+    replyId?: string;
+    body: string;
+  } | null>(null);
   const panelRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -292,14 +375,60 @@ function ReviewDrawer({
   useEffect(() => {
     if (!rendered) return;
     const refresh = () => {
-      void reviewRepository.listComments(rendered.documentId).then(setComments);
-      if (session) void reviewRepository.listVersions(rendered.documentId, session.getText()).then((next) => {
-        setVersions(next);
-        setSelectedVersion((current) => current ?? next[0]?.id ?? null);
-      });
+      if (rendered.type === 'comments') {
+        void reviewRepository.listComments(rendered.documentId).then((page) => {
+          setComments(page.comments);
+          setCommentCursor(page.nextCursor);
+        }).catch(() => {
+          onNotify('Comments unavailable', 'Your current document role cannot load this thread.', 'danger');
+        });
+      } else if (session) {
+        void reviewRepository.listVersions(rendered.documentId, session.getText()).then((next) => {
+          setVersions(next);
+          setSelectedVersion((current) =>
+            current && next.some((version) => version.id === current)
+              ? current
+              : next[0]?.id ?? null,
+          );
+        }).catch(() => {
+          onNotify('History unavailable', 'Your current document role cannot load saved versions.', 'danger');
+        });
+      }
     };
     refresh();
     return reviewRepository.subscribe(refresh);
+  }, [onNotify, rendered, session]);
+
+  useEffect(() => {
+    if (!rendered || rendered.type !== 'history' || !selectedVersion) return;
+    const selected = versions.find((version) => version.id === selectedVersion);
+    if (!selected || selected.markdown !== undefined || selected.current) return;
+    let active = true;
+    setLoadingVersion(true);
+    void reviewRepository.getVersion(rendered.documentId, selected.id)
+      .then((loaded) => {
+        if (!active || !loaded) return;
+        setVersions((current) => current.map((version) => version.id === loaded.id ? loaded : version));
+      })
+      .catch(() => onNotify('Version unavailable', 'The saved Markdown could not be loaded.', 'danger'))
+      .finally(() => {
+        if (active) setLoadingVersion(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [onNotify, rendered, selectedVersion, versions]);
+
+  useEffect(() => {
+    if (!rendered || rendered.type !== 'comments' || !session?.hydrated()) {
+      setCapturedRange(null);
+      return;
+    }
+    try {
+      setCapturedRange(session.captureReviewRange());
+    } catch {
+      setCapturedRange(null);
+    }
   }, [rendered, session]);
 
   useEffect(() => {
@@ -318,6 +447,7 @@ function ReviewDrawer({
 
   if (!rendered) return null;
   const selected = versions.find((version) => version.id === selectedVersion) ?? null;
+  const capabilities = session?.capabilities();
 
   return (
     <aside className={`review-drawer surface-material-host${closing ? ' is-closing' : ''}`} aria-label={rendered.type === 'comments' ? 'Comments' : 'Version history'} ref={panelRef}>
@@ -338,27 +468,133 @@ function ReviewDrawer({
             className="comment-compose"
             onSubmit={(event) => {
               event.preventDefault();
-              if (!comment.trim()) return;
-              void reviewRepository.addComment(rendered.documentId, userName, comment).then(() => {
+              if (!comment.trim() || !capturedRange) return;
+              void reviewRepository.addComment(rendered.documentId, userName, comment, capturedRange).then(() => {
                 setComment('');
-                onNotify('Comment added', 'The thread is stored in this browser.', 'success');
-              });
+                onNotify(
+                  'Comment added',
+                  reviewRepository.mode === 'service'
+                    ? 'The thread is durably stored with the document.'
+                    : 'The thread is stored in this browser.',
+                  'success',
+                );
+              }).catch(() => onNotify('Comment not added', 'Your current role cannot comment on this document.', 'danger'));
             }}
           >
-            <textarea value={comment} placeholder="Leave a comment…" aria-label="New comment" onChange={(event) => setComment(event.target.value)} />
-            <button type="submit" className="button primary" disabled={!comment.trim()}>Comment</button>
+            {capturedRange && (
+              <div className="comment-anchor-preview">
+                <strong>{capturedRange.quote ? 'Commenting on selection' : 'Commenting at cursor'}</strong>
+                {capturedRange.quote && <q>{capturedRange.quote}</q>}
+              </div>
+            )}
+            <textarea value={comment} maxLength={16 * 1024} placeholder={capabilities?.comment ? 'Leave a comment…' : 'Your role can read but not comment'} aria-label="New comment" disabled={!capabilities?.comment} onChange={(event) => setComment(event.target.value)} />
+            <button type="submit" className="button primary" disabled={!comment.trim() || !capabilities?.comment || !capturedRange}>Start thread</button>
           </form>
           <div className="comment-list">
-            {comments.map((item) => (
-              <article key={item.id} className={`comment-card${item.resolved ? ' resolved' : ''}`}>
-                <header><span className="avatar">{item.author[0]?.toUpperCase()}</span><span><strong>{item.author}</strong><small>{formatRelativeTime(item.createdAt)}</small></span></header>
-                <p>{item.body}</p>
-                <button type="button" onClick={() => void reviewRepository.setCommentResolved(item.id, !item.resolved)}>
-                  <Icon path={item.resolved ? icons.undo : icons.check} size={13} />
-                  {item.resolved ? 'Reopen' : 'Resolve'}
-                </button>
-              </article>
-            ))}
+            {comments.map((item) => {
+              const range = reviewRange(item);
+              let rangeExact = false;
+              if (range && session) {
+                try {
+                  rangeExact = session.resolveReviewRange(range).exact;
+                } catch {
+                  rangeExact = false;
+                }
+              }
+              const replyDraft = replyDrafts[item.id] ?? '';
+              return (
+                <article key={item.id} className={`comment-card${item.resolved ? ' resolved' : ''}`}>
+                  {range && (
+                    <button
+                      type="button"
+                      className="comment-anchor"
+                      onClick={() => session?.revealReviewRange(range)}
+                    >
+                      <span>{rangeExact ? 'Anchored selection' : 'Recovered location'}</span>
+                      <q>{item.quote || 'Cursor position'}</q>
+                    </button>
+                  )}
+                  <header><span className="avatar">{item.author[0]?.toUpperCase()}</span><span><strong>{item.author}</strong><small>{formatRelativeTime(item.createdAt)}{item.editedAt ? ' · edited' : ''}</small></span></header>
+                  {editing?.kind === 'comment' && editing.commentId === item.id ? (
+                    <form className="comment-edit" onSubmit={(event) => {
+                      event.preventDefault();
+                      if (!editing.body.trim()) return;
+                      void reviewRepository.updateComment(rendered.documentId, item.id, { body: editing.body })
+                        .then(() => setEditing(null))
+                        .catch(() => onNotify('Comment not changed', 'Only the author can edit this message.', 'danger'));
+                    }}>
+                      <textarea value={editing.body} maxLength={16 * 1024} onChange={(event) => setEditing({ ...editing, body: event.target.value })} />
+                      <span><button type="submit" className="button">Save</button><button type="button" className="button" onClick={() => setEditing(null)}>Cancel</button></span>
+                    </form>
+                  ) : (
+                    <p className={item.deleted ? 'deleted-message' : undefined}>{item.deleted ? 'Message deleted' : item.body}</p>
+                  )}
+                  <div className="comment-actions">
+                    <button type="button" disabled={!capabilities?.comment} onClick={() => void reviewRepository.updateComment(rendered.documentId, item.id, { resolved: !item.resolved }).catch(() => onNotify('Comment not changed', 'Your current role cannot resolve this thread.', 'danger'))}>
+                      <Icon path={item.resolved ? icons.undo : icons.check} size={13} />
+                      {item.resolved ? 'Reopen' : 'Resolve'}
+                    </button>
+                    {item.own && !item.deleted && <button type="button" onClick={() => setEditing({ kind: 'comment', commentId: item.id, body: item.body })}>Edit</button>}
+                    {item.own && !item.deleted && <button type="button" onClick={() => void reviewRepository.deleteComment(rendered.documentId, item.id).catch(() => onNotify('Comment not deleted', 'Only the author can delete this message.', 'danger'))}>Delete</button>}
+                  </div>
+                  {item.replies.length > 0 && (
+                    <div className="comment-replies">
+                      {item.replies.map((reply) => (
+                        <div key={reply.id} className="comment-reply">
+                          <header><strong>{reply.author}</strong><small>{formatRelativeTime(reply.createdAt)}{reply.editedAt ? ' · edited' : ''}</small></header>
+                          {editing?.kind === 'reply' && editing.replyId === reply.id ? (
+                            <form className="comment-edit" onSubmit={(event) => {
+                              event.preventDefault();
+                              if (!editing.body.trim()) return;
+                              void reviewRepository.updateReply(rendered.documentId, item.id, reply.id, editing.body)
+                                .then(() => setEditing(null))
+                                .catch(() => onNotify('Reply not changed', 'Only the author can edit this reply.', 'danger'));
+                            }}>
+                              <textarea value={editing.body} maxLength={16 * 1024} onChange={(event) => setEditing({ ...editing, body: event.target.value })} />
+                              <span><button type="submit" className="button">Save</button><button type="button" className="button" onClick={() => setEditing(null)}>Cancel</button></span>
+                            </form>
+                          ) : <p className={reply.deleted ? 'deleted-message' : undefined}>{reply.deleted ? 'Message deleted' : reply.body}</p>}
+                          {reply.own && !reply.deleted && <div className="comment-actions"><button type="button" onClick={() => setEditing({ kind: 'reply', commentId: item.id, replyId: reply.id, body: reply.body })}>Edit</button><button type="button" onClick={() => void reviewRepository.deleteReply(rendered.documentId, item.id, reply.id).catch(() => onNotify('Reply not deleted', 'Only the author can delete this reply.', 'danger'))}>Delete</button></div>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <form className="reply-compose" onSubmit={(event) => {
+                    event.preventDefault();
+                    if (!replyDraft.trim()) return;
+                    void reviewRepository.addReply(rendered.documentId, item.id, userName, replyDraft)
+                      .then(() => setReplyDrafts((current) => ({ ...current, [item.id]: '' })))
+                      .catch(() => onNotify('Reply not added', 'Your current role cannot reply to this thread.', 'danger'));
+                  }}>
+                    <input value={replyDraft} maxLength={16 * 1024} disabled={!capabilities?.comment} placeholder="Reply…" aria-label={`Reply to ${item.author}`} onChange={(event) => setReplyDrafts((current) => ({ ...current, [item.id]: event.target.value }))} />
+                    <button type="submit" disabled={!capabilities?.comment || !replyDraft.trim()}>Reply</button>
+                  </form>
+                </article>
+              );
+            })}
+            {commentCursor && (
+              <button
+                type="button"
+                className="button"
+                disabled={loadingEarlierComments}
+                onClick={() => {
+                  const cursor = commentCursor;
+                  setLoadingEarlierComments(true);
+                  void reviewRepository.listComments(rendered.documentId, cursor)
+                    .then((page) => {
+                      setComments((current) => {
+                        const seen = new Set(current.map((item) => item.id));
+                        return [...current, ...page.comments.filter((item) => !seen.has(item.id))];
+                      });
+                      setCommentCursor(page.nextCursor);
+                    })
+                    .catch(() => onNotify('Earlier comments unavailable', 'The next review page could not be loaded.', 'danger'))
+                    .finally(() => setLoadingEarlierComments(false));
+                }}
+              >
+                {loadingEarlierComments ? 'Loading earlier threads…' : 'Load earlier threads'}
+              </button>
+            )}
           </div>
         </div>
       ) : (
@@ -367,16 +603,27 @@ function ReviewDrawer({
             className="version-compose"
             onSubmit={(event) => {
               event.preventDefault();
-              if (!session) return;
-              void reviewRepository.createVersion(rendered.documentId, userName, versionLabel, session.getText()).then((version) => {
-                setVersionLabel('');
-                setSelectedVersion(version.id);
-                onNotify('Version saved', 'A restorable local snapshot was created.', 'success');
-              });
+              if (!session || savingVersion) return;
+              setSavingVersion(true);
+              void session.whenDurable()
+                .then(() => reviewRepository.createVersion(rendered.documentId, userName, versionLabel, session.getText()))
+                .then((version) => {
+                  setVersionLabel('');
+                  setSelectedVersion(version.id);
+                  onNotify(
+                    'Version saved',
+                    reviewRepository.mode === 'service'
+                      ? 'Every prior edit was committed before the server captured this Markdown.'
+                      : 'A restorable local snapshot was created after its journal checkpoint.',
+                    'success',
+                  );
+                })
+                .catch(() => onNotify('Version not saved', 'Reconnect to commit pending edits, or remove an older saved version.', 'danger'))
+                .finally(() => setSavingVersion(false));
             }}
           >
-            <input value={versionLabel} placeholder="Name this version" aria-label="Version name" onChange={(event) => setVersionLabel(event.target.value)} />
-            <button type="submit" className="button" disabled={!session}>Save version</button>
+            <input value={versionLabel} maxLength={160} placeholder="Name this version" aria-label="Version name" disabled={!capabilities?.saveVersion} onChange={(event) => setVersionLabel(event.target.value)} />
+            <button type="submit" className="button" disabled={!session || !capabilities?.saveVersion || !versionLabel.trim() || savingVersion}>{savingVersion ? 'Waiting for durable save…' : 'Save version'}</button>
           </form>
           <div className="history-layout">
             <div className="version-list" role="listbox" aria-label="Saved versions">
@@ -390,13 +637,28 @@ function ReviewDrawer({
             {selected && (
               <div className="version-preview">
                 <span>Snapshot preview</span>
-                <pre>{selected.markdown.slice(0, 900) || 'Blank document'}</pre>
-                <button type="button" className="button primary" onClick={() => {
+                <pre>{loadingVersion ? 'Loading saved Markdown…' : selected.markdown?.slice(0, 900) || 'Blank document'}</pre>
+                <button type="button" className="button primary" disabled={!capabilities?.edit || selected.markdown === undefined || selected.current || restoringVersion} onClick={() => {
+                  if (selected.markdown === undefined) return;
                   session?.setText(selected.markdown);
-                  onNotify('Version restored', `“${selected.label}” is now the current document.`, 'success');
+                  if (!session) return;
+                  setRestoringVersion(true);
+                  void session.whenDurable()
+                    .then(() => onNotify('Version restored', `“${selected.label}” was applied as a new, durable edit.`, 'success'))
+                    .catch(() => onNotify('Restore pending', 'The edit is in the local journal and will commit after reconnect.', 'neutral'))
+                    .finally(() => setRestoringVersion(false));
                 }}>
-                  Restore this version
+                  {restoringVersion ? 'Committing restore…' : 'Restore this version'}
                 </button>
+                {!selected.current && capabilities?.saveVersion && (
+                  <button type="button" className="button" onClick={() => {
+                    void reviewRepository.deleteVersion(rendered.documentId, selected.id)
+                      .then(() => onNotify('Version deleted', 'Its saved label was removed; shared content is reclaimed when unused.', 'success'))
+                      .catch(() => onNotify('Version not deleted', 'Your current role cannot delete this version.', 'danger'));
+                  }}>
+                    Delete saved version
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -434,15 +696,20 @@ export function AppOverlays(props: AppOverlaysProps) {
     size = 'small';
     content = <RenameDialog key={renderedDialog.documentId} dialog={renderedDialog} onRename={props.onRename} />;
   } else if (renderedDialog?.type === 'delete') {
-    title = 'Delete this document?';
-    description = 'This action only affects the local prototype workspace.';
+    title = 'Move this document to trash?';
+    description = 'It remains recoverable for 30 days.';
     size = 'small';
-    content = <DeleteDialog dialog={renderedDialog} onDelete={props.onDelete} />;
+    content = <DeleteDialog dialog={renderedDialog} onDelete={props.onDelete} dataMode={props.dataMode} />;
+  } else if (renderedDialog?.type === 'trash') {
+    title = 'Trash';
+    description = 'Restore now; permanently delete only after retention.';
+    size = 'large';
+    content = <TrashDialog onChanged={props.onDocumentsChanged} onNotify={props.onNotify} />;
   } else if (renderedDialog?.type === 'share') {
     title = 'Share document';
     description = 'Owner, editor, commenter, viewer. Scratch cannot share.';
     size = 'large';
-    content = <ShareDialog key={renderedDialog.documentId} title={renderedDialog.title} onNotify={props.onNotify} />;
+    content = <ShareDialog key={renderedDialog.documentId} documentId={renderedDialog.documentId} title={renderedDialog.title} capabilities={props.capabilities} onNotify={props.onNotify} />;
   } else if (renderedDialog?.type === 'keep-workspace') {
     title = 'Keep this workspace';
     description = 'A scratch tab is not a person.';

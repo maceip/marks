@@ -8,18 +8,24 @@
  * Updates install in the background and take over on the next navigation.
  * We never prompt the user to refresh.
  */
-const VERSION = 'v2';
+const VERSION = 'v4';
 const SHELL = `marks-shell-${VERSION}`;
 const ASSETS = `marks-assets-${VERSION}`;
 const CURRENT_CACHES = new Set([SHELL, ASSETS]);
 const APP_SHELL = '/';
 const MARKETING_SHELL = '/welcome/';
+const ROOT_RUNTIME = new Set([
+  '/esbt.wasm',
+  '/esbt.wasm.manifest.json',
+  '/manifest.webmanifest',
+  '/theme-bootstrap.js',
+]);
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(SHELL).then((cache) =>
       Promise.all(
-        [APP_SHELL, MARKETING_SHELL].map((path) =>
+        [APP_SHELL, MARKETING_SHELL, ...ROOT_RUNTIME].map((path) =>
           cache.add(path).catch(() => undefined),
         ),
       ),
@@ -29,13 +35,16 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
+    Promise.all([
+      caches.keys().then((keys) =>
+        Promise.all(
         keys
           .filter((key) => key.startsWith('marks-') && !CURRENT_CACHES.has(key))
           .map((key) => caches.delete(key)),
+        ),
       ),
-    ),
+      self.clients.claim(),
+    ]),
   );
 });
 
@@ -51,7 +60,7 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith('/v1') || url.pathname.startsWith('/collab')) return;
 
-  if (url.pathname.startsWith('/assets/')) {
+  if (url.pathname.startsWith('/assets/') || ROOT_RUNTIME.has(url.pathname)) {
     event.respondWith(cacheFirst(request));
     return;
   }

@@ -11,6 +11,7 @@ import mark from 'markdown-it-mark';
 import multimdTable from 'markdown-it-multimd-table';
 import sub from 'markdown-it-sub';
 import sup from 'markdown-it-sup';
+import { localAssetId } from '../lib/asset-links.ts';
 
 type MarkdownPlugin = Parameters<MarkdownItInstance['use']>[0];
 
@@ -161,6 +162,22 @@ export function createMarkdownIt(features: MarkdownRendererFeatures = {}): Markd
       tokens[index].attrSet('rel', 'noopener noreferrer');
     }
     return defaultLinkOpen(tokens, index, options, env, self);
+  };
+
+  // Browser-local binary assets are not embedded as multi-megabyte data URLs
+  // in CRDT text. Preserve a normal Markdown destination, but withhold `src`
+  // until the main thread resolves the IndexedDB blob to an object URL.
+  const defaultImage = md.renderer.rules.image;
+  md.renderer.rules.image = (tokens, index, options, env, self) => {
+    const token = tokens[index];
+    const id = localAssetId(String(token.attrGet('src') ?? ''));
+    if (id) {
+      token.attrs = (token.attrs ?? []).filter(([name]) => name !== 'src');
+      token.attrSet('data-marks-local-asset', id);
+    }
+    return defaultImage
+      ? defaultImage(tokens, index, options, env, self)
+      : self.renderToken(tokens, index, options);
   };
 
   return md;

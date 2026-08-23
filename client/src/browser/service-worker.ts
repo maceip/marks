@@ -10,7 +10,10 @@ import { hasServiceWorker, isAutomatedBrowser } from './platform.ts';
  *  - later updates wait for the next navigation — no "refresh now?" toast
  */
 export function registerServiceWorker(): void {
-  if (!hasServiceWorker() || isAutomatedBrowser()) return;
+  if (
+    !hasServiceWorker()
+    || (isAutomatedBrowser() && import.meta.env.VITE_MARKS_TEST_SERVICE_WORKER !== '1')
+  ) return;
   if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) return;
 
   const register = () => {

@@ -1,8 +1,9 @@
 # CRDT research survey, January 2025 – August 2026
 
-> **Current tree:** marks ships only ESBT (`@marks/esbt`). Loro, Yjs, and
-> Hocuspocus were removed in PR #6. The survey below is the historical record
-> that led here. The “Adopted” table is **not** the running stack.
+> **Current tree:** marks ships one Rust ESBT core natively in `marks-server`
+> and as a checked-in Wasm artifact in the browser. Loro, Yjs, Hocuspocus, and
+> the duplicate TypeScript ESBT implementations are gone. The survey below is
+> the historical record that led here.
 
 Why this project uses the algorithms and libraries it uses. Every claim below
 is attributed: numbers taken from a paper are labelled as such, and numbers we
@@ -18,7 +19,8 @@ replaced Loro/Yjs with a first-party ESBT engine.
 
 | Current | For |
 | --- | --- |
-| [`@marks/esbt`](../esbt) | Only document engine, presence, undo, and compatibility primitives |
+| [Rust ESBT](https://github.com/maceip/ESBT-web) | Only document engine; native server + generated, ABI-checked Wasm binding |
+| [`PresenceStore`](../client/src/collab/presence-store.ts) | Marks-owned transient cursor/avatar relay; never document state |
 
 | Survey-era (removed in PR #6) | Was used for |
 | --- | --- |
@@ -71,8 +73,9 @@ long, highly concurrent sessions. Reported: 86–93% lower execution time and
 on beginning and random insertion patterns.
 
 **Adopted.** The survey originally parked this paper because no implementation
-existed. marks now ships that implementation as `@marks/esbt` — the only
-engine on the tree.
+existed. Marks now pins the Rust implementation once, links it natively in the
+server, and builds the browser artifact from the same revision. A versioned
+engine-owned IDL generates the TypeScript ABI and is embedded in the Wasm.
 
 ### The Art of the Fugue: Minimising Interleaving in Collaborative Text Editing
 
@@ -97,7 +100,7 @@ overlapping annotations, and Peritext's problem does not arise.
 
 | Project | Version checked | Verdict |
 | --- | --- | --- |
-| [`@marks/esbt`](../esbt) | 0.1.0 | **Current engine.** First-party TypeScript ESBT. Replaced Loro and Yjs in PR #6. |
+| [ESBT-web](https://github.com/maceip/ESBT-web) | pinned Rust revision + Wasm ABI v1 | **Current engine.** One Rust source for browser and server. |
 | [loro-crdt](https://github.com/loro-dev/loro) | 1.14.1, published 2026-08-10 | **Survey default, then removed.** Fugue over an Eg-walker style event graph. |
 | [loro-codemirror](https://github.com/loro-dev/loro-codemirror) | 0.3.3 | **Survey, then removed.** Cursor layers were kept until the ESBT presence layer replaced them. |
 | [Yjs](https://github.com/yjs/yjs) | 13.6.32 | **Survey alternate, then removed.** |
@@ -107,53 +110,32 @@ overlapping annotations, and Peritext's problem does not arise.
 | [Y-Sweet](https://github.com/jamsocket/y-sweet) | MIT | **Not adopted, worth knowing about.** Rust Yjs server persisting to S3-compatible storage with document-level access tokens. The right answer if this needed to scale horizontally instead of running from one SQLite file. |
 | [json-joy](https://github.com/streamich/json-joy) | 18.28.0 | **Not adopted.** High-performance JSON and rich-text CRDT; more surface than a markdown source buffer needs. |
 
-## Where we departed from the libraries
+## Product integration decisions
 
-Two bugs in `loro-codemirror@0.3.3` made its sync and undo plugins unusable
-here. The workarounds lived in `client/src/collab/loro-engine.ts` until that
-file was deleted with Loro. `client/src/collab/esbt-engine.ts` now owns both
-directions:
+Marks owns both directions of the CodeMirror bridge. A CodeMirror change-set is
+one Rust transaction; engine-originated changes return exact sequential UTF-16
+replacements, which are dispatched after the current view callback. The normal
+path never asks the engine for the whole document. A full-text reconciliation
+exists only as an invariant-recovery path.
 
-1. **Its sync plugin ignores locally originated events** and its annotation is
-   module-private. An undo, or any local write that does not come from the
-   editor — ticking a checkbox in the preview, for instance — is therefore
-   either invisible to the editor or echoed back into the CRDT, corrupting it.
-   We own both directions instead, tagging editor-originated commits with a
-   Loro commit `origin` so the two can be told apart.
-2. **Its undo plugin re-dispatches its accumulated change set once per event**
-   in a batch, and separately restores a saved selection from a deferred
-   callback, by which time the position may no longer exist. Both throw
-   out-of-range errors from CodeMirror. We drive Loro's `UndoManager` from a
-   keymap and reconcile the editor with a minimal text diff.
-
-Its cursor and selection layers are used as published.
+Undo remains in Rust and emits compensating CRDT operations. Presence is not an
+engine feature: a bounded Marks codec relays expiring avatar/caret state and is
+never persisted, snapshotted, or mixed with authorship.
 
 ## Our own measurements
 
-Run them yourself: **Benchmark engines** in the sidebar, or `npm run measure`.
+Run the **Engine performance receipt** in the sidebar for engine-path evidence,
+and `npm run measure` for the separate editor-to-preview product path. The
+engine receipt hashes the production Wasm and deterministic trace, discards a
+warm-up, records raw trials, reports median/p95, and identifies the source,
+ABI, seed, browser, memory, and byte counts. Interactive edits are one
+transaction/update each; offline branch edits are explicitly batched.
 
-Identical 25,000-edit trace, headless Chromium in a container — indicative, not
-a benchmark of your hardware:
-
-| | Loro 1.14.1 | Yjs 13.6.32 |
-| --- | --- | --- |
-| Apply trace locally | 157 ms | 83 ms |
-| Second replica applies all updates | 140 ms | 35 ms |
-| Merge two branches (5,000 edits each) | 22.5 ms | 5.1 ms |
-| Open from snapshot | 2.0 ms | 2.8 ms |
-| Snapshot size | 18.8 KB | 27.3 KB |
-| Update traffic | 456 KB | 128 KB |
-
-This does not reproduce the ordering in the published `crdt-benchmarks` suite,
-and the difference is worth stating plainly: we commit after every single
-keystroke, which is what an editor actually does and what maximises Loro's
-per-commit framing and WebAssembly boundary costs. The published suites apply
-traces in bulk. Both readings are true of different workloads.
-
-For this application the deciding numbers are snapshot size and cold-open time,
-where Loro leads: they set how quickly a document appears when someone clicks
-it, and how much a long-lived document costs to store. A 3 µs difference per
-keystroke does not.
+No static timing table lives in this survey because it immediately loses its
+machine, browser, thermal, and artifact context. Downloaded JSON receipts are
+the evidence. This is also not a comparative suite: a claim against Loro, Yjs,
+Logoot, or LSEQ requires equivalent pinned adapters and the same transaction
+policy. The paper's percentages are reported paper results, not Marks results.
 
 ## Also tracked, not used
 

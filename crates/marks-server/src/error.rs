@@ -42,6 +42,10 @@ impl ApiError {
         Self::new(StatusCode::TOO_MANY_REQUESTS, "rate limited")
     }
 
+    pub fn unavailable(message: &'static str) -> Self {
+        Self::new(StatusCode::SERVICE_UNAVAILABLE, message)
+    }
+
     pub fn internal() -> Self {
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
     }

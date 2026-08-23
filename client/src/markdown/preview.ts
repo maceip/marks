@@ -1,5 +1,7 @@
 import DOMPurify, { type Config } from 'dompurify';
 import MarkdownWorker from '../workers/markdown.worker?worker';
+import type { TextEdit } from '../text/change';
+import { hydrateLocalAssetImages, revokeLocalAssetImages } from '../data/assets';
 import { watchDiagrams } from './mermaid';
 import type { BlockPatch, Heading, RenderRequest, RenderResponse, RenderStats } from './types';
 
@@ -24,7 +26,7 @@ export interface PreviewStats extends RenderStats {
 
 const SANITIZE_CONFIG = {
   USE_PROFILES: { html: true, svg: true, mathMl: true },
-  ADD_ATTR: ['target', 'rel', 'align', 'colspan', 'rowspan', 'checked', 'disabled', 'hidden', 'data-align', 'data-shape', 'data-fill'],
+  ADD_ATTR: ['target', 'rel', 'align', 'colspan', 'rowspan', 'checked', 'disabled', 'hidden', 'data-align', 'data-shape', 'data-fill', 'data-marks-local-asset'],
 } satisfies Config;
 
 function sanitize(html: string): string {
@@ -44,7 +46,8 @@ export class PreviewRenderer {
 
   private seq = 0;
   private inFlight: { seq: number; submittedAt: number } | null = null;
-  private queued: { text: string; submittedAt: number } | null = null;
+  private queuedFull: { text: string; submittedAt: number } | null = null;
+  private queuedEdits: { edits: TextEdit[]; submittedAt: number } | null = null;
   private destroyed = false;
   private idleHandle = 0;
   private readonly unwatchDiagrams: () => void;
@@ -70,9 +73,12 @@ export class PreviewRenderer {
    * into a single follow-up pass, so a burst of keystrokes never queues a
    * backlog of stale renders.
    */
-  update(text: string): void {
-    if (this.destroyed) return;
-    this.queued = { text, submittedAt: performance.now() };
+  update(edits: readonly TextEdit[]): void {
+    if (this.destroyed || edits.length === 0) return;
+    if (!this.queuedEdits) {
+      this.queuedEdits = { edits: [], submittedAt: performance.now() };
+    }
+    this.queuedEdits.edits.push(...edits.map((edit) => ({ ...edit })));
     this.pump();
   }
 
@@ -82,16 +88,27 @@ export class PreviewRenderer {
     this.post({ type: 'reset' });
     this.nodes.clear();
     this.container.replaceChildren();
-    this.update(text);
+    // `text` already includes every edit queued before this reset.
+    this.queuedEdits = null;
+    this.queuedFull = { text, submittedAt: performance.now() };
+    this.pump();
   }
 
   private pump(): void {
-    if (this.inFlight || !this.queued) return;
-    const { text, submittedAt } = this.queued;
-    this.queued = null;
+    if (this.inFlight) return;
+    const queued = this.queuedFull ?? this.queuedEdits;
+    if (!queued) return;
     this.seq += 1;
-    this.inFlight = { seq: this.seq, submittedAt };
-    this.post({ type: 'render', seq: this.seq, text });
+    this.inFlight = { seq: this.seq, submittedAt: queued.submittedAt };
+    if (this.queuedFull) {
+      const { text } = this.queuedFull;
+      this.queuedFull = null;
+      this.post({ type: 'render', seq: this.seq, text });
+    } else if (this.queuedEdits) {
+      const { edits } = this.queuedEdits;
+      this.queuedEdits = null;
+      this.post({ type: 'patch', seq: this.seq, edits });
+    }
   }
 
   private post(message: RenderRequest): void {
@@ -172,6 +189,7 @@ export class PreviewRenderer {
       const keys = new Set(blocks.map((block) => block.key));
       for (const [key, node] of this.nodes) {
         if (!keys.has(key)) {
+          revokeLocalAssetImages(node);
           node.remove();
           this.nodes.delete(key);
           touched += 1;
@@ -192,9 +210,12 @@ export class PreviewRenderer {
         node.className = 'marks-block';
         node.dataset.key = block.key;
         node.innerHTML = sanitize(block.html ?? '');
+        void hydrateLocalAssetImages(node);
         touched += 1;
       } else if (block.html !== undefined) {
+        revokeLocalAssetImages(node);
         node.innerHTML = sanitize(block.html);
+        void hydrateLocalAssetImages(node);
         touched += 1;
       }
 
@@ -218,6 +239,7 @@ export class PreviewRenderer {
     this.destroyed = true;
     this.cancelIdle();
     this.unwatchDiagrams();
+    revokeLocalAssetImages(this.container);
     this.worker.terminate();
     this.nodes.clear();
     this.statsListener = null;

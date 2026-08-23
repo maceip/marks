@@ -250,6 +250,11 @@ a {
   animation: pulse 1.4s ease-in-out infinite;
 }
 
+.status-saving .status-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
 .status-offline .status-dot {
   background: var(--danger);
 }

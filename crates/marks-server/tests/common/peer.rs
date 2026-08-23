@@ -7,16 +7,23 @@
 
 use base64ct::{Base64UrlUnpadded, Encoding};
 use futures_util::{SinkExt, StreamExt};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+
+use marks_server::room::protocol::{MutationKind, decode_committed, encode_mutation};
 
 pub const MSG_UPDATE: u8 = 0x01;
 pub const MSG_EPHEMERAL: u8 = 0x02;
 pub const MSG_SERVER_VV: u8 = 0x03;
 pub const MSG_SNAPSHOT: u8 = 0x04;
 pub const MSG_SYNCED: u8 = 0x05;
+pub const MSG_MUTATION: u8 = 0x06;
+pub const MSG_COMMITTED: u8 = 0x07;
+
+static NEXT_MUTATION_ID: AtomicU64 = AtomicU64::new(1);
 
 pub struct Peer {
     pub doc: esbt::Document,
@@ -44,6 +51,7 @@ impl Ticket {
 pub enum PeerEvent {
     Synced,
     Applied,
+    Committed([u8; 16], u64),
     Closed(Option<u16>),
     Other,
 }
@@ -68,7 +76,7 @@ impl Peer {
         request.headers_mut().insert(
             "Sec-WebSocket-Protocol",
             format!(
-                "marks.esbt.v1, marks.ticket.v1.{}.{}",
+                "marks.esbt.v2, marks.ticket.v1.{}.{}",
                 ticket.ticket_id, ticket.ticket_secret
             )
             .parse()
@@ -87,7 +95,7 @@ impl Peer {
                 .headers()
                 .get("sec-websocket-protocol")
                 .and_then(|value| value.to_str().ok()),
-            Some("marks.esbt.v1"),
+            Some("marks.esbt.v2"),
             "server selects only the esbt subprotocol"
         );
         let mut peer = Peer { doc, ws };
@@ -137,11 +145,15 @@ impl Peer {
                         if !version.covers(&self.doc.version())
                             && let Ok(missing) = self.doc.export_update(&version)
                         {
-                            self.send(MSG_UPDATE, &missing).await;
+                            self.send_mutation(MutationKind::Update, &missing).await;
                         }
                         PeerEvent::Other
                     }
                     MSG_SYNCED => PeerEvent::Synced,
+                    MSG_COMMITTED => {
+                        let receipt = decode_committed(payload).expect("committed receipt");
+                        PeerEvent::Committed(receipt.id, receipt.revision)
+                    }
                     MSG_EPHEMERAL => PeerEvent::Other,
                     _ => PeerEvent::Other,
                 }
@@ -161,6 +173,32 @@ impl Peer {
             .expect("ws send");
     }
 
+    pub async fn send_mutation(&mut self, kind: MutationKind, payload: &[u8]) -> [u8; 16] {
+        let id = next_mutation_id();
+        self.send_mutation_with_id(id, kind, payload).await;
+        id
+    }
+
+    pub async fn send_mutation_with_id(
+        &mut self,
+        id: [u8; 16],
+        kind: MutationKind,
+        payload: &[u8],
+    ) {
+        let encoded = encode_mutation(id, kind, payload).expect("encode mutation");
+        self.send(MSG_MUTATION, &encoded).await;
+    }
+
+    pub async fn wait_committed(&mut self, expected_id: [u8; 16]) -> u64 {
+        loop {
+            match self.next_event().await {
+                PeerEvent::Committed(id, revision) if id == expected_id => return revision,
+                PeerEvent::Closed(code) => panic!("closed before commit: {code:?}"),
+                _ => {}
+            }
+        }
+    }
+
     /// Type locally and put the canonical update on the wire.
     pub async fn insert(&mut self, index: usize, text: &str) {
         let update = self
@@ -168,7 +206,10 @@ impl Peer {
             .insert(index, text, None)
             .expect("local insert")
             .expect("local update");
-        self.send(MSG_UPDATE, &update.canonical_bytes).await;
+        let id = self
+            .send_mutation(MutationKind::Update, &update.canonical_bytes)
+            .await;
+        self.wait_committed(id).await;
     }
 
     /// Pump messages until this replica's text equals `expected`.
@@ -197,4 +238,11 @@ impl Peer {
         let _ = self.ws.close(None).await;
         self.doc
     }
+}
+
+fn next_mutation_id() -> [u8; 16] {
+    let sequence = NEXT_MUTATION_ID.fetch_add(1, Ordering::Relaxed);
+    let mut id = [0_u8; 16];
+    id[8..].copy_from_slice(&sequence.to_be_bytes());
+    id
 }

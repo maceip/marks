@@ -1,26 +1,41 @@
 use crate::error::{ApiError, ApiResult};
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
-/// One transactional SQLite database behind one writer lock. This is the v1
-/// deployment shape from `docs/V1-SCOPE.md`: one process, one database.
+/// One WAL database with a serialized FULL-synchronous writer and an
+/// independent read connection. Blocking rusqlite work is declared to Tokio so
+/// an fsync or busy wait does not pin an async worker thread.
 pub struct Db {
-    conn: Mutex<Connection>,
+    writer: Mutex<Connection>,
+    reader: Mutex<Connection>,
 }
 
 impl Db {
     pub fn open(path: &Path) -> ApiResult<Self> {
-        let conn = if path.as_os_str() == ":memory:" {
-            Connection::open_in_memory()?
+        static NEXT_MEMORY_DB: AtomicU64 = AtomicU64::new(1);
+        let (writer, reader) = if path.as_os_str() == ":memory:" {
+            let uri = format!(
+                "file:marks-memory-{}?mode=memory&cache=shared",
+                NEXT_MEMORY_DB.fetch_add(1, Ordering::Relaxed)
+            );
+            let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
+                | OpenFlags::SQLITE_OPEN_CREATE
+                | OpenFlags::SQLITE_OPEN_URI;
+            (
+                Connection::open_with_flags(&uri, flags)?,
+                Connection::open_with_flags(&uri, flags)?,
+            )
         } else {
-            Connection::open(path)?
+            (Connection::open(path)?, Connection::open(path)?)
         };
-        conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.pragma_update(None, "synchronous", "FULL")?;
-        conn.pragma_update(None, "foreign_keys", "ON")?;
+        configure(&writer, true)?;
+        configure(&reader, false)?;
         let db = Self {
-            conn: Mutex::new(conn),
+            writer: Mutex::new(writer),
+            reader: Mutex::new(reader),
         };
         db.migrate()?;
         Ok(db)
@@ -28,29 +43,53 @@ impl Db {
 
     /// Run read-only work on the connection.
     pub fn read<T>(&self, work: impl FnOnce(&Connection) -> ApiResult<T>) -> ApiResult<T> {
-        let conn = self.conn.lock().map_err(|_| ApiError::internal())?;
-        work(&conn)
+        run_blocking(|| {
+            let conn = self.reader.lock().map_err(|_| ApiError::internal())?;
+            work(&conn)
+        })
     }
 
     /// Run one immediate transaction. The closure either commits atomically
     /// or everything rolls back; validators never pair with unguarded writes.
     pub fn tx<T>(&self, work: impl FnOnce(&Connection) -> ApiResult<T>) -> ApiResult<T> {
-        let mut conn = self.conn.lock().map_err(|_| ApiError::internal())?;
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        match work(&tx) {
-            Ok(value) => {
-                tx.commit()?;
-                Ok(value)
+        run_blocking(|| {
+            let mut conn = self.writer.lock().map_err(|_| ApiError::internal())?;
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            match work(&tx) {
+                Ok(value) => {
+                    tx.commit()?;
+                    Ok(value)
+                }
+                Err(error) => {
+                    drop(tx);
+                    Err(error)
+                }
             }
-            Err(error) => {
-                drop(tx);
-                Err(error)
+        })
+    }
+
+    /// SQLite's online backup API produces one transactionally valid main DB
+    /// without copying WAL/SHM files or requiring the service to stop.
+    pub fn backup_to(&self, destination: &Path) -> ApiResult<()> {
+        run_blocking(|| {
+            let source = self.writer.lock().map_err(|_| ApiError::internal())?;
+            let mut target = Connection::open(destination)?;
+            configure(&target, true)?;
+            let backup = rusqlite::backup::Backup::new(&source, &mut target)?;
+            backup.run_to_completion(128, Duration::from_millis(1), None)?;
+            drop(backup);
+            let integrity: String =
+                target.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+            if integrity != "ok" {
+                return Err(ApiError::internal());
             }
-        }
+            target.pragma_update(None, "journal_mode", "DELETE")?;
+            Ok(())
+        })
     }
 
     fn migrate(&self) -> ApiResult<()> {
-        let conn = self.conn.lock().map_err(|_| ApiError::internal())?;
+        let mut conn = self.writer.lock().map_err(|_| ApiError::internal())?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_migrations (
                 version INTEGER PRIMARY KEY,
@@ -66,13 +105,34 @@ impl Db {
             if *version <= applied {
                 continue;
             }
-            conn.execute_batch(&format!("BEGIN IMMEDIATE;\n{sql}\nCOMMIT;"))?;
-            conn.execute(
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            tx.execute_batch(sql)?;
+            tx.execute(
                 "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
                 rusqlite::params![version, crate::ids::now_ms() as i64],
             )?;
+            tx.commit()?;
         }
         Ok(())
+    }
+}
+
+fn configure(connection: &Connection, writer: bool) -> ApiResult<()> {
+    connection.busy_timeout(Duration::from_secs(5))?;
+    connection.pragma_update(None, "journal_mode", "WAL")?;
+    connection.pragma_update(None, "synchronous", if writer { "FULL" } else { "NORMAL" })?;
+    connection.pragma_update(None, "foreign_keys", "ON")?;
+    connection.pragma_update(None, "temp_store", "MEMORY")?;
+    Ok(())
+}
+
+fn run_blocking<T>(work: impl FnOnce() -> T) -> T {
+    if tokio::runtime::Handle::try_current()
+        .is_ok_and(|handle| handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+    {
+        tokio::task::block_in_place(work)
+    } else {
+        work()
     }
 }
 
@@ -294,6 +354,158 @@ const MIGRATIONS: &[(i64, &str)] = &[
     CREATE UNIQUE INDEX pairings_word_code_hash
         ON pairings(word_code_hash)
         WHERE word_code_hash IS NOT NULL;
+    ",
+    ),
+    (
+        4,
+        "
+    -- A client mutation is acknowledged only after this receipt and its
+    -- document state commit atomically. Retrying the same id is therefore a
+    -- read of the original commit, not a second write.
+    CREATE TABLE document_commits (
+        document_id TEXT NOT NULL REFERENCES documents(id),
+        message_id BLOB NOT NULL CHECK(length(message_id) = 16),
+        payload_hash BLOB NOT NULL CHECK(length(payload_hash) = 32),
+        kind INTEGER NOT NULL CHECK(kind IN (1, 2)),
+        revision INTEGER NOT NULL,
+        actor_kind TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        session_id TEXT,
+        committed_at INTEGER NOT NULL,
+        PRIMARY KEY(document_id, message_id)
+    );
+    CREATE INDEX document_commits_by_revision
+        ON document_commits(document_id, revision);
+    ",
+    ),
+    (
+        5,
+        "
+    -- Health polling never writes. This single row is instead updated by the
+    -- process heartbeat through the same durable writer as document commits.
+    CREATE TABLE server_health (
+        singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+        checked_at INTEGER NOT NULL
+    );
+    INSERT INTO server_health(singleton, checked_at) VALUES (1, 0);
+    ",
+    ),
+    (
+        6,
+        "
+    -- Comments and named versions are product metadata, not CRDT operations.
+    -- Versions store compressed canonical Markdown behind a content hash so
+    -- repeated labels on identical content do not duplicate large blobs and
+    -- remain portable across future engine versions.
+    CREATE TABLE document_comments (
+        id TEXT PRIMARY KEY,
+        document_id TEXT NOT NULL REFERENCES documents(id),
+        author_principal_id TEXT NOT NULL REFERENCES principals(id),
+        body TEXT NOT NULL,
+        resolved INTEGER NOT NULL DEFAULT 0 CHECK(resolved IN (0, 1)),
+        created_at INTEGER NOT NULL,
+        resolved_at INTEGER,
+        resolved_by_principal_id TEXT REFERENCES principals(id)
+    );
+    CREATE INDEX document_comments_by_document
+        ON document_comments(document_id, created_at DESC);
+
+    CREATE TABLE document_version_blobs (
+        document_id TEXT NOT NULL REFERENCES documents(id),
+        content_hash BLOB NOT NULL CHECK(length(content_hash) = 32),
+        markdown_zstd BLOB NOT NULL,
+        markdown_bytes INTEGER NOT NULL,
+        chars INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY(document_id, content_hash)
+    );
+
+    CREATE TABLE document_versions (
+        id TEXT PRIMARY KEY,
+        document_id TEXT NOT NULL,
+        content_hash BLOB NOT NULL,
+        label TEXT NOT NULL,
+        author_principal_id TEXT NOT NULL REFERENCES principals(id),
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY(document_id, content_hash)
+            REFERENCES document_version_blobs(document_id, content_hash)
+    );
+    CREATE INDEX document_versions_by_document
+        ON document_versions(document_id, created_at DESC);
+    ",
+    ),
+    (
+        7,
+        "
+    -- A recovery snapshot can admit a long contiguous prefix without carrying
+    -- one retained operation object per receipt. Attribute those receipts as
+    -- bounded ranges instead of expanding attacker-controlled sequence spans.
+    CREATE TABLE op_author_ranges (
+        document_id TEXT NOT NULL REFERENCES documents(id),
+        site TEXT NOT NULL,
+        first_seq INTEGER NOT NULL,
+        last_seq INTEGER NOT NULL,
+        actor_kind TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        session_id TEXT,
+        received_at INTEGER NOT NULL,
+        CHECK(first_seq > 0 AND last_seq >= first_seq),
+        PRIMARY KEY(document_id, site, first_seq, last_seq)
+    );
+    CREATE INDEX op_author_ranges_lookup
+        ON op_author_ranges(document_id, site, first_seq, last_seq);
+    ",
+    ),
+    (
+        8,
+        "
+    -- Review threads retain ESBT-owned range anchors but remain product
+    -- metadata. Root messages and replies are soft-deleted so a deletion does
+    -- not erase the surrounding conversation or leave dangling UI state.
+    ALTER TABLE document_comments ADD COLUMN start_anchor BLOB;
+    ALTER TABLE document_comments ADD COLUMN end_anchor BLOB;
+    ALTER TABLE document_comments ADD COLUMN quote TEXT NOT NULL DEFAULT '';
+    ALTER TABLE document_comments ADD COLUMN start_offset INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE document_comments ADD COLUMN end_offset INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE document_comments ADD COLUMN edited_at INTEGER;
+    ALTER TABLE document_comments ADD COLUMN deleted_at INTEGER;
+
+    CREATE TABLE document_comment_replies (
+        id TEXT PRIMARY KEY,
+        comment_id TEXT NOT NULL REFERENCES document_comments(id),
+        author_principal_id TEXT NOT NULL REFERENCES principals(id),
+        body TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        edited_at INTEGER,
+        deleted_at INTEGER
+    );
+    CREATE INDEX document_comment_replies_by_thread
+        ON document_comment_replies(comment_id, created_at ASC);
+    ",
+    ),
+    (
+        9,
+        "
+    -- Binary bytes live in the content-addressed filesystem store; SQLite
+    -- owns the authorization/reference graph and exact quotas.
+    CREATE TABLE asset_blobs (
+        content_hash BLOB PRIMARY KEY CHECK(length(content_hash) = 32),
+        bytes INTEGER NOT NULL CHECK(bytes > 0),
+        media_type TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+    );
+    CREATE TABLE document_assets (
+        id TEXT PRIMARY KEY,
+        document_id TEXT NOT NULL REFERENCES documents(id),
+        content_hash BLOB NOT NULL REFERENCES asset_blobs(content_hash),
+        filename TEXT NOT NULL,
+        actor_kind TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        UNIQUE(document_id, content_hash)
+    );
+    CREATE INDEX document_assets_by_document
+        ON document_assets(document_id, created_at ASC);
     ",
     ),
 ];

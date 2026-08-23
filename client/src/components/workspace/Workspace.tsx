@@ -18,8 +18,8 @@ const EditorPane = lazy(() =>
 const PreviewPane = lazy(() =>
   import('./PreviewPane').then((module) => ({ default: module.PreviewPane })),
 );
-const AiSheet = lazy(() =>
-  import('../chrome/AiSheet').then((module) => ({ default: module.AiSheet })),
+const DraftToolsSheet = lazy(() =>
+  import('../chrome/DraftToolsSheet').then((module) => ({ default: module.DraftToolsSheet })),
 );
 
 interface WorkspaceProps {
@@ -37,6 +37,7 @@ interface WorkspaceProps {
   onView: (view: EditorView | null) => void;
   onPreview?: (element: HTMLElement | null) => void;
   previewRequested?: boolean;
+  onAssetError?: (error: Error) => void;
 }
 
 const SPLIT_KEY = 'marks:split';
@@ -63,6 +64,7 @@ function WorkspaceView({
   onView,
   onPreview,
   previewRequested,
+  onAssetError,
 }: WorkspaceProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [split, setSplit] = useState(loadSplit);
@@ -70,7 +72,7 @@ function WorkspaceView({
   const [previewWarm, setPreviewWarm] = useState(
     () => mode !== 'edit' || Boolean(previewRequested) || posture.foldable,
   );
-  const [companion, setCompanion] = useState<'preview' | 'outline' | 'ai'>('preview');
+  const [companion, setCompanion] = useState<'preview' | 'outline' | 'tools'>('preview');
   const [localHeadings, setLocalHeadings] = useState<Heading[]>([]);
   const foldBook = posture.shell === 'fold-book';
   const showEditor = mode !== 'preview' || foldBook;
@@ -171,6 +173,7 @@ function WorkspaceView({
             onView={handleView}
             onScroll={() => scrollSync.fromEditor()}
             onCursor={onCursor}
+            onAssetError={onAssetError}
           />
         </Suspense>
       )}
@@ -205,7 +208,7 @@ function WorkspaceView({
               <nav className="fold-companion-tabs" aria-label="Companion pane">
                 <button type="button" className={companion === 'preview' ? 'active' : undefined} onClick={() => setCompanion('preview')}>Preview</button>
                 <button type="button" className={companion === 'outline' ? 'active' : undefined} onClick={() => setCompanion('outline')}>Outline</button>
-                <button type="button" className={companion === 'ai' ? 'active' : undefined} onClick={() => setCompanion('ai')}>AI</button>
+                <button type="button" className={companion === 'tools' ? 'active' : undefined} onClick={() => setCompanion('tools')}>Tools</button>
                 <button type="button" onClick={() => onAction?.('comments')}>Review</button>
               </nav>
               <div className="fold-companion-body">
@@ -224,9 +227,9 @@ function WorkspaceView({
                 {companion === 'outline' && (
                   <Outline headings={localHeadings} onSelect={(line) => scrollSync.scrollToLine(line)} />
                 )}
-                {companion === 'ai' && (
+                {companion === 'tools' && (
                   <Suspense fallback={null}>
-                    <AiSheet
+                    <DraftToolsSheet
                       open
                       embedded
                       documentTitle={documentTitle}

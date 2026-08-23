@@ -140,15 +140,18 @@ async fn production_binary_two_peers_converge_on_service_document() {
 
     let ticket_a = scratch_ticket(&base, &http, &doc.auth, &doc.document_id, None).await;
     let mut peer_a = Peer::connect(&base, &ticket_a, fresh_doc(ticket_a.site), None).await;
-    peer_a.insert(0, "Peer A from CI.").await;
+    let initial = peer_a.doc.text();
+    peer_a.insert(peer_a.doc.len(), "Peer A from CI.").await;
+    let after_a = format!("{initial}Peer A from CI.");
 
     let ticket_b = scratch_ticket(&base, &http, &doc.auth, &doc.document_id, None).await;
     let mut peer_b = Peer::connect(&base, &ticket_b, fresh_doc(ticket_b.site), None).await;
-    peer_b.converge_to("Peer A from CI.").await;
+    peer_b.converge_to(&after_a).await;
 
     let len = peer_b.doc.len();
     peer_b.insert(len, " Peer B from CI.").await;
-    peer_a.converge_to("Peer A from CI. Peer B from CI.").await;
+    let expected = format!("{after_a} Peer B from CI.");
+    peer_a.converge_to(&expected).await;
     assert_eq!(peer_a.doc.text(), peer_b.doc.text());
 
     let exported = http
@@ -161,7 +164,7 @@ async fn production_binary_two_peers_converge_on_service_document() {
         .await
         .unwrap();
     assert_eq!(
-        exported, "Peer A from CI. Peer B from CI.",
+        exported, expected,
         "export must read the live journal, not an empty local replica"
     );
 }

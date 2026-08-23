@@ -4,8 +4,9 @@
 
 mod common;
 
-use common::peer::{MSG_UPDATE, Peer, Ticket};
+use common::peer::{Peer, PeerEvent, Ticket};
 use common::{TestServer, create_principal, temp_db};
+use marks_server::room::protocol::MutationKind;
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
@@ -74,6 +75,57 @@ async fn principal_ticket(
 
 fn fresh_doc(site: u128) -> esbt::Document {
     esbt::Document::with_defaults(site).expect("client replica")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mutations_cannot_forge_another_room_site_through_updates_or_snapshots() {
+    let server = TestServer::spawn(temp_db("room-site-binding")).await;
+    let http = reqwest::Client::new();
+    let base = server.base.clone();
+    let (auth, document_id) = scratch_document(&base, &http).await;
+
+    let ticket = scratch_ticket(&base, &http, &auth, &document_id, None).await;
+    let mut peer = Peer::connect(&base, &ticket, fresh_doc(ticket.site), None).await;
+    let mut forged = fresh_doc(999);
+    let update = forged.insert(0, "forged update", None).unwrap().unwrap();
+    peer.send_mutation(MutationKind::Update, &update.canonical_bytes)
+        .await;
+    assert_eq!(peer.expect_close().await, Some(4400));
+
+    let ticket = scratch_ticket(&base, &http, &auth, &document_id, Some(ticket.site)).await;
+    let mut peer = Peer::connect(&base, &ticket, fresh_doc(ticket.site), None).await;
+    let snapshot = forged.export_compact_snapshot().unwrap();
+    peer.send_mutation(MutationKind::Snapshot, &snapshot).await;
+    assert_eq!(peer.expect_close().await, Some(4400));
+
+    let exported = http
+        .get(format!("{base}/v1/documents/{document_id}/export"))
+        .header("Authorization", &auth)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(exported.status(), 200);
+    assert_eq!(exported.text().await.unwrap(), "");
+    server
+        .app
+        .db
+        .read(|conn| {
+            let updates: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM document_updates WHERE document_id = ?1",
+                [&document_id],
+                |row| row.get(0),
+            )?;
+            let ranges: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM op_author_ranges WHERE document_id = ?1",
+                [&document_id],
+                |row| row.get(0),
+            )?;
+            assert_eq!((updates, ranges), (0, 0));
+            Ok(())
+        })
+        .unwrap();
+
+    server.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -186,6 +238,233 @@ async fn two_peers_converge_offline_delta_and_restart_recovery() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn recovery_snapshot_is_one_atomic_revision_and_retry_safe_across_crash() {
+    let server = TestServer::spawn(temp_db("room-snapshot-commit")).await;
+    let http = reqwest::Client::new();
+    let base = server.base.clone();
+    let (auth, document_id) = scratch_document(&base, &http).await;
+    let ticket = scratch_ticket(&base, &http, &auth, &document_id, None).await;
+    let mut peer = Peer::connect(&base, &ticket, fresh_doc(ticket.site), None).await;
+
+    peer.doc
+        .insert(0, "Recovered exactly once.", None)
+        .expect("local snapshot edit")
+        .expect("snapshot update");
+    let snapshot = peer
+        .doc
+        .export_compact_snapshot()
+        .expect("compact recovery snapshot");
+    let expected_last_sequence = peer.doc.version().observed(ticket.site);
+    let message_id = [42_u8; 16];
+    peer.send_mutation_with_id(message_id, MutationKind::Snapshot, &snapshot)
+        .await;
+    let revision = peer.wait_committed(message_id).await;
+    assert_eq!(revision, 1);
+
+    // Losing an ACK and replaying the exact envelope is a receipt lookup. It
+    // does not create a second revision or re-run snapshot persistence.
+    peer.send_mutation_with_id(message_id, MutationKind::Snapshot, &snapshot)
+        .await;
+    assert_eq!(peer.wait_committed(message_id).await, revision);
+    let counts = server
+        .app
+        .db
+        .read(|conn| {
+            let commits: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM document_commits WHERE document_id = ?1",
+                [&document_id],
+                |row| row.get(0),
+            )?;
+            let updates: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM document_updates WHERE document_id = ?1",
+                [&document_id],
+                |row| row.get(0),
+            )?;
+            let snapshot_revision: i64 = conn.query_row(
+                "SELECT snapshot_revision FROM documents WHERE id = ?1",
+                [&document_id],
+                |row| row.get(0),
+            )?;
+            let range: (String, i64, i64) = conn.query_row(
+                "SELECT site, first_seq, last_seq FROM op_author_ranges
+                 WHERE document_id = ?1",
+                [&document_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+            Ok((commits, updates, snapshot_revision, range))
+        })
+        .expect("receipt rows");
+    assert_eq!(counts.0, 1);
+    assert_eq!(counts.1, 0);
+    assert_eq!(counts.2, 1);
+    assert_eq!(
+        counts.3,
+        (ticket.site.to_string(), 1, expected_last_sequence as i64)
+    );
+
+    // The same ID cannot be rebound to a different payload or kind.
+    let conflicting = peer
+        .doc
+        .insert(peer.doc.len(), " conflict", None)
+        .expect("conflicting local edit")
+        .expect("conflicting update");
+    peer.send_mutation_with_id(
+        message_id,
+        MutationKind::Update,
+        &conflicting.canonical_bytes,
+    )
+    .await;
+    assert_eq!(peer.expect_close().await, Some(4400));
+
+    // Abort the process without the room shutdown/compaction path. The one
+    // acknowledged snapshot revision remains the restart authority.
+    let db = server.crash().await;
+    let restarted = TestServer::spawn(db).await;
+    let exported = http
+        .get(format!(
+            "{}/v1/documents/{}/export",
+            restarted.base, document_id
+        ))
+        .header("Authorization", &auth)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert_eq!(exported, "Recovered exactly once.");
+    restarted.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn idle_room_releases_replica_and_rehydrates_on_next_join() {
+    let server = TestServer::spawn(temp_db("room-idle-eviction")).await;
+    let http = reqwest::Client::new();
+    let base = server.base.clone();
+    let (auth, document_id) = scratch_document(&base, &http).await;
+    let ticket = scratch_ticket(&base, &http, &auth, &document_id, None).await;
+    let mut peer = Peer::connect(&base, &ticket, fresh_doc(ticket.site), None).await;
+    peer.insert(0, "Evict me safely.").await;
+    assert_eq!(server.app.rooms.resident_count().await, 1);
+    let _ = peer.disconnect().await;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while server.app.rooms.resident_count().await != 0 {
+        assert!(std::time::Instant::now() < deadline, "room did not evict");
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+
+    let ticket = scratch_ticket(&base, &http, &auth, &document_id, None).await;
+    let mut reopened = Peer::connect(&base, &ticket, fresh_doc(ticket.site), None).await;
+    reopened.converge_to("Evict me safely.").await;
+    server.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn large_transactions_trigger_operation_bounded_compaction() {
+    let server = TestServer::spawn(temp_db("room-operation-compaction")).await;
+    let http = reqwest::Client::new();
+    let base = server.base.clone();
+    let (auth, document_id) = scratch_document(&base, &http).await;
+    let ticket = scratch_ticket(&base, &http, &auth, &document_id, None).await;
+    let mut peer = Peer::connect(&base, &ticket, fresh_doc(ticket.site), None).await;
+    peer.insert(0, &"a".repeat(20_000)).await;
+    peer.insert(20_000, &"b".repeat(20_000)).await;
+
+    let durable = server
+        .app
+        .db
+        .read(|conn| {
+            let row: (i64, i64, bool) = conn.query_row(
+                "SELECT snapshot_revision,
+                        (SELECT COUNT(*) FROM document_updates WHERE document_id = ?1),
+                        snapshot IS NOT NULL
+                 FROM documents WHERE id = ?1",
+                [&document_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+            Ok(row)
+        })
+        .expect("compacted rows");
+    assert_eq!(durable, (2, 0, true));
+
+    let ticket = scratch_ticket(&base, &http, &auth, &document_id, None).await;
+    let mut cold = Peer::connect(&base, &ticket, fresh_doc(ticket.site), None).await;
+    cold.converge_to(&format!("{}{}", "a".repeat(20_000), "b".repeat(20_000)))
+        .await;
+    server.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn consecutive_mutations_share_one_durable_commit_without_sharing_revisions() {
+    let server = TestServer::spawn(temp_db("room-group-commit")).await;
+    let http = reqwest::Client::new();
+    let base = server.base.clone();
+    let (auth, document_id) = scratch_document(&base, &http).await;
+    let ticket = scratch_ticket(&base, &http, &auth, &document_id, None).await;
+    let mut peer = Peer::connect(&base, &ticket, fresh_doc(ticket.site), None).await;
+    let before = server.app.rooms.commit_stats();
+
+    let mut ids = Vec::new();
+    for _ in 0..12 {
+        let update = peer
+            .doc
+            .insert(peer.doc.len(), "x", None)
+            .expect("local insert")
+            .expect("local update");
+        ids.push(
+            peer.send_mutation(MutationKind::Update, &update.canonical_bytes)
+                .await,
+        );
+    }
+
+    let mut revisions = std::collections::HashMap::new();
+    while revisions.len() < ids.len() {
+        match peer.next_event().await {
+            PeerEvent::Committed(id, revision) => {
+                revisions.insert(id, revision);
+            }
+            PeerEvent::Closed(code) => panic!("closed before group commit: {code:?}"),
+            _ => {}
+        }
+    }
+    for (index, id) in ids.iter().enumerate() {
+        assert_eq!(revisions[id], index as u64 + 1);
+    }
+    let after = server.app.rooms.commit_stats();
+    assert_eq!(after.mutations - before.mutations, 12);
+    assert_eq!(
+        after.batches - before.batches,
+        1,
+        "the room should pay for one FULL-sync commit, not twelve"
+    );
+
+    // Compaction is folded into that same transaction once the row threshold
+    // is crossed; a cold reader still sees all twelve independent revisions.
+    let durable = server
+        .app
+        .db
+        .read(|connection| {
+            connection
+                .query_row(
+                    "SELECT snapshot_revision,
+                            (SELECT COUNT(*) FROM document_updates WHERE document_id = ?1)
+                     FROM documents WHERE id = ?1",
+                    [&document_id],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .map_err(Into::into)
+        })
+        .expect("durable group commit");
+    assert_eq!(durable, (12, 0));
+
+    let ticket = scratch_ticket(&base, &http, &auth, &document_id, None).await;
+    let mut cold = Peer::connect(&base, &ticket, fresh_doc(ticket.site), None).await;
+    cold.converge_to("xxxxxxxxxxxx").await;
+    server.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn roles_revocation_and_deletion_govern_live_sockets() {
     let server = TestServer::spawn(temp_db("room-roles")).await;
     let http = reqwest::Client::new();
@@ -274,7 +553,9 @@ async fn roles_revocation_and_deletion_govern_live_sockets() {
         .insert(0, "FORGED ", None)
         .expect("local viewer edit")
         .expect("forged update");
-    guest_peer.send(MSG_UPDATE, &forged.canonical_bytes).await;
+    guest_peer
+        .send_mutation(MutationKind::Update, &forged.canonical_bytes)
+        .await;
     assert_eq!(guest_peer.expect_close().await, Some(4403));
     assert_eq!(owner_peer.doc.text(), "Owner text.");
 
@@ -444,7 +725,7 @@ async fn consumed_and_stale_tickets_fail_the_upgrade() {
     request.headers_mut().insert(
         "Sec-WebSocket-Protocol",
         format!(
-            "marks.esbt.v1, marks.ticket.v1.{}.{}",
+            "marks.esbt.v2, marks.ticket.v1.{}.{}",
             ticket.ticket_id, ticket.ticket_secret
         )
         .parse()

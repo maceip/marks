@@ -145,3 +145,32 @@ test('ensureServiceCaller reuses leftover scratch when no session exists', async
   assert.deepEqual(caller, { kind: 'scratch', credential: leftoverScratch });
   assert.deepEqual(calls, ['/v1/auth/session']);
 });
+
+test('offline reload reuses only a prior non-secret session marker', async () => {
+  const storage = new MemoryStorage();
+  const persistentStorage = new MemoryStorage();
+  persistentStorage.setItem('marks.auth.session-seen.v1', '1');
+  const caller = await ensureServiceCaller({
+    storage,
+    persistentStorage,
+    fetch: async () => {
+      throw new TypeError('offline');
+    },
+  });
+  assert.deepEqual(caller, { kind: 'session' });
+});
+
+test('offline reload without prior authority does not invent a session', async () => {
+  const storage = new MemoryStorage();
+  const persistentStorage = new MemoryStorage();
+  await assert.rejects(
+    () => ensureServiceCaller({
+      storage,
+      persistentStorage,
+      fetch: async () => {
+        throw new TypeError('offline');
+      },
+    }),
+    /offline/,
+  );
+});

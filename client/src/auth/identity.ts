@@ -1,6 +1,7 @@
 import { applyServiceCallerHeaders, ensureServiceCaller, setActiveCaller } from './caller.ts';
 import {
   generateDeviceKey,
+  loadDeviceKey,
   publicKeyHash,
   saveDeviceKey,
   signControllerBootstrap,
@@ -213,7 +214,6 @@ export async function approvePairing(
   const device = inventory.devices.find((entry) => entry.deviceId === session.deviceId);
   if (!controller || !device) throw new Error('this phone is not a controller');
   const now = Date.now();
-  const { loadDeviceKey } = await import('./device-key.ts');
   const key = await loadDeviceKey(session.deviceId);
   if (!key) throw new Error('controller key is missing on this phone');
   const grant = {

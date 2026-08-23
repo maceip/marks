@@ -6,20 +6,22 @@ import { ensureServiceCaller, getActiveCaller, type ServiceCaller } from './auth
 import { createMarksDocumentAccess } from './auth/room-access';
 import { loadUser } from './collab/user';
 import type { AppDialog, ReviewSurface } from './components/overlays/AppOverlays';
-import { ContextMenu } from './components/overlays/ContextMenu';
 import { Icon, icons } from './components/ui/Icon';
 import { LiquidDock } from './components/shell/LiquidDock';
 import { OpeningShell } from './components/shell/OpeningShell';
-import { PerfHud } from './components/overlays/PerfHud';
 import { Sidebar } from './components/shell/Sidebar';
 import type { CursorInfo } from './components/workspace/EditorPane';
-import { Outline } from './components/workspace/Outline';
 import { StatusBar } from './components/workspace/StatusBar';
 import { ABOUT_DOCUMENT_ID, isAboutDocument } from './content/about';
+import { signalDocumentRepositoryChange } from './data/documents';
+import { createLocalPortableBundle } from './data/assets';
 import { Home } from './pages/Home';
 import { LOGOUT_LOCAL_LINE } from './lib/identity-copy';
 import { readPairingHash } from './lib/pairing-link';
+import { readDocumentShareHash } from './lib/share-link';
+import { loadServiceApi } from './lib/service-api.ts';
 import { SERVICE_ERROR_COPY } from './lib/service-errors';
+import { MarkdownImportError, readMarkdownImport } from './lib/markdown-import';
 import { TopBar, type ViewMode } from './components/shell/TopBar';
 import { ToastRegion, type ToastMessage } from './components/overlays/ToastRegion';
 import { VoiceBar } from './components/overlays/VoiceBar';
@@ -32,7 +34,6 @@ import { useRoute } from './hooks/useRoute';
 import { useSession } from './hooks/useSession';
 import { useTheme } from './hooks/useTheme';
 import { useUiPreferences } from './hooks/useUiPreferences';
-import { countWords } from './lib/format';
 import { EMPTY_SNAPSHOT, type HudSnapshot } from './lib/hud';
 import { LatencyTracker } from './lib/latency';
 import { UI_DATA_MODE, UI_MEDIA } from './lib/product';
@@ -50,17 +51,44 @@ const Workspace = lazy(() =>
 const AppOverlays = lazy(() =>
   import('./components/overlays/AppOverlays').then((module) => ({ default: module.AppOverlays })),
 );
-const AiSheet = lazy(() =>
-  import('./components/chrome/AiSheet').then((module) => ({ default: module.AiSheet })),
+const DraftToolsSheet = lazy(() =>
+  import('./components/chrome/DraftToolsSheet').then((module) => ({ default: module.DraftToolsSheet })),
 );
 const LinkPage = lazy(() =>
   import('./pages/Link').then((module) => ({ default: module.LinkPage })),
+);
+const ContextMenu = lazy(() =>
+  import('./components/overlays/ContextMenu').then((module) => ({ default: module.ContextMenu })),
+);
+const Outline = lazy(() =>
+  import('./components/workspace/Outline').then((module) => ({ default: module.Outline })),
+);
+const PerfHud = lazy(() =>
+  import('./components/overlays/PerfHud').then((module) => ({ default: module.PerfHud })),
 );
 
 /** How often the HUD and word counts refresh. Editing never waits on this. */
 const SAMPLE_INTERVAL_MS = 400;
 
 const MODE_ORDER: ViewMode[] = ['edit', 'split', 'preview'];
+
+function exportStem(title: string): string {
+  return title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase()
+    || 'marks-document';
+}
+
+function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.hidden = true;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  // WebKit can begin reading the object URL after the click handler returns.
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
 
 function initialMode(): ViewMode {
   const stored = localStorage.getItem('marks:mode');
@@ -117,11 +145,13 @@ export function App() {
     () => localStorage.getItem('marks:ribbon-collapsed') === 'true',
   );
   const [dialog, setDialog] = useState<AppDialog | null>(null);
-  const [aiOpen, setAiOpen] = useState(false);
+  const [draftToolsOpen, setDraftToolsOpen] = useState(false);
   const [reviewSurface, setReviewSurface] = useState<ReviewSurface | null>(null);
   const [overlaysMounted, setOverlaysMounted] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [pairing, setPairing] = useState(() => readPairingHash(location.hash));
+  const [shareGrant, setShareGrant] = useState(() => readDocumentShareHash(location.hash));
+  const redeemingShare = useRef<string | null>(null);
   useEffect(() => {
     if (!location.hash.startsWith('#v1.')) return;
     history.replaceState(null, '', `${location.pathname}${location.search}`);
@@ -139,9 +169,9 @@ export function App() {
   const scrollSync = useMemo(() => new ScrollSync(), []);
   const tracker = useRef(new LatencyTracker(240));
   const latest = useRef<PreviewStats | null>(null);
-  const textRef = useRef('');
   const viewRef = useRef<EditorView | null>(null);
   const previewRef = useRef<HTMLElement | null>(null);
+  const importRef = useRef<HTMLInputElement | null>(null);
   const focusRestoreRef = useRef<{
     sidebarOpen: boolean;
     hudOpen: boolean;
@@ -175,30 +205,16 @@ export function App() {
     setSidebarOpen(!overlayNavigation);
   }, [overlayNavigation]);
 
-  // Text is kept out of React state; only the derived counters are published.
-  useEffect(() => {
-    if (!session) {
-      textRef.current = '';
-      return;
-    }
-    textRef.current = session.getText();
-    tracker.current.reset();
-    return session.onTextChange((text) => {
-      textRef.current = text;
-    });
-  }, [session]);
-
   useEffect(() => {
     if (!session) {
       setSnapshot({ ...EMPTY_SNAPSHOT, engine });
       return;
     }
+    tracker.current.reset();
 
     const sample = () => {
       const stats = latest.current;
       const engineStats = session.stats();
-      const text = textRef.current;
-
       setSnapshot({
         engine: session.engine,
         p50: tracker.current.p50,
@@ -212,8 +228,8 @@ export function App() {
         patchMs: stats?.patchMs ?? 0,
         touched: stats?.touched ?? 0,
         htmlBytes: stats?.bytes ?? 0,
-        chars: text.length,
-        words: countWords(text),
+        chars: stats?.chars ?? session.length(),
+        words: stats?.words ?? 0,
         snapshotBytes: engineStats.snapshotBytes,
         sent: engineStats.sent,
         received: engineStats.received,
@@ -247,6 +263,11 @@ export function App() {
     documents.documents.find((entry) => entry.id === docId)?.title ??
     meta?.title ??
     (docId ? 'Untitled' : 'marks');
+  const workspaceKind = UI_DATA_MODE === 'local'
+    ? 'local' as const
+    : serviceCaller?.kind === 'session'
+      ? 'session' as const
+      : 'scratch' as const;
 
   const notify = useCallback(
     (toastTitle: string, detail?: string, tone: ToastMessage['tone'] = 'neutral') => {
@@ -284,6 +305,56 @@ export function App() {
     return () => window.removeEventListener('hashchange', sync);
   }, [notify]);
 
+  useEffect(() => {
+    const sync = () => setShareGrant(readDocumentShareHash(location.hash));
+    sync();
+    window.addEventListener('hashchange', sync);
+    return () => window.removeEventListener('hashchange', sync);
+  }, []);
+
+  useEffect(() => {
+    if (route.name !== 'document' || !shareGrant) return;
+    if (shareGrant === 'invalid') {
+      notify('Share link invalid', 'The fragment is malformed and no authority was sent to the server.', 'danger');
+      history.replaceState(null, '', `${location.pathname}${location.search}`);
+      setShareGrant(null);
+      return;
+    }
+    if (UI_DATA_MODE !== 'service') {
+      notify('Sharing unavailable', 'This build is using a browser-local workspace.', 'danger');
+      history.replaceState(null, '', `${location.pathname}${location.search}`);
+      setShareGrant(null);
+      return;
+    }
+    if (serviceCaller?.kind !== 'session') {
+      openDialog({ type: 'keep-workspace' });
+      return;
+    }
+    const key = `${route.id}:${shareGrant}`;
+    if (redeemingShare.current === key) return;
+    redeemingShare.current = key;
+    void loadServiceApi()
+      .then((api) => api.redeemDocumentLink(route.id, shareGrant))
+      .then(({ role }) => {
+        history.replaceState(null, '', `${location.pathname}${location.search}`);
+        setShareGrant(null);
+        signalDocumentRepositoryChange();
+        void documents.refresh();
+        notify('Access granted', `This account joined as ${role}.`, 'success');
+      })
+      .catch((error) => {
+        history.replaceState(null, '', `${location.pathname}${location.search}`);
+        setShareGrant(null);
+        const copy = error instanceof Error && 'copy' in error
+          ? (error as { copy: { title: string; detail: string; tone: 'neutral' | 'danger' } }).copy
+          : SERVICE_ERROR_COPY[401];
+        notify(copy.title, copy.detail, copy.tone);
+      })
+      .finally(() => {
+        redeemingShare.current = null;
+      });
+  }, [documents.refresh, notify, openDialog, route, serviceCaller, shareGrant]);
+
   const openDocument = useCallback(
     (id: string) => {
       setUiError(null);
@@ -299,24 +370,33 @@ export function App() {
       const created = await documents.create(draft);
       setDialog(null);
       openDocument(created.id);
-      notify('Document created', `${created.title} is saved in this browser.`, 'success');
+      notify(
+        'Document created',
+        UI_DATA_MODE === 'service'
+          ? `${created.title} and its initial Markdown were committed atomically.`
+          : `${created.title} is saved in this browser.`,
+        'success',
+      );
     } catch {
       setUiError('Marks could not create that document. Your current screen is still available.');
     }
   }, [documents, notify, openDocument]);
 
+  const importMarkdownFile = useCallback(async (file: File) => {
+    try {
+      await createDocument(await readMarkdownImport(file));
+    } catch (error) {
+      notify(
+        error instanceof MarkdownImportError ? 'Import refused' : 'Import failed',
+        error instanceof Error ? error.message : 'The browser could not read that Markdown file.',
+        'danger',
+      );
+    }
+  }, [createDocument, notify]);
+
   const renameDocument = useCallback(
     async (id: string, nextTitle: string) => {
       try {
-        if (id === docId && session) {
-          const markdown = session.getText();
-          const heading = /^#\s+.*$/m;
-          session.setText(
-            heading.test(markdown)
-              ? markdown.replace(heading, `# ${nextTitle.trim()}`)
-              : `# ${nextTitle.trim()}\n\n${markdown}`,
-          );
-        }
         const renamed = await documents.rename(id, nextTitle);
         if (!renamed) throw new Error('missing document');
         setDialog(null);
@@ -325,7 +405,7 @@ export function App() {
         notify('Rename unavailable', 'The active data adapter could not rename this document.', 'danger');
       }
     },
-    [docId, documents, notify, session],
+    [documents, notify],
   );
 
   const duplicateDocument = useCallback(async () => {
@@ -347,7 +427,13 @@ export function App() {
         await documents.remove(id);
         setDialog(null);
         if (docId === id) navigate({ name: 'home' });
-        notify('Document deleted', 'It was removed from this browser.', 'success');
+        notify(
+          'Document moved to trash',
+          UI_DATA_MODE === 'service'
+            ? 'Its live room closed; the owner can restore it for 30 days.'
+            : 'It remains recoverable in this browser for 30 days.',
+          'success',
+        );
       } catch {
         notify('Delete unavailable', 'The active data adapter could not remove this document.', 'danger');
       }
@@ -363,6 +449,25 @@ export function App() {
     navigate({ name: 'benchmark' });
   }, [navigate, overlayNavigation]);
 
+  const exportPortableBundle = useCallback(async () => {
+    if (!docId || !session) return;
+    try {
+      await session.whenDurable();
+      const blob = UI_DATA_MODE === 'service'
+        ? await (await loadServiceApi()).downloadDocumentBundle(docId)
+        : await createLocalPortableBundle(docId, session.getText());
+      const filename = `${exportStem(title)}.zip`;
+      downloadBlob(blob, filename);
+      notify('Portable bundle exported', `${filename} contains Markdown and referenced images.`, 'success');
+    } catch (error) {
+      notify(
+        'Bundle export failed',
+        error instanceof Error ? error.message : 'Marks could not assemble the portable archive.',
+        'danger',
+      );
+    }
+  }, [docId, notify, session, title]);
+
   const runAction = useCallback(
     (action: UiActionId) => {
       switch (action) {
@@ -372,8 +477,15 @@ export function App() {
         case 'templates':
           openDialog({ type: 'templates' });
           break;
+        case 'import':
+          importRef.current?.click();
+          break;
         case 'rename':
-          if (docId) openDialog({ type: 'rename', documentId: docId, title });
+          if (docId && (UI_DATA_MODE === 'local' || session?.capabilities().role === 'owner')) {
+            openDialog({ type: 'rename', documentId: docId, title });
+          } else {
+            notify('Rename unavailable', 'Only the document owner can change its catalog title.', 'danger');
+          }
           break;
         case 'duplicate':
           void duplicateDocument();
@@ -381,21 +493,29 @@ export function App() {
         case 'download': {
           if (!session) break;
           const blob = new Blob([session.getText()], { type: 'text/markdown;charset=utf-8' });
-          const url = URL.createObjectURL(blob);
-          const anchor = document.createElement('a');
-          anchor.href = url;
-          anchor.download = `${title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'marks-document'}.md`;
-          anchor.click();
-          URL.revokeObjectURL(url);
-          notify('Markdown exported', anchor.download, 'success');
+          const filename = `${exportStem(title)}.md`;
+          downloadBlob(blob, filename);
+          notify('Markdown exported', filename, 'success');
           break;
         }
+        case 'download-bundle':
+          void exportPortableBundle();
+          break;
         case 'print':
           setMode('preview');
           window.setTimeout(() => window.print(), 180);
           break;
         case 'delete':
-          if (docId) openDialog({ type: 'delete', documentId: docId, title });
+          if (isAboutDocument(docId)) {
+            notify('Built-in document', 'The Google Docs for Markdown page is part of the app and cannot be trashed.', 'neutral');
+          } else if (docId && (UI_DATA_MODE === 'local' || session?.capabilities().role === 'owner' || session?.capabilities().role === 'scratch')) {
+            openDialog({ type: 'delete', documentId: docId, title });
+          } else {
+            notify('Delete unavailable', 'Only the document owner can delete this page.', 'danger');
+          }
+          break;
+        case 'trash':
+          openDialog({ type: 'trash' });
           break;
         case 'share':
           if (docId) openDialog({ type: 'share', documentId: docId, title });
@@ -403,6 +523,15 @@ export function App() {
         case 'comments':
         case 'history':
           if (!docId) break;
+          if (UI_DATA_MODE === 'service' && session?.capabilities().role === 'scratch') {
+            openDialog({ type: 'keep-workspace' });
+            notify(
+              'Keep this workspace first',
+              'Scratch authority can edit its private page but cannot use the shared review plane.',
+              'neutral',
+            );
+            break;
+          }
           setOverlaysMounted(true);
           setReviewSurface((current) =>
             current?.type === action ? null : { type: action, documentId: docId, title },
@@ -441,13 +570,16 @@ export function App() {
           if (!phone) setMode('split');
           break;
         case 'keep-workspace':
-          openDialog({ type: 'keep-workspace' });
+          if (UI_DATA_MODE === 'service') openDialog({ type: 'keep-workspace' });
+          else notify('Local-only build', 'This build has no identity service to keep or share the workspace.', 'neutral');
           break;
         case 'account':
-          openDialog({ type: 'account' });
+          if (UI_DATA_MODE === 'service') openDialog({ type: 'account' });
+          else notify('Local-only build', 'Account and device controls require the Rust identity service.', 'neutral');
           break;
         case 'pairing':
-          navigate({ name: 'link' });
+          if (UI_DATA_MODE === 'service') navigate({ name: 'link' });
+          else notify('Local-only build', 'Phone confirmation requires the Rust identity service.', 'neutral');
           break;
         case 'logout':
           if (UI_DATA_MODE === 'service' && serviceCaller?.kind === 'session') {
@@ -468,8 +600,9 @@ export function App() {
           if (view) void import('./editor/actions').then(({ openFind }) => openFind(view));
           break;
         }
-        case 'ai-compose':
-          setAiOpen(true);
+        case 'draft-tools':
+          if (session?.capabilities().edit) setDraftToolsOpen(true);
+          else notify('Draft tools are read-only', 'Your current role cannot change this document.', 'neutral');
           break;
       }
     },
@@ -477,6 +610,7 @@ export function App() {
       createDocument,
       docId,
       duplicateDocument,
+      exportPortableBundle,
       hudOpen,
       notify,
       openBenchmark,
@@ -563,7 +697,7 @@ export function App() {
     setFocusMode(false);
     setReviewSurface(null);
     setOutlineOpen(false);
-    setAiOpen(false);
+    setDraftToolsOpen(false);
   }, [route.name]);
 
   return (
@@ -581,8 +715,9 @@ export function App() {
           onCreate={() => void createDocument()}
           onDelete={(id) => {
             const document = documents.documents.find((entry) => entry.id === id);
-            if (document) openDialog({ type: 'delete', documentId: id, title: document.title });
+            if (document && !isAboutDocument(id)) openDialog({ type: 'delete', documentId: id, title: document.title });
           }}
+          onOpenTrash={() => openDialog({ type: 'trash' })}
           onOpenBenchmark={openBenchmark}
           onOpenAbout={() => {
             openDocument(ABOUT_DOCUMENT_ID);
@@ -596,7 +731,8 @@ export function App() {
           title={route.name === 'benchmark' ? 'Engine benchmark' : route.name === 'link' ? 'Phone confirmation' : title}
           docId={docId}
           route={route.name}
-          documentReady={Boolean(session && hydrated)}
+          documentReady={Boolean(session && hydrated && session.capabilities().edit)}
+          session={session}
           documentAvailable={!resolved || supported}
           posture={posture}
           selected={cursor.selected}
@@ -610,6 +746,7 @@ export function App() {
           outlineOpen={outlineOpen}
           reviewOpen={reviewSurface?.type ?? null}
           localMode={UI_DATA_MODE === 'local'}
+          workspaceKind={workspaceKind}
           focusMode={focusMode}
           ribbonCollapsed={ribbonCollapsed}
           onModeChange={setMode}
@@ -619,9 +756,9 @@ export function App() {
           onToggleOutline={() => setOutlineOpen((open) => !open)}
           onToggleRibbon={() => setRibbonCollapsed((collapsed) => !collapsed)}
           onAction={runAction}
-          onOpenAi={() => setAiOpen(true)}
+          onOpenDraftTools={() => setDraftToolsOpen(true)}
           onNotify={notify}
-          onVoice={session ? surface.toggleVoice : undefined}
+          onVoice={session?.capabilities().edit ? surface.toggleVoice : undefined}
           voiceActive={surface.voiceStatus === 'listening'}
           voiceSupported={surface.voiceSupported}
         />
@@ -679,6 +816,7 @@ export function App() {
                 onHeadings={setHeadings}
                 onCursor={setCursor}
                 onView={handleView}
+                onAssetError={(error) => notify('Image not inserted', error.message, 'danger')}
                 previewRequested={outlineOpen}
                 onPreview={(element) => {
                   previewRef.current = element;
@@ -693,10 +831,12 @@ export function App() {
           <Home
             documents={documents.documents}
             loading={documents.loading}
+            workspaceKind={workspaceKind === 'session' ? 'account' : workspaceKind}
             onCreate={() => void createDocument()}
             onCreateFromTemplate={(templateId) => void createDocument({ templateId })}
             onOpen={openDocument}
             onOpenTemplates={() => openDialog({ type: 'templates' })}
+            onImport={() => importRef.current?.click()}
             onOpenBenchmark={openBenchmark}
             onOpenPreferences={() => openDialog({ type: 'preferences' })}
             onKeepWorkspace={() => openDialog({ type: 'keep-workspace' })}
@@ -719,12 +859,14 @@ export function App() {
       </main>
 
       {surface.contextMenu && (
-        <ContextMenu
-          x={surface.contextMenu.x}
-          y={surface.contextMenu.y}
-          actions={surface.contextMenu.actions}
-          onClose={surface.closeContextMenu}
-        />
+        <Suspense fallback={null}>
+          <ContextMenu
+            x={surface.contextMenu.x}
+            y={surface.contextMenu.y}
+            actions={surface.contextMenu.actions}
+            onClose={surface.closeContextMenu}
+          />
+        </Suspense>
       )}
 
       {outlineOpen && route.name === 'document' && (
@@ -742,26 +884,30 @@ export function App() {
               <Icon path={icons.close} size={14} />
             </button>
           </header>
-          <Outline headings={headings} onSelect={(line) => scrollSync.scrollToLine(line)} />
+          <Suspense fallback={null}>
+            <Outline headings={headings} onSelect={(line) => scrollSync.scrollToLine(line)} />
+          </Suspense>
         </aside>
       )}
 
       {hudOpen && (
-        <PerfHud
-          snapshot={snapshot}
-          onClose={() => setHudOpen(false)}
-          onOpenBenchmark={openBenchmark}
-        />
+        <Suspense fallback={null}>
+          <PerfHud
+            snapshot={snapshot}
+            onClose={() => setHudOpen(false)}
+            onOpenBenchmark={openBenchmark}
+          />
+        </Suspense>
       )}
 
-      {aiOpen && route.name === 'document' && !phone && (
+      {draftToolsOpen && route.name === 'document' && !phone && (
         <Suspense fallback={null}>
-          <aside className="ai-float" aria-label="AI composition">
-            <AiSheet
+          <aside className="draft-tools-float" aria-label="Local draft tools">
+            <DraftToolsSheet
               open
               documentTitle={title}
               getView={getView}
-              onClose={() => setAiOpen(false)}
+              onClose={() => setDraftToolsOpen(false)}
               onNotify={notify}
             />
           </aside>
@@ -789,12 +935,15 @@ export function App() {
             theme={theme}
             preferences={preferences}
             hasDocument={Boolean(docId && session)}
+            dataMode={UI_DATA_MODE}
+            capabilities={session?.capabilities() ?? null}
             onCloseDialog={() => setDialog(null)}
             onCloseReview={() => setReviewSurface(null)}
             onAction={runAction}
             onCreateFromTemplate={(templateId: TemplateId) => void createDocument({ templateId })}
             onRename={(id, nextTitle) => void renameDocument(id, nextTitle)}
             onDelete={(id) => void removeDocument(id)}
+            onDocumentsChanged={() => void documents.refresh()}
             onTheme={setTheme}
             onPreferences={setPreferences}
             onNotify={notify}
@@ -815,6 +964,17 @@ export function App() {
       <ToastRegion
         toasts={toasts}
         onDismiss={(id) => setToasts((current) => current.filter((toast) => toast.id !== id))}
+      />
+      <input
+        ref={importRef}
+        type="file"
+        accept=".md,.markdown,text/markdown"
+        hidden
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0];
+          if (file) void importMarkdownFile(file);
+          event.currentTarget.value = '';
+        }}
       />
     </div>
   );

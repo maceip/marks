@@ -13,10 +13,13 @@ marks-auth = { path = "../marks-auth" }
 esbt = { git = "https://github.com/maceip/ESBT-web", rev = "6de13dd1c84fca3f33d51658ed86d5502b288284" }
 
 axum = { version = "0.8", features = ["ws"] }
+aho-corasick = "1"
+bytes = "1"
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
 tower-http = { version = "0.6", features = ["fs"] }
 futures-util = "0.3"
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.37", features = ["backup", "bundled"] }
 
 base64ct.workspace = true
 rand_core.workspace = true
@@ -26,6 +29,8 @@ sha2.workspace = true
 thiserror.workspace = true
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+zstd = "0.13"
+zip = { version = "4", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 p256.workspace = true

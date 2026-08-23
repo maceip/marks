@@ -1,6 +1,6 @@
 import type { EditorView } from '@codemirror/view';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import type { ConnectionStatus, Peer } from '../../collab/types';
+import type { CollabSession, ConnectionStatus, Peer } from '../../collab/types';
 import type { Posture } from '../../lib/posture';
 import type { UiActionId } from '../../lib/ui-actions';
 import { Icon, icons } from '../ui/Icon';
@@ -23,6 +23,7 @@ interface TopBarProps {
   docId: string | null;
   route: SurfaceRoute;
   documentReady: boolean;
+  session: CollabSession | null;
   documentAvailable: boolean;
   posture: Posture;
   selected?: number;
@@ -36,6 +37,7 @@ interface TopBarProps {
   outlineOpen: boolean;
   reviewOpen?: 'comments' | 'history' | null;
   localMode?: boolean;
+  workspaceKind: 'local' | 'scratch' | 'session';
   focusMode?: boolean;
   ribbonCollapsed?: boolean;
   onModeChange: (mode: ViewMode) => void;
@@ -45,7 +47,7 @@ interface TopBarProps {
   onToggleOutline: () => void;
   onToggleRibbon: () => void;
   onAction: (action: UiActionId) => void;
-  onOpenAi?: () => void;
+  onOpenDraftTools?: () => void;
   onVoice?: () => void;
   voiceActive?: boolean;
   voiceSupported?: boolean;
@@ -54,6 +56,7 @@ interface TopBarProps {
 
 const STATUS_LABEL: Record<ConnectionStatus, string> = {
   connecting: 'Opening',
+  saving: 'Saving',
   connected: 'Saved',
   offline: 'Offline',
 };
@@ -118,7 +121,9 @@ export function TopBar(props: TopBarProps) {
               className={`status status-${props.status}`}
               title={
                 props.status === 'offline'
-                  ? 'Offline — edits remain available locally'
+                  ? props.documentReady
+                    ? 'Offline — authorized edits remain in the local journal'
+                    : 'Offline — document remains readable'
                   : STATUS_LABEL[props.status]
               }
             >
@@ -127,7 +132,7 @@ export function TopBar(props: TopBarProps) {
             </span>
           )}
 
-          {props.localMode && (
+          {props.workspaceKind === 'scratch' && (
             <button
               type="button"
               className="identity-chip"
@@ -136,6 +141,7 @@ export function TopBar(props: TopBarProps) {
               Temporary
             </button>
           )}
+          {props.workspaceKind === 'local' && <span className="identity-chip">Local</span>}
         </div>
 
           <div className="topbar-right">
@@ -204,10 +210,10 @@ export function TopBar(props: TopBarProps) {
             </button>
             {moreOpen && (
               <div className="popover-menu" role="menu">
-                <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('keep-workspace'); }}><Icon path={icons.share} /> Keep workspace</button>
-                <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('account'); }}><Icon path={icons.settings} /> Account</button>
-                <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('pairing'); }}><Icon path={icons.link} /> Phone confirmation</button>
-                <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('logout'); }}><Icon path={icons.close} /> Sign out</button>
+                {props.workspaceKind === 'scratch' && <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('keep-workspace'); }}><Icon path={icons.share} /> Keep workspace</button>}
+                {props.workspaceKind !== 'local' && <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('account'); }}><Icon path={icons.settings} /> Account</button>}
+                {props.workspaceKind !== 'local' && <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('pairing'); }}><Icon path={icons.link} /> Phone confirmation</button>}
+                {props.workspaceKind === 'session' && <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('logout'); }}><Icon path={icons.close} /> Sign out</button>}
                 <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('preferences'); }}><Icon path={icons.settings} /> Appearance</button>
                 <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('benchmark'); }}><Icon path={icons.gauge} /> Performance</button>
                 <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('about'); }}><Icon path={icons.bolt} /> Google Docs for Markdown</button>
@@ -220,6 +226,8 @@ export function TopBar(props: TopBarProps) {
       {documentRoute && (
         <Suspense fallback={props.posture.phone ? null : <div className="ribbon-loading">Loading commands…</div>}>
           <DocumentChrome
+            documentId={props.docId ?? ''}
+            session={props.session}
             posture={props.posture}
             documentReady={props.documentReady}
             documentTitle={props.title}
@@ -235,13 +243,13 @@ export function TopBar(props: TopBarProps) {
             onToggleHud={props.onToggleHud}
             onToggleOutline={props.onToggleOutline}
             onAction={props.onAction}
-            onOpenAi={() => props.onOpenAi?.()}
+            onOpenDraftTools={() => props.onOpenDraftTools?.()}
             onToggleTheme={props.onToggleTheme}
             onVoice={props.onVoice}
             voiceActive={props.voiceActive}
             voiceSupported={props.voiceSupported}
             onNotify={props.onNotify}
-            localMode={props.localMode}
+            temporary={props.workspaceKind === 'scratch'}
           />
         </Suspense>
       )}

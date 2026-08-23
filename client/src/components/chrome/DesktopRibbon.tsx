@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { EditorView } from '@codemirror/view';
 import type { StateCommand } from '@codemirror/state';
+import type { CollabSession } from '../../collab/types';
 import {
   addTableColumn,
   addTableRow,
@@ -57,12 +58,14 @@ export type RibbonTab =
   | 'draw'
   | 'review'
   | 'view'
-  | 'ai'
+  | 'tools'
   | 'picture'
   | 'table'
   | 'shape';
 
 interface DesktopRibbonProps {
+  documentId: string;
+  session: CollabSession | null;
   documentReady: boolean;
   mode: ViewMode;
   theme: 'light' | 'dark';
@@ -77,11 +80,12 @@ interface DesktopRibbonProps {
   onToggleHud: () => void;
   onToggleOutline: () => void;
   onAction: (action: UiActionId) => void;
-  onOpenAi: () => void;
+  onOpenDraftTools: () => void;
   onToggleTheme?: () => void;
   onVoice?: () => void;
   voiceActive?: boolean;
   voiceSupported?: boolean;
+  onNotify?: (title: string, detail?: string, tone?: 'neutral' | 'success' | 'danger') => void;
 }
 
 const CORE_TABS: Array<{ id: RibbonTab; label: string }> = [
@@ -89,7 +93,7 @@ const CORE_TABS: Array<{ id: RibbonTab; label: string }> = [
   { id: 'home', label: 'Home' },
   { id: 'insert', label: 'Insert' },
   { id: 'draw', label: 'Draw' },
-  { id: 'ai', label: 'AI' },
+  { id: 'tools', label: 'Tools' },
   { id: 'review', label: 'Review' },
   { id: 'view', label: 'View' },
 ];
@@ -188,6 +192,7 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
             <RibbonGroup label="Create">
               <RibbonCommand glyph="plus" label="New" onClick={() => props.onAction('new')} />
               <RibbonCommand glyph="template" label="Template" onClick={() => props.onAction('templates')} />
+              <RibbonCommand glyph="download" label="Import" onClick={() => props.onAction('import')} />
             </RibbonGroup>
             <RibbonGroup label="Document">
               <RibbonCommand glyph="pencil" label="Rename" disabled={!props.documentReady} onClick={() => props.onAction('rename')} />
@@ -195,6 +200,7 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
             </RibbonGroup>
             <RibbonGroup label="Export">
               <RibbonCommand glyph="download" label="Markdown" disabled={!props.documentReady} onClick={() => props.onAction('download')} />
+              <RibbonCommand glyph="download" label="Bundle" disabled={!props.documentReady} onClick={() => props.onAction('download-bundle')} />
               <RibbonCommand glyph="print" label="Print" disabled={!props.documentReady} onClick={() => props.onAction('print')} />
               <RibbonCommand glyph="share" label="Share" disabled={!props.documentReady} onClick={() => props.onAction('share')} />
               <RibbonCommand glyph="trash" label="Delete" danger disabled={!props.documentReady} onClick={() => props.onAction('delete')} />
@@ -368,15 +374,15 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
           </div>
         )}
 
-        {tab === 'ai' && (
-          <div className="ribbon-toolbar ribbon-deck-enter" role="toolbar" aria-label="AI commands">
-            <RibbonGroup label="Compose">
-              <RibbonCommand glyph="compose" label="Draft" large disabled={!props.documentReady} onClick={props.onOpenAi} />
-              <RibbonCommand glyph="rewrite" label="Rewrite" disabled={!props.documentReady} onClick={props.onOpenAi} />
-              <RibbonCommand glyph="summarize" label="Summarize" disabled={!props.documentReady} onClick={props.onOpenAi} />
-              <RibbonCommand glyph="outline" label="Outline" disabled={!props.documentReady} onClick={props.onOpenAi} />
-              <RibbonCommand glyph="continue" label="Continue" disabled={!props.documentReady} onClick={props.onOpenAi} />
-              <RibbonCommand glyph="expand" label="Expand" disabled={!props.documentReady} onClick={props.onOpenAi} />
+        {tab === 'tools' && (
+          <div className="ribbon-toolbar ribbon-deck-enter" role="toolbar" aria-label="Local draft tools">
+            <RibbonGroup label="Deterministic transforms">
+              <RibbonCommand glyph="compose" label="Skeleton" large disabled={!props.documentReady} onClick={props.onOpenDraftTools} />
+              <RibbonCommand glyph="rewrite" label="Clean up" disabled={!props.documentReady} onClick={props.onOpenDraftTools} />
+              <RibbonCommand glyph="summarize" label="Extract summary" disabled={!props.documentReady} onClick={props.onOpenDraftTools} />
+              <RibbonCommand glyph="outline" label="Extract outline" disabled={!props.documentReady} onClick={props.onOpenDraftTools} />
+              <RibbonCommand glyph="continue" label="Next-step prompt" disabled={!props.documentReady} onClick={props.onOpenDraftTools} />
+              <RibbonCommand glyph="expand" label="Structure stub" disabled={!props.documentReady} onClick={props.onOpenDraftTools} />
             </RibbonGroup>
           </div>
         )}
@@ -475,7 +481,10 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
         onChange={(event) => {
           const file = event.target.files?.[0];
           const view = props.getView();
-          if (file && view) void insertImageFile(view, file);
+          if (file && view && props.session) {
+            void insertImageFile(view, props.session, file)
+              .catch((error) => props.onNotify?.('Image not inserted', error instanceof Error ? error.message : 'The asset upload failed.', 'danger'));
+          }
           event.currentTarget.value = '';
         }}
       />

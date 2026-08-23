@@ -2,14 +2,16 @@
 #   `test` — compile, format, typecheck, unit/integration suites that do not
 #   start the production binary (including in-process room_collab).
 #   `service-collab` — a live marks-server, a VITE_MARKS_DATA_MODE=service
-#   client, Playwright /v1 first-paint, and two native ESBT peers converging
-#   on the UI-created document. A green workflow is proof of those two things.
+#   client, Playwright artifact/admission/durable-edit/reload/offline/import
+#   proof in Chromium, Firefox, and WebKit, and two native ESBT peers
+#   converging on the UI-created document.
 #
 # What it is not:
 #   `npm run test:harness` is helper-unit tests. `smoke` / `smoke:platforms`
 #   stay local: they are the two-browser preview-sync run of the Wasm
 #   CollabSession. CI proves native multi-peer rooms plus Wasm plumbing
-#   units, not two live browsers painting the same document.
+#   units. The service matrix proves one production browser at a time plus
+#   native second peers; it is not a two-live-browser paint test.
 #   Floating `stable` is forbidden: pin rust-toolchain.toml / rust-version.
 name: CI
 
@@ -32,11 +34,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Reject retired Node server workspace
+      - name: Reject retired duplicate implementations
         run: |
           if [ -f server/package.json ] || [ -d server/src ] || [ -f scripts/harness/ensure-server.mjs ]; then
             echo "The Node server/ workspace is retired. Marks has one Rust process." >&2
             echo "Do not reintroduce server/, or harness code that starts npm start." >&2
+            exit 1
+          fi
+          if [ -d esbt ]; then
+            echo "The TypeScript CRDT workspace is retired. Rust ESBT is the only document engine." >&2
             exit 1
           fi
 
@@ -87,14 +93,20 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: ESBT tests
-        run: npm run test:esbt
+      - name: Verify checked-in ESBT artifact identity and ABI
+        run: npm run verify:esbt
 
       - name: Browser unit tests
         run: npm run test:browser
 
+      - name: Product boundary unit tests
+        run: npm run test:surface
+
       - name: Markdown renderer tests
         run: npm run test:markdown
+
+      - name: Benchmark fixture and receipt tests
+        run: npm run test:bench
 
       - name: Wasm client plumbing tests
         run: npm run test:wasm
@@ -115,9 +127,13 @@ jobs:
         run: cargo test -p marks-server --test room_collab --locked
 
   service-collab:
-    name: service-mode and multi-peer
+    name: service-mode ${{ matrix.browser }} and multi-peer
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -138,15 +154,22 @@ jobs:
 
       - name: Build marks-server
         run: cargo build -p marks-server --locked
+        env:
+          MARKS_BUILD_REVISION: ${{ github.sha }}
+          MARKS_SOURCE_DIRTY: '0'
 
       - name: Production service-mode client
-        run: VITE_MARKS_DATA_MODE=service npm run build
+        run: VITE_MARKS_DATA_MODE=service VITE_MARKS_TEST_SERVICE_WORKER=1 npm run build
 
       - name: Production UI budgets (service-mode)
         run: npm run check:ui-budgets
 
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps ${{ matrix.browser }}
 
       - name: Live server, service UI, and two-peer room
-        run: bash scripts/run-service-ci.sh --bin target/debug/marks-server --static-dir client/dist
+        run: bash scripts/run-service-ci.sh --bin target/debug/marks-server --static-dir client/dist --browser ${{ matrix.browser }}
+        env:
+          MARKS_BROWSER: ${{ matrix.browser }}
+          MARKS_REQUIRE_RELEASE: '1'
+          MARKS_TEST_SERVICE_WORKER: '1'

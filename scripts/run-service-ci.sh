@@ -13,8 +13,9 @@ Usage:
   scripts/run-service-ci.sh --bin <marks-server> --static-dir <client/dist>
   scripts/run-service-ci.sh --url http://127.0.0.1:3000
 
-Prove service-mode first paint and multi-peer room convergence against a
-live marks-server. The browser must be a VITE_MARKS_DATA_MODE=service build.
+Prove service-mode artifact identity, durable edit/reload/offline workflows,
+and multi-peer room convergence against a live marks-server. The browser must
+be a VITE_MARKS_DATA_MODE=service build.
 
 Options:
   --bin PATH           marks-server binary to start
@@ -22,6 +23,7 @@ Options:
   --listen ADDR        bind address (default: 127.0.0.1:3000)
   --url URL            use an already-running server (do not start --bin)
   --receipt PATH       UI receipt JSON (default: a temp file)
+  --browser NAME       chromium, firefox, or webkit (default: chromium)
   --skip-ui            skip Playwright; rust peers create their own document
   --skip-collab        skip the native two-peer test
   --help               show this help
@@ -40,6 +42,7 @@ URL=""
 RECEIPT="${MARKS_CI_RECEIPT:-}"
 SKIP_UI=0
 SKIP_COLLAB=0
+BROWSER="${MARKS_BROWSER:-chromium}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -72,6 +75,10 @@ while [ $# -gt 0 ]; do
   scripts/run-service-ci.sh --url http://127.0.0.1:3000 --receipt /tmp/marks-ci-receipt.json}
       shift 2
       ;;
+    --browser)
+      BROWSER=${2:?Error: --browser needs chromium, firefox, or webkit.}
+      shift 2
+      ;;
     --skip-ui)
       SKIP_UI=1
       shift
@@ -87,6 +94,14 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
+
+case "$BROWSER" in
+  chromium|firefox|webkit) ;;
+  *)
+    echo "Error: --browser must be chromium, firefox, or webkit (got $BROWSER)." >&2
+    exit 2
+    ;;
+esac
 
 if [ -z "$URL" ] && [ -z "$BIN" ]; then
   echo "Error: provide --bin to start marks-server, or --url for a running one." >&2
@@ -124,7 +139,7 @@ if [ -z "$URL" ]; then
   fi
   URL="http://${LISTEN}"
   DB_DIR=$(mktemp -d "${TMPDIR:-/tmp}/marks-ci-db.XXXXXX")
-  SERVER_LOG=$(mktemp "${TMPDIR:-/tmp}/marks-ci-server.XXXXXX.log")
+  SERVER_LOG=$(mktemp "${TMPDIR:-/tmp}/marks-ci-server.XXXXXX")
   echo "starting $BIN on $LISTEN (db=$DB_DIR/marks.db3, log=$SERVER_LOG)"
   MARKS_LISTEN="$LISTEN" \
   MARKS_ORIGIN="$URL" \
@@ -136,12 +151,12 @@ if [ -z "$URL" ]; then
 fi
 
 if [ -z "$RECEIPT" ]; then
-  RECEIPT=$(mktemp "${TMPDIR:-/tmp}/marks-ci-receipt.XXXXXX.json")
+  RECEIPT=$(mktemp "${TMPDIR:-/tmp}/marks-ci-receipt.XXXXXX")
 fi
 
 if [ "$SKIP_UI" -eq 0 ]; then
   echo "service-mode UI against $URL"
-  node "$ROOT/scripts/ci-service-ui.mjs" --url "$URL" --receipt "$RECEIPT"
+  node "$ROOT/scripts/ci-service-ui.mjs" --url "$URL" --browser "$BROWSER" --receipt "$RECEIPT"
 else
   echo "skipping service-mode UI"
   rm -f "$RECEIPT"

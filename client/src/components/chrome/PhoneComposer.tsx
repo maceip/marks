@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import type { EditorView } from '@codemirror/view';
 import type { StateCommand } from '@codemirror/state';
+import type { CollabSession } from '../../collab/types';
 import {
   insertCallout,
   insertCodeBlock,
@@ -23,9 +24,11 @@ import type { UiActionId } from '../../lib/ui-actions';
 import type { ViewMode } from '../shell/TopBar';
 import { Glyph, type GlyphName } from '../glyphs/Glyph';
 import { SurfaceMaterial } from '../ui/SurfaceMaterial';
-import { AiSheet } from './AiSheet';
+import { DraftToolsSheet } from './DraftToolsSheet';
 
 interface PhoneComposerProps {
+  documentId: string;
+  session: CollabSession | null;
   posture: Posture;
   documentReady: boolean;
   documentTitle: string;
@@ -39,10 +42,10 @@ interface PhoneComposerProps {
   voiceActive?: boolean;
   voiceSupported?: boolean;
   onNotify?: (title: string, detail?: string, tone?: 'neutral' | 'success' | 'danger') => void;
-  localMode?: boolean;
+  temporary?: boolean;
 }
 
-type PhoneSheet = 'insert' | 'ai' | 'more' | null;
+type PhoneSheet = 'insert' | 'tools' | 'more' | null;
 
 const FORMAT: Array<{ glyph: GlyphName; label: string; command: StateCommand }> = [
   { glyph: 'bold', label: 'Bold', command: toggleBold },
@@ -53,7 +56,7 @@ const FORMAT: Array<{ glyph: GlyphName; label: string; command: StateCommand }> 
   { glyph: 'code', label: 'Code', command: toggleInlineCode },
 ];
 
-const INSERT: Array<{ glyph: GlyphName; label: string; run: 'command' | 'file' | 'ai' | UiActionId; command?: StateCommand }> = [
+const INSERT: Array<{ glyph: GlyphName; label: string; run: 'command' | 'file' | UiActionId; command?: StateCommand }> = [
   { glyph: 'image', label: 'Photo', run: 'file' },
   { glyph: 'link', label: 'Link', run: 'command', command: insertLink },
   { glyph: 'table', label: 'Table', run: 'command', command: insertTable },
@@ -73,12 +76,15 @@ const MORE: Array<{ glyph: GlyphName; label: string; action: UiActionId | 'find'
   { glyph: 'link', label: 'Pairing', action: 'pairing' },
   { glyph: 'clear', label: 'Sign out', action: 'logout' },
   { glyph: 'template', label: 'Templates', action: 'templates' },
+  { glyph: 'download', label: 'Import', action: 'import' },
   { glyph: 'pencil', label: 'Rename', action: 'rename' },
   { glyph: 'download', label: 'Export', action: 'download' },
+  { glyph: 'download', label: 'Bundle', action: 'download-bundle' },
   { glyph: 'share', label: 'Share', action: 'share' },
   { glyph: 'find', label: 'Find', action: 'find' },
   { glyph: 'outline', label: 'Outline', action: 'outline' },
   { glyph: 'history', label: 'History', action: 'history' },
+  { glyph: 'trash', label: 'Trash', action: 'trash' },
   { glyph: 'settings', label: 'Appearance', action: 'preferences' },
   { glyph: 'trash', label: 'Delete', action: 'delete' },
 ];
@@ -99,7 +105,7 @@ export function PhoneComposer(props: PhoneComposerProps) {
 
   return (
     <div className={`phone-composer${props.posture.keyboardOpen ? ' keyboard-open' : ''}`}>
-      {props.localMode && (
+      {props.temporary && (
         <button type="button" className="phone-identity" onClick={() => props.onAction('keep-workspace')}>
           <span>Temporary</span>
           Closing this tab is unrecoverable until you keep it.
@@ -119,9 +125,9 @@ export function PhoneComposer(props: PhoneComposerProps) {
               <span>{item.label}</span>
             </button>
           ))}
-          <button type="button" onClick={() => setSheet('ai')}>
+          <button type="button" disabled={!props.documentReady} onClick={() => setSheet('tools')}>
             <Glyph name="sparkles" size={20} />
-            <span>AI</span>
+            <span>Tools</span>
           </button>
           {props.voiceSupported && (
             <button type="button" className={props.voiceActive ? 'active' : undefined} onClick={() => props.onVoice?.()}>
@@ -137,8 +143,8 @@ export function PhoneComposer(props: PhoneComposerProps) {
           <button type="button" className="phone-sheet-scrim" aria-label="Close sheet" onClick={() => setSheet(null)} />
           <div className="phone-sheet surface-material-host" role="dialog" aria-label={sheet}>
             <SurfaceMaterial variant="floating" intensity={1.08} />
-            {sheet === 'ai' ? (
-              <AiSheet
+            {sheet === 'tools' ? (
+              <DraftToolsSheet
                 open
                 embedded
                 documentTitle={props.documentTitle}
@@ -199,9 +205,9 @@ export function PhoneComposer(props: PhoneComposerProps) {
           <Glyph name="plus" size={22} />
           <span>Insert</span>
         </button>
-        <button type="button" className={sheet === 'ai' ? 'active' : undefined} onClick={() => setSheet((current) => (current === 'ai' ? null : 'ai'))}>
+        <button type="button" disabled={!props.documentReady} className={sheet === 'tools' ? 'active' : undefined} onClick={() => setSheet((current) => (current === 'tools' ? null : 'tools'))}>
           <Glyph name="sparkles" size={22} />
-          <span>AI</span>
+          <span>Tools</span>
         </button>
         <button type="button" className={sheet === 'more' ? 'active' : undefined} onClick={() => setSheet((current) => (current === 'more' ? null : 'more'))}>
           <Glyph name="more" size={22} />
@@ -217,7 +223,10 @@ export function PhoneComposer(props: PhoneComposerProps) {
         onChange={(event) => {
           const file = event.target.files?.[0];
           const view = props.getView();
-          if (file && view) void insertImageFile(view, file);
+          if (file && view && props.session) {
+            void insertImageFile(view, props.session, file)
+              .catch((error) => props.onNotify?.('Image not inserted', error instanceof Error ? error.message : 'The asset upload failed.', 'danger'));
+          }
           event.currentTarget.value = '';
           setSheet(null);
         }}
