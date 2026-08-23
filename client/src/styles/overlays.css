@@ -157,9 +157,11 @@
 .keep-solo { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--glass-border); border-radius: 16px; background: var(--surface-sunken); }
 .keep-solo small { color: var(--text-muted); font-size: 11px; line-height: 1.5; }
 .keep-solo .button { justify-self: start; }
-.qr-mark { width: 112px; height: 112px; border-radius: 12px; background: var(--surface-raised); box-shadow: var(--shadow-sm); }
-.qr-mark-page { fill: var(--surface-raised); }
-.qr-mark-modules { fill: var(--brand-navy); }
+/* A QR must stay light-page/dark-module in every theme or cameras cannot
+   read it; these are the light-theme brand literals on purpose. */
+.qr-mark { width: 112px; height: 112px; border-radius: 12px; background: #ffffff; box-shadow: var(--shadow-sm); }
+.qr-mark-page { fill: #ffffff; }
+.qr-mark-modules { fill: #182654; }
 .identity-steps { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
 .identity-steps li { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 2px 10px; padding: 10px 0; border-top: 1px solid var(--glass-border); }
 .identity-steps li:first-child { border-top: 0; }
