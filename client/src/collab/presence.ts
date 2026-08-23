@@ -2,6 +2,7 @@
 import { StateEffect, StateField, type Extension } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, WidgetType } from '@codemirror/view';
 import type { PresenceStoreApi } from './presence-store';
+
 import type { PresenceActivityController } from './presence-activity-controller';
 
 import {
@@ -14,6 +15,7 @@ import {
   type PresenceDocument,
 } from './presence-position';
 import type { EsbtDocument } from './wasm/esbt-document';
+
 
 
 export const HEARTBEAT_MS = 15_000;
@@ -165,7 +167,9 @@ export function esbtPresence(
 
 
     const publishSelection = (): void => {
+
       if (!activity.active || !view.hasFocus) return;
+
 
       if (publishTimer !== null) clearTimeout(publishTimer);
       if (publishFrame !== null) cancelAnimationFrame(publishFrame);

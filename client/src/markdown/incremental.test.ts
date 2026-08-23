@@ -6,6 +6,15 @@ import {
   splitSourceBlocks,
 } from './incremental.ts';
 
+test('source blocks retain exact UTF-16 bounds for duplicate and moved blocks', () => {
+  const text = 'same\n\n# Heading\n\nsame';
+  const blocks = splitSourceBlocks(text);
+  assert.deepEqual(blocks.map(({ source, sourceStart, sourceEnd }) => [source, sourceStart, sourceEnd]), [
+    ['same', 0, 4], ['# Heading', 6, 15], ['same', 17, 21],
+  ]);
+  assert.notEqual(blocks[0].key, blocks[2].key);
+});
+
 const document = `# Title
 
 First paragraph with some words.

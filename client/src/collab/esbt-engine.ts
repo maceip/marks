@@ -1400,6 +1400,8 @@ export class EsbtEngine implements CollabSession {
       const user = value as { participantId?: unknown; connectionId?: unknown; name?: unknown; colorIndex?: unknown };
       const name = typeof user.name === 'string' ? user.name : 'Anonymous';
       const connectionId = typeof user.connectionId === 'string' ? user.connectionId : key.replace(/-cm-user$/, '');
+      const site = key.replace(/-cm-user$/, '');
+      const rawSelection = states[`${site}-cm-sel`] as Record<string, unknown> | undefined;
       peers.push({
         participantId: typeof user.participantId === 'string' ? user.participantId : connectionId,
         connectionId,
@@ -1407,12 +1409,18 @@ export class EsbtEngine implements CollabSession {
         name,
         colorIndex: typeof user.colorIndex === 'number' && user.colorIndex >= 1 && user.colorIndex <= 8 ? user.colorIndex : 1,
         self: key === selfKey,
-        participantId: typeof user.participantId === 'string' ? user.participantId : site,
-        selection: selection && typeof selection === 'object' &&
-          typeof (selection as { from?: unknown }).from === 'number' &&
-          typeof (selection as { to?: unknown }).to === 'number'
-          ? selection as { from: number; to: number } : undefined,
+        selection: rawSelection && typeof rawSelection.from === 'number' && typeof rawSelection.to === 'number'
+          ? { from: rawSelection.from, to: rawSelection.to } : undefined,
         section: 'Document',
+        presence: rawSelection ? {
+          activity: 'active',
+          selection: typeof rawSelection.from === 'number' ? { from: rawSelection.from, to: typeof rawSelection.to === 'number' ? rawSelection.to : rawSelection.from } : null,
+          location: null,
+          lastInteraction: Date.now(),
+          editing: true,
+          selecting: rawSelection.from !== rawSelection.to,
+        } : undefined,
+
       });
     }
 

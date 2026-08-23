@@ -25,6 +25,7 @@ import type { ViewMode } from '../shell/TopBar';
 import { Glyph, type GlyphName } from '../glyphs/Glyph';
 import { SurfaceMaterial } from '../ui/SurfaceMaterial';
 import { DraftToolsSheet } from './DraftToolsSheet';
+import { getPresenceDisplay, setPresenceDisplay } from '../../collab/presence-display';
 
 interface PhoneComposerProps {
   documentId: string;
@@ -161,6 +162,12 @@ export function PhoneComposer(props: PhoneComposerProps) {
                   </button>
                 </header>
                 <div className="phone-sheet-grid">
+                  {sheet === 'more' && (['exact', 'section', 'off'] as const).map((value) => (
+                    <button key={value} type="button" aria-pressed={getPresenceDisplay(props.mode === 'preview') === value} onClick={() => { setPresenceDisplay(value); setSheet(null); }}>
+                      <Glyph name={value === 'off' ? 'clear' : value === 'exact' ? 'find' : 'outline'} size={28} />
+                      <span>Presence: {value}</span>
+                    </button>
+                  ))}
                   {(sheet === 'insert' ? INSERT : MORE).map((item) => (
                     <button
                       key={item.label}

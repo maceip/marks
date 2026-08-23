@@ -4,6 +4,8 @@ export interface UiPreferences {
   density: 'comfortable' | 'compact';
   glass: boolean;
   motion: boolean;
+  /** Shared document-presence override; omitted retains pane-aware defaults. */
+  documentPresence?: 'exact' | 'section' | 'off';
 }
 
 const KEY = 'marks:ui-preferences:v1';
