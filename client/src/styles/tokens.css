@@ -98,6 +98,35 @@
   --statusbar-height: 30px;
   --sidebar-width: 268px;
   --touch-target: 44px;
+
+  /* Design-system semantic layer. Legacy names above remain frozen aliases
+     until the final repository-wide cleanup phase. */
+  --color-canvas: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-border: var(--border);
+  --color-action: var(--accent);
+  --color-action-hover: var(--accent-hover);
+  --color-positive: var(--success);
+  --color-caution: var(--warning);
+  --color-critical: var(--danger);
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --control-height-sm: 30px;
+  --control-height-md: 36px;
+  --control-height-touch: var(--touch-target);
+  --motion-response: var(--motion-fast);
+  --motion-enter: var(--motion-medium);
+  --motion-exit: 180ms;
+  --ease-standard: var(--ease-out);
+  --ease-emphasized: var(--ease-spring);
 }
 
 [data-theme='dark'] {

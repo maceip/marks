@@ -12,9 +12,15 @@ describe('parseRoute', () => {
   it('keeps document and benchmark routes', () => {
     assert.deepEqual(parseRoute('/d/about-marks'), { name: 'document', id: 'about-marks' });
     assert.deepEqual(parseRoute('/bench'), { name: 'benchmark' });
+    assert.deepEqual(parseRoute('/design-system'), { name: 'design-system' });
+    assert.deepEqual(parseRoute('/design-system/'), { name: 'design-system' });
     assert.deepEqual(parseRoute('/link'), { name: 'link' });
     assert.deepEqual(parseRoute('/link/'), { name: 'link' });
     assert.deepEqual(parseRoute('/'), { name: 'home' });
+  });
+
+  it('prints the lazy design-system path', () => {
+    assert.equal(routeToPath({ name: 'design-system' }), '/design-system');
   });
 
   it('prints a document path for in-app navigation', () => {

@@ -35,6 +35,8 @@
     "smoke:platforms": "node scripts/harness/run.mjs --driver=all",
     "measure": "node scripts/measure.mjs",
     "check:ui-budgets": "node scripts/check-ui-budgets.mjs",
+    "inventory:design-system": "node scripts/inventory-design-system.mjs",
+    "check:design-system": "node scripts/check-design-system.mjs",
     "ci:service": "bash scripts/run-service-ci.sh"
   },
   "devDependencies": {

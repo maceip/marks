@@ -7,9 +7,10 @@ import { Icon, icons } from '../ui/Icon';
 import { MarksMark } from '../ui/MarksMark';
 import { PresenceBar } from './PresenceBar';
 import { SurfaceMaterial } from '../ui/SurfaceMaterial';
+import { AgentChatPill } from '../ui/AgentChatPill';
 
 export type ViewMode = 'edit' | 'split' | 'preview';
-export type SurfaceRoute = 'home' | 'document' | 'benchmark' | 'link';
+export type SurfaceRoute = 'home' | 'document' | 'benchmark' | 'design-system' | 'link';
 
 const DocumentChrome = lazy(() =>
   import('../chrome/DocumentChrome').then((module) => ({ default: module.DocumentChrome })),
@@ -151,6 +152,13 @@ export function TopBar(props: TopBarProps) {
             </button>
           )}
           {documentRoute && props.documentAvailable && <PresenceBar peers={props.peers} />}
+
+          {documentRoute && props.documentAvailable && !props.posture.phone && (
+            <AgentChatPill
+              disabled={!props.documentReady}
+              onClick={() => props.onAction('draft-tools')}
+            />
+          )}
 
           {documentRoute && props.documentAvailable && (
             <button

@@ -45,6 +45,9 @@ import type { Heading } from './markdown/types';
 const Benchmark = lazy(() =>
   import('./pages/Benchmark').then((module) => ({ default: module.Benchmark })),
 );
+const DesignSystem = lazy(() =>
+  import('./pages/DesignSystem').then((module) => ({ default: module.DesignSystem })),
+);
 const Workspace = lazy(() =>
   import('./components/workspace/Workspace').then((module) => ({ default: module.Workspace })),
 );
@@ -685,6 +688,8 @@ export function App() {
     document.title =
       route.name === 'benchmark'
         ? 'Benchmark · marks'
+        : route.name === 'design-system'
+          ? 'Design system · marks'
         : route.name === 'link'
           ? 'Phone confirmation · marks'
           : route.name === 'document'
@@ -728,7 +733,7 @@ export function App() {
 
       <main className={`main route-${route.name}`}>
         <TopBar
-          title={route.name === 'benchmark' ? 'Engine benchmark' : route.name === 'link' ? 'Phone confirmation' : title}
+          title={route.name === 'benchmark' ? 'Engine benchmark' : route.name === 'design-system' ? 'Design system' : route.name === 'link' ? 'Phone confirmation' : title}
           docId={docId}
           route={route.name}
           documentReady={Boolean(session && hydrated && session.capabilities().edit)}
@@ -766,6 +771,10 @@ export function App() {
         {route.name === 'benchmark' ? (
           <Suspense fallback={<div className="empty-state">Loading benchmark…</div>}>
             <Benchmark onBack={() => navigate({ name: 'home' })} />
+          </Suspense>
+        ) : route.name === 'design-system' ? (
+          <Suspense fallback={<div className="empty-state">Loading design system…</div>}>
+            <DesignSystem onBack={() => navigate({ name: 'home' })} />
           </Suspense>
         ) : route.name === 'link' ? (
           <Suspense fallback={<div className="empty-state">Opening phone confirmation…</div>}>

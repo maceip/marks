@@ -69,6 +69,7 @@ directional references, not source code or pixel-exact specifications.
 | Workspace home | `/` | App shell, local catalog, and home CSS only | `App` + `pages/Home` |
 | Document | `/d/:id` | Session, CodeMirror, workspace, preview, and review overlays load on demand | `App` + `TopBar` + `components/workspace` |
 | Benchmark | `/bench` | Benchmark view, CSS, and worker load only on this route | `pages/Benchmark` |
+| Design system | `/design-system` | Catalog component and catalog CSS load only on this route | `pages/DesignSystem` + `components/ui` |
 | About / welcome | `/welcome/` → `/d/about-marks` | Tiny HTML bounce, then the real document editor showing the Markdown marketing page | `content/about.ts` + document chrome |
 
 The welcome URL exists so a public deployment can keep a stable marketing
