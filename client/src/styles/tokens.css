@@ -81,6 +81,9 @@
   --radius-xl: 20px;
 
   --motion-fast: 120ms;
+  --motion-instant: 70ms;
+  --motion-exit-fast: 120ms;
+  --motion-enter-fast: 170ms;
   --motion-medium: 220ms;
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
   --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
@@ -92,7 +95,23 @@
 
   --editor-font-size: 14.5px;
   --titlebar-height: 48px;
-  --ribbon-height: 148px;
+  --ribbon-height-comfortable: 148px;
+  --ribbon-height-compact: 132px;
+  --ribbon-height: var(--ribbon-height-comfortable);
+  --ribbon-tab-height-comfortable: 29px;
+  --ribbon-tab-height-compact: 26px;
+  --ribbon-tab-height: var(--ribbon-tab-height-comfortable);
+  --ribbon-command-height-comfortable: 48px;
+  --ribbon-command-height-compact: 42px;
+  --ribbon-command-height: var(--ribbon-command-height-comfortable);
+  --ribbon-group-gap-comfortable: 5px;
+  --ribbon-group-gap-compact: 4px;
+  --ribbon-group-gap: var(--ribbon-group-gap-comfortable);
+  --ribbon-icon-size: 22px;
+  --ribbon-icon-size-large: 28px;
+  --ribbon-label-size: 8.8px;
+  --ribbon-label-weight: 590;
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 42%, transparent);
   --mobile-ribbon-height: 104px;
   --topbar-height: var(--ribbon-height);
   --statusbar-height: 30px;
