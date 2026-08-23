@@ -38,6 +38,17 @@ export const editorTheme = EditorView.theme({
   },
   '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--text-muted)' },
   '.cm-selectionMatch': { backgroundColor: 'var(--selection-match)' },
+  '.cm-format-preview': {
+    borderRadius: '4px',
+    outline: '2px solid color-mix(in srgb, var(--accent) 30%, transparent)',
+    backgroundColor: 'color-mix(in srgb, var(--selection) 52%, transparent)',
+    transition: 'font-size 120ms ease, font-weight 120ms ease, opacity 120ms ease',
+  },
+  '.cm-format-preview-body': { fontSize: '1em', fontWeight: '400' },
+  '.cm-format-preview-heading-1': { fontSize: '1.5em', fontWeight: '760' },
+  '.cm-format-preview-heading-2': { fontSize: '1.3em', fontWeight: '730' },
+  '.cm-format-preview-heading-3': { fontSize: '1.15em', fontWeight: '700' },
+  '.cm-format-preview-heading-4': { fontSize: '1em', fontWeight: '700' },
   '.cm-searchMatch': {
     backgroundColor: 'var(--search-match)',
     outline: '1px solid var(--border-strong)',

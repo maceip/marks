@@ -4,6 +4,7 @@ import type { Posture } from '../../lib/posture';
 import type { UiActionId } from '../../lib/ui-actions';
 import type { ViewMode } from '../shell/TopBar';
 import { DesktopRibbon } from './DesktopRibbon';
+import { FoldableRibbon } from './FoldableRibbon';
 import { MiniToolbar } from './MiniToolbar';
 import { PhoneComposer } from './PhoneComposer';
 import '../../styles/chrome.css';
@@ -58,6 +59,15 @@ export function DocumentChrome(props: DocumentChromeProps) {
         onNotify={props.onNotify}
         temporary={props.temporary}
       />
+    );
+  }
+
+  if (props.posture.foldable) {
+    return (
+      <>
+        <FoldableRibbon posture={props.posture} />
+        <MiniToolbar selected={props.selected} disabled={!props.documentReady} getView={props.getView} />
+      </>
     );
   }
 

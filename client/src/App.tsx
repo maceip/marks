@@ -1,13 +1,13 @@
 import type { EditorView } from '@codemirror/view';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { logout } from './auth/identity';
+import type { CommandEnvironment } from './commands/types';
 import { bindPendingDevice, getOrCreatePendingDevice } from './auth/pending-device';
 import { ensureServiceCaller, getActiveCaller, type ServiceCaller } from './auth/caller';
 import { createMarksDocumentAccess } from './auth/room-access';
 import { loadUser } from './collab/user';
 import type { AppDialog, ReviewSurface } from './components/overlays/AppOverlays';
 import { Icon, icons } from './components/ui/Icon';
-import { LiquidDock } from './components/shell/LiquidDock';
 import { OpeningShell } from './components/shell/OpeningShell';
 import { Sidebar } from './components/shell/Sidebar';
 import type { CursorInfo } from './components/workspace/EditorPane';
@@ -50,6 +50,12 @@ const Workspace = lazy(() =>
 );
 const AppOverlays = lazy(() =>
   import('./components/overlays/AppOverlays').then((module) => ({ default: module.AppOverlays })),
+);
+const CommandProvider = lazy(() =>
+  import('./commands/react').then((module) => ({ default: module.CommandProvider })),
+);
+const AgentPill = lazy(() =>
+  import('./components/agent/AgentPill').then((module) => ({ default: module.AgentPill })),
 );
 const DraftToolsSheet = lazy(() =>
   import('./components/chrome/DraftToolsSheet').then((module) => ({ default: module.DraftToolsSheet })),
@@ -160,7 +166,7 @@ export function App() {
   const documents = useDocuments(route.name !== 'benchmark');
   const docId = route.name === 'document' ? route.id : null;
   const { meta, engine, supported, resolved } = useDocumentMeta(docId);
-  const { session, status, peers, hydrated } = useSession(
+  const { session, status, peers, hydrated, capabilities } = useSession(
     resolved && supported ? docId : null,
     user,
     documentAccess,
@@ -184,7 +190,30 @@ export function App() {
 
   const [snapshot, setSnapshot] = useState<HudSnapshot>(EMPTY_SNAPSHOT);
   const [headings, setHeadings] = useState<Heading[]>([]);
-  const [cursor, setCursor] = useState<CursorInfo>({ line: 1, column: 1, selected: 0 });
+  const [cursor, setCursor] = useState<CursorInfo>({
+    line: 1,
+    column: 1,
+    selected: 0,
+    from: 0,
+    to: 0,
+    context: { kind: 'text' },
+  });
+  const [historyState, setHistoryState] = useState({ canUndo: false, canRedo: false });
+
+  useEffect(() => {
+    if (!session) {
+      setHistoryState({ canUndo: false, canRedo: false });
+      return;
+    }
+    const update = () => setHistoryState({ canUndo: session.canUndo(), canRedo: session.canRedo() });
+    update();
+    const offChange = session.onChange(update);
+    const offCapabilities = session.onCapabilitiesChange(update);
+    return () => {
+      offChange();
+      offCapabilities();
+    };
+  }, [session]);
 
   useEffect(() => localStorage.setItem('marks:mode', mode), [mode]);
 
@@ -700,7 +729,63 @@ export function App() {
     setDraftToolsOpen(false);
   }, [route.name]);
 
-  return (
+  const commandEnvironment = useMemo<CommandEnvironment>(() => ({
+    hasDocument: Boolean(docId && session),
+    hydrated,
+    capabilities,
+    workspaceKind,
+    mode,
+    shell: posture.shell,
+    context: cursor.context.kind,
+    selectionLength: cursor.selected,
+    selectionFrom: cursor.from,
+    selectionTo: cursor.to,
+    canUndo: historyState.canUndo,
+    canRedo: historyState.canRedo,
+    voiceSupported: surface.voiceSupported,
+    voiceActive: surface.voiceStatus === 'listening',
+    theme,
+    outlineOpen,
+    hudOpen,
+    ribbonCollapsed,
+    reviewOpen: reviewSurface?.type ?? null,
+    formatPainterArmed: false,
+  }), [
+    capabilities,
+    cursor.context.kind,
+    cursor.from,
+    cursor.selected,
+    cursor.to,
+    docId,
+    hydrated,
+    historyState.canRedo,
+    historyState.canUndo,
+    hudOpen,
+    ribbonCollapsed,
+    mode,
+    outlineOpen,
+    posture.shell,
+    reviewSurface?.type,
+    session,
+    surface.voiceStatus,
+    surface.voiceSupported,
+    theme,
+    workspaceKind,
+  ]);
+
+  const commandServices = useMemo(() => ({
+    session,
+    getView,
+    onAction: runAction,
+    onModeChange: setMode,
+    onToggleOutline: () => setOutlineOpen((open) => !open),
+    onToggleHud: () => setHudOpen((open) => !open),
+    onToggleTheme: toggleTheme,
+    onToggleRibbon: () => setRibbonCollapsed((collapsed) => !collapsed),
+    onToggleVoice: session?.capabilities().edit ? surface.toggleVoice : undefined,
+  }), [getView, runAction, session, surface.toggleVoice, toggleTheme]);
+
+  const appSurface = (
     <div className={`app route-${route.name}${sidebarOpen && !focusMode && !posture.foldable ? ' with-sidebar' : ''}${focusMode ? ' focus-mode' : ''}${ribbonCollapsed ? ' ribbon-collapsed' : ''}`} data-shell={posture.shell} data-doc={docId ?? undefined}>
       {sidebarOpen && !focusMode && !posture.foldable && (
         <Sidebar
@@ -900,9 +985,9 @@ export function App() {
         </Suspense>
       )}
 
-      {draftToolsOpen && route.name === 'document' && !phone && (
+      {draftToolsOpen && route.name === 'document' && (
         <Suspense fallback={null}>
-          <aside className="draft-tools-float" aria-label="Local draft tools">
+          <aside className={phone ? 'phone-draft-tools-layer' : 'draft-tools-float'} aria-label="Local draft tools">
             <DraftToolsSheet
               open
               documentTitle={title}
@@ -914,15 +999,10 @@ export function App() {
         </Suspense>
       )}
 
-      {route.name === 'document' && session && !phone && !focusMode && !posture.foldable && (
-        <LiquidDock
-          onCommands={() => runAction('command-palette')}
-          onComments={() => runAction('comments')}
-          onHistory={() => runAction('history')}
-          onVoice={surface.voiceSupported ? surface.toggleVoice : undefined}
-          voiceActive={surface.voiceStatus === 'listening'}
-          voiceSupported={surface.voiceSupported}
-        />
+      {route.name === 'document' && session && !focusMode && (
+        <Suspense fallback={null}>
+          <AgentPill documentId={route.id} />
+        </Suspense>
       )}
 
       {overlaysMounted && (
@@ -936,7 +1016,7 @@ export function App() {
             preferences={preferences}
             hasDocument={Boolean(docId && session)}
             dataMode={UI_DATA_MODE}
-            capabilities={session?.capabilities() ?? null}
+            capabilities={capabilities}
             onCloseDialog={() => setDialog(null)}
             onCloseReview={() => setReviewSurface(null)}
             onAction={runAction}
@@ -977,5 +1057,13 @@ export function App() {
         }}
       />
     </div>
+  );
+  if (route.name !== 'document') return appSurface;
+  return (
+    <Suspense fallback={<div className="app route-document"><OpeningShell cached={Boolean(meta)} offline={surface.network === 'offline'} /></div>}>
+      <CommandProvider environment={commandEnvironment} services={commandServices} onNotify={notify}>
+        {appSurface}
+      </CommandProvider>
+    </Suspense>
   );
 }

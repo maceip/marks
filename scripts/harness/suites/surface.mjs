@@ -39,6 +39,34 @@ export async function runSurface(session, { check }) {
   await session.wait(800);
 
   check('document renders blocks', (await session.count('.marks-preview .marks-block')) >= 1);
+  check('desktop ribbon is registry-driven',
+    (await session.count('.ribbon-body [data-command-id="format.bold"]')) >= 1 &&
+    (await session.count('.quick-access [data-command-id="edit.undo"]')) >= 1);
+
+  await session.press('Alt');
+  await session.wait(100);
+  check('ribbon KeyTips are keyboard discoverable', (await session.count('.ribbon-keytip')) >= 2);
+  await session.press('Escape');
+
+  await session.click('.agent-orb');
+  const localPrivacy = await session.textContent('.agent-privacy');
+  check('local agent privacy disclosure is truthful',
+    String(localPrivacy).includes('do not leave this browser'), String(localPrivacy));
+  await session.fill('.agent-pill-compose input', 'Show rendered view');
+  await session.press('Enter');
+  await session.wait(500);
+  check('agent visibly raises the relevant ribbon task',
+    (await session.count('.ribbon-tab.agent-raised')) >= 1);
+  check('agent command changes to rendered-only mode',
+    !(await session.isVisible('.editor-pane')) && (await session.isVisible('.preview-pane')));
+  check('rendered-only ribbon removes text mutation controls',
+    (await session.count('.ribbon-body [data-command-id="format.bold"]')) === 0);
+
+  await session.fill('.agent-pill-compose input', 'Show source and rendering together');
+  await session.press('Enter');
+  await session.wait(500);
+  check('agent can restore split mode through the same command runtime',
+    (await session.isVisible('.editor-pane')) && (await session.isVisible('.preview-pane')));
   const voiceCount = await session.count('button[aria-label="Voice input"]');
   const voiceState = await session.evaluate(() => {
     const button = document.querySelector('button[aria-label="Voice input"]');
@@ -87,14 +115,48 @@ export async function runSurface(session, { check }) {
     String(status),
   );
   await session.setOffline(false);
+
+  const documentPath = await session.evaluate(() => location.pathname);
+  await session.goto(`${documentPath}?marks-posture=fold-book`);
+  await session.waitForSelector('.fold-ribbon-vertical', { timeout: 20_000 });
+  check('book fold uses two hinge-safe ribbon segments',
+    (await session.count('.fold-ribbon-primary')) === 1 &&
+    (await session.count('.fold-ribbon-hinge')) === 1 &&
+    (await session.count('.fold-ribbon-companion')) === 1);
+
+  await session.goto(`${documentPath}?marks-posture=fold-laptop`);
+  await session.waitForSelector('.fold-ribbon-horizontal', { timeout: 20_000 });
+  check('laptop fold exposes an independent lower touch shelf',
+    (await session.count('.fold-ribbon-primary')) === 1 &&
+    (await session.count('.fold-ribbon-companion')) === 1);
+
+  await session.goto(`${documentPath}?marks-posture=phone`);
+  await session.waitForSelector('.phone-composer', { timeout: 20_000 });
+  check('phone uses a focused composer instead of desktop ribbon',
+    (await session.count('.phone-nav')) === 1 && (await session.count('.ribbon-body')) === 0);
+  await session.click('.phone-nav > button:last-child');
+  await session.wait(150);
+  check('phone page sheet exposes authenticated pairing when eligible',
+    (await session.count('.phone-sheet [data-command-id="identity.pairing"]')) === 1);
 }
 
 export const SURFACE_CHECK_NAMES = [
   'opening shell does not stay up',
   'document renders blocks',
+  'desktop ribbon is registry-driven',
+  'ribbon KeyTips are keyboard discoverable',
+  'local agent privacy disclosure is truthful',
+  'agent visibly raises the relevant ribbon task',
+  'agent command changes to rendered-only mode',
+  'rendered-only ribbon removes text mutation controls',
+  'agent can restore split mode through the same command runtime',
   'voice input is honest',
   'select-all in the preview stays inside the document',
   'preview right-click opens the marks menu',
   'theme toggles',
   'connectivity state is honest',
+  'book fold uses two hinge-safe ribbon segments',
+  'laptop fold exposes an independent lower touch shelf',
+  'phone uses a focused composer instead of desktop ribbon',
+  'phone page sheet exposes authenticated pairing when eligible',
 ];

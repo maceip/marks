@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useOptionalCommandCenter } from '../../commands/context';
 import type { CollabSession, DocumentCapabilities } from '../../collab/types';
 import {
   reviewRange,
@@ -14,6 +15,7 @@ import { UI_ACTIONS, type UiActionId } from '../../lib/ui-actions';
 import { surfaceRuntime } from '../../surface/runtime';
 import { AccountSheet } from '../identity/AccountSheet';
 import { KeepWorkspace } from '../identity/KeepWorkspace';
+import { Glyph } from '../glyphs/Glyph';
 import { Icon, icons } from '../ui/Icon';
 import { SurfaceMaterial } from '../ui/SurfaceMaterial';
 import { Modal } from '../ui/Modal';
@@ -283,19 +285,45 @@ function PreferencesDialog({
 
 function CommandPalette({
   hasDocument,
-  onRun,
+  onRunLegacy,
+  onClose,
 }: {
   hasDocument: boolean;
-  onRun: (action: UiActionId) => void;
+  onRunLegacy: (action: UiActionId) => void;
+  onClose: () => void;
 }) {
+  const commandCenter = useOptionalCommandCenter();
   const [query, setQuery] = useState('');
   const actions = useMemo(() => {
-    const available = UI_ACTIONS.filter((action) => hasDocument || !DOCUMENT_ACTIONS.has(action.id));
+    const available = commandCenter
+      ? commandCenter.commands('palette').map((command) => ({
+          id: command.id,
+          label: command.label,
+          description: command.unavailableReason ?? command.description,
+          group: command.category,
+          shortcut: command.shortcut,
+          enabled: command.enabled,
+          glyph: command.glyph,
+        }))
+      : UI_ACTIONS
+          .filter((action) => hasDocument || !DOCUMENT_ACTIONS.has(action.id))
+          .map((action) => ({ ...action, enabled: true, glyph: undefined }));
     const needle = query.trim().toLowerCase();
     return needle
       ? available.filter((action) => `${action.label} ${action.description} ${action.group}`.toLowerCase().includes(needle))
       : available;
-  }, [hasDocument, query]);
+  }, [commandCenter, hasDocument, query]);
+
+  const run = (id: string) => {
+    const command = actions.find((action) => action.id === id);
+    if (!command?.enabled) return;
+    if (commandCenter) {
+      onClose();
+      window.setTimeout(() => void commandCenter.invoke(id, 'palette'), 0);
+    } else {
+      onRunLegacy(id as UiActionId);
+    }
+  };
 
   return (
     <div className="command-palette">
@@ -308,15 +336,18 @@ function CommandPalette({
           aria-label="Search commands"
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === 'Enter' && actions[0]) onRun(actions[0].id);
+            if (event.key === 'Enter') {
+              const first = actions.find((action) => action.enabled);
+              if (first) run(first.id);
+            }
           }}
         />
         <kbd>esc</kbd>
       </label>
       <div className="command-results" role="listbox" aria-label="Commands">
         {actions.map((action) => (
-          <button key={action.id} type="button" role="option" onClick={() => onRun(action.id)}>
-            <span><strong>{action.label}</strong><small>{action.description}</small></span>
+          <button key={action.id} type="button" role="option" disabled={!action.enabled} aria-disabled={!action.enabled} data-command-id={commandCenter ? action.id : undefined} onClick={() => run(action.id)}>
+            <span>{action.glyph && <Glyph name={action.glyph} size={20} />}<span><strong>{action.label}</strong><small>{action.description}</small></span></span>
             <span><em>{action.group}</em>{action.shortcut && <kbd>{action.shortcut}</kbd>}</span>
           </button>
         ))}
@@ -741,7 +772,7 @@ export function AppOverlays(props: AppOverlaysProps) {
   } else if (renderedDialog?.type === 'command-palette') {
     title = 'What do you want to do?';
     size = 'large';
-    content = <CommandPalette hasDocument={props.hasDocument} onRun={runFromPalette} />;
+    content = <CommandPalette hasDocument={props.hasDocument} onRunLegacy={runFromPalette} onClose={props.onCloseDialog} />;
   }
 
   return (

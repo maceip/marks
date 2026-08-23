@@ -18,7 +18,7 @@
     "typecheck": "npm run typecheck --workspace=client",
     "clean": "rm -rf client/dist node_modules/.vite",
     "test:browser": "node --experimental-strip-types --test client/src/browser/*.test.ts",
-    "test:surface": "node --experimental-strip-types --test client/src/content/*.test.ts client/src/data/*.test.ts client/src/editor/*.test.ts client/src/hooks/*.test.ts client/src/lib/*.test.ts",
+    "test:surface": "node --experimental-strip-types --test client/src/agent/*.test.ts client/src/commands/*.test.ts client/src/content/*.test.ts client/src/data/*.test.ts client/src/editor/*.test.ts client/src/hooks/*.test.ts client/src/lib/*.test.ts",
     "test:markdown": "node --experimental-strip-types --test client/src/markdown/*.test.ts client/src/text/*.test.ts",
     "test:bench": "node --experimental-strip-types --test client/src/bench/*.test.ts",
     "test:wasm": "node --experimental-strip-types --test client/src/collab/*.test.ts client/src/collab/wasm/*.test.ts",

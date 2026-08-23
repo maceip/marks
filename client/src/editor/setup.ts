@@ -14,6 +14,7 @@ import {
   placeholder,
   rectangularSelection,
 } from '@codemirror/view';
+import { formatPreviewExtension } from './format-preview';
 import type { CollabSession } from '../collab/types';
 import { handleImageTransfer } from './actions';
 import { handleEditorCopy, handleEditorCut, handleEditorPaste, markdownKeymap } from './commands';
@@ -102,6 +103,7 @@ export function createEditorExtensions({
     EditorView.updateListener.of((update) => {
       if (update.selectionSet || update.docChanged) onSelectionChange?.(update.view);
     }),
+    formatPreviewExtension,
     // The CRDT binding goes last so its plugins see a fully configured editor.
     session.extension,
   ];

@@ -2,12 +2,16 @@ import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { useLayoutEffect, useRef } from 'react';
 import type { CollabSession } from '../../collab/types';
+import { inspectEditorContext, type EditorContext } from '../../editor/context';
 import { createEditorExtensions } from '../../editor/setup';
 
 export interface CursorInfo {
   line: number;
   column: number;
   selected: number;
+  from: number;
+  to: number;
+  context: EditorContext;
 }
 
 interface EditorPaneProps {
@@ -58,6 +62,13 @@ export function EditorPane({
               line: line.number,
               column: range.head - line.from + 1,
               selected: Math.abs(range.to - range.from),
+              from: range.from,
+              to: range.to,
+              context: inspectEditorContext(
+                current.state.doc.toString(),
+                range.from,
+                range.to,
+              ),
             });
           },
           onAssetError: (error) => handlers.current.onAssetError?.(error),

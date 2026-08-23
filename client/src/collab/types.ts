@@ -141,6 +141,12 @@ export interface CollabSession {
   /** Resolve only after every edit made before this call is durably committed. */
   whenDurable(timeoutMs?: number): Promise<void>;
 
+  /** CRDT-aware undo/redo. CodeMirror local history is intentionally disabled. */
+  canUndo(): boolean;
+  canRedo(): boolean;
+  undo(): boolean;
+  redo(): boolean;
+
   status(): ConnectionStatus;
   capabilities(): DocumentCapabilities;
   peers(): Peer[];
@@ -150,6 +156,7 @@ export interface CollabSession {
   onChange(listener: (change: DocumentChange) => void): () => void;
   onStatusChange(listener: (status: ConnectionStatus) => void): () => void;
   onPeersChange(listener: (peers: Peer[]) => void): () => void;
+  onCapabilitiesChange(listener: (capabilities: DocumentCapabilities) => void): () => void;
   onError?(listener: (error: EngineErrorNotice) => void): () => void;
 
   /** True once the local replica has been read, even if the document is empty. */

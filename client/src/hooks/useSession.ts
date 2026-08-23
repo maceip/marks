@@ -3,6 +3,7 @@ import type {
   CollabSession,
   ConnectionStatus,
   DocumentAccessProvider,
+  DocumentCapabilities,
   LocalUser,
   Peer,
 } from '../collab/types';
@@ -14,6 +15,7 @@ export interface SessionState {
   status: ConnectionStatus;
   peers: Peer[];
   hydrated: boolean;
+  capabilities: DocumentCapabilities | null;
 }
 
 /**
@@ -32,6 +34,7 @@ export function useSession(
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
   const [peers, setPeers] = useState<Peer[]>([]);
   const [hydrated, setHydrated] = useState(false);
+  const [capabilities, setCapabilities] = useState<DocumentCapabilities | null>(null);
 
   // Identity changes should not tear down a live session.
   const identity = useMemo(() => user, [user.name, user.colorIndex]);
@@ -41,6 +44,7 @@ export function useSession(
       setSession(null);
       setHydrated(false);
       setPeers([]);
+      setCapabilities(null);
       return;
     }
 
@@ -50,6 +54,7 @@ export function useSession(
     setStatus('connecting');
     setPeers([]);
     setHydrated(false);
+    setCapabilities(null);
 
     // The documents shell should not pay for CodeMirror, the CRDT, or their
     // bindings. Load the editing engine only when a document is ready to open.
@@ -77,10 +82,12 @@ export function useSession(
         setStatus(next.status());
         setPeers(next.peers());
         setHydrated(next.hydrated());
+        setCapabilities(next.capabilities());
         unsubscribe = [
           next.onStatusChange(setStatus),
           next.onPeersChange(setPeers),
           next.onHydrated(() => setHydrated(true)),
+          next.onCapabilitiesChange(setCapabilities),
         ];
       })
       .catch(() => {
@@ -95,5 +102,5 @@ export function useSession(
     };
   }, [docId, identity, isAboutDocument(docId) ? null : access]);
 
-  return { session, status, peers, hydrated };
+  return { session, status, peers, hydrated, capabilities };
 }
