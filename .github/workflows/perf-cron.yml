@@ -1,0 +1,57 @@
+name: Performance & Smoke
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cron:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.88.0
+
+      - name: Setup Node.js v22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Build marks-server
+        run: cargo build -p marks-server --locked --release
+
+      - name: Build client
+        run: npm run build
+
+      - name: Start server in background
+        run: |
+          target/release/marks-server > marks-server.log 2>&1 &
+          SERVER_PID=$!
+          bash scripts/wait-for-server.sh "http://127.0.0.1:3000/healthz" "$SERVER_PID" 60 marks-server.log
+        env:
+          MARKS_LISTEN: 127.0.0.1:3000
+          MARKS_STATIC_DIR: client/dist
+
+      - name: Run smoke tests
+        run: npm run smoke
+        env:
+          MARKS_URL: http://127.0.0.1:3000
+
+      - name: Run measure tests
+        run: npm run measure -- --budget-first-ms 30000 --budget-p50 200 --budget-p95 400
+        env:
+          MARKS_URL: http://127.0.0.1:3000
