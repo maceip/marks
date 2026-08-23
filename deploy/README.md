@@ -35,8 +35,9 @@ sudo caddy reload --config /etc/caddy/Caddyfile
 ```
 
 The unit restarts on failure with systemd backoff (`RestartSec=2s`,
-`RestartSteps=5`, `RestartMaxDelaySec=60s`). Caddy drops scanner paths and
-caps bodies at 8 MiB; CrowdSec already parses Caddy logs for HTTP floods.
+`RestartSteps=5`, `RestartMaxDelaySec=60s`). Caddy drops scanner paths,
+rejects `Content-Length` over 8 MiB with 413, and wraps remaining bodies
+with `request_body`; CrowdSec already parses Caddy logs for HTTP floods.
 
 DNSSEC is on for this zone. Add or update the name with `knotc`, not by
 editing the zone dump:

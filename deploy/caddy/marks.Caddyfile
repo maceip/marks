@@ -13,6 +13,11 @@ marks.secure.build {
 	@assets path /assets/*
 	header @assets Cache-Control "public, max-age=31536000, immutable"
 
+	@flood `{http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > 8388608`
+	handle @flood {
+		respond "payload too large" 413
+	}
+
 	@spam path /.env /.git* /wp-admin* /wp-login.php /xmlrpc.php /phpmyadmin* /cgi-bin* /vendor/phpunit* /actuator* /server-status
 	handle @spam {
 		abort
@@ -20,8 +25,6 @@ marks.secure.build {
 
 	reverse_proxy 127.0.0.1:5192 {
 		flush_interval -1
-		header_up Host {host}
-		header_up X-Forwarded-Proto {scheme}
 		header_up X-Real-IP {remote_host}
 		transport http {
 			read_timeout 0
