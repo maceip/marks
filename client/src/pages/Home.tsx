@@ -10,6 +10,8 @@ import '../styles/home.css';
 interface HomeProps {
   documents: DocumentMeta[];
   loading: boolean;
+  /** A rotating session holds this workspace; it is no longer scratch. */
+  kept?: boolean;
   onCreate: () => void;
   onCreateFromTemplate: (templateId: TemplateId) => void;
   onOpen: (id: string) => void;
@@ -22,6 +24,7 @@ interface HomeProps {
 export function Home({
   documents,
   loading,
+  kept = false,
   onCreate,
   onCreateFromTemplate,
   onOpen,
@@ -37,13 +40,22 @@ export function Home({
       <section className="home-hero surface-material-host">
         <SurfaceMaterial variant="hero" intensity={0.92} />
         <div className="home-hero-copy">
-          <span className="home-kicker"><MarksMark size={16} /> Temporary workspace</span>
+          <span className="home-kicker">
+            <MarksMark size={16} /> {kept ? 'Kept workspace' : 'Temporary workspace'}
+          </span>
           <h2>Pick up the thought.<br />The interface is already ready.</h2>
-          <p>
-            First paint has no registration form. This tab is a scratch workspace. Create, edit,
-            preview, review, and export from a real local document model. Closing the tab before
-            you keep it is unrecoverable.
-          </p>
+          {kept ? (
+            <p>
+              This workspace is kept. Documents follow your account key and open on every device
+              you link. Closing this tab loses nothing.
+            </p>
+          ) : (
+            <p>
+              First paint has no registration form. This tab is a scratch workspace. Create, edit,
+              preview, review, and export from a real local document model. Closing the tab before
+              you keep it is unrecoverable.
+            </p>
+          )}
           <div className="home-actions">
             <button type="button" className="button primary" onClick={onCreate}>
               <Icon path={icons.plus} /> New document
@@ -51,9 +63,11 @@ export function Home({
             <button type="button" className="button" onClick={onOpenTemplates}>
               <Icon path={icons.template} /> Browse templates
             </button>
-            <button type="button" className="button" onClick={onKeepWorkspace}>
-              Keep this workspace
-            </button>
+            {!kept && (
+              <button type="button" className="button" onClick={onKeepWorkspace}>
+                Keep this workspace
+              </button>
+            )}
           </div>
         </div>
         <div className="home-receipt surface-material-host" aria-label="Performance promise">

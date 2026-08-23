@@ -693,6 +693,7 @@ export function App() {
           <Home
             documents={documents.documents}
             loading={documents.loading}
+            kept={UI_DATA_MODE === 'service' && serviceCaller?.kind === 'session'}
             onCreate={() => void createDocument()}
             onCreateFromTemplate={(templateId) => void createDocument({ templateId })}
             onOpen={openDocument}
