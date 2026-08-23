@@ -192,15 +192,58 @@ impl Room {
         let payload = &data[1..];
         match tag {
             MSG_UPDATE => self.client_update(conn, payload),
+            MSG_SNAPSHOT => self.client_snapshot(conn, payload),
             MSG_EPHEMERAL => self.client_ephemeral(conn, payload),
             // Unknown client tags are ignored, not fatal: forward-compatible.
             _ => {}
         }
     }
 
+    fn client_snapshot(&mut self, conn: u64, payload: &[u8]) {
+        let Some(socket) = self.sockets.get(&conn) else {
+            return;
+        };
+        if !authorize_room_action(&socket.actor, DocumentAction::EditText) {
+            self.close_one(conn, CLOSE_FORBIDDEN_WRITE);
+            return;
+        }
+        if !snapshot_envelope(payload) {
+            self.close_one(conn, CLOSE_INVALID_PAYLOAD);
+            return;
+        }
+        match self.document.apply_snapshot_bytes(payload) {
+            Ok(receipt) => {
+                if !receipt.visible_changed {
+                    return;
+                }
+                // A compact-snapshot rebase is the HistoryUnavailable fallback.
+                // Persist the merged replica as compaction, then relay the
+                // exact client bytes so other peers can import them.
+                self.since_compact = self.since_compact.max(1);
+                self.compact(true);
+                self.broadcast(conn, frame(MSG_SNAPSHOT, payload));
+            }
+            Err(error) => {
+                if resource_pressure(&error.code) {
+                    tracing::warn!(
+                        target: "marks_server::room",
+                        document = self.document_id.as_str(),
+                        code = ?error.code,
+                        "snapshot rejected by resource policy"
+                    );
+                }
+                self.close_one(conn, CLOSE_INVALID_PAYLOAD);
+            }
+        }
+    }
+
     /// Role policy runs before any CRDT decoding; rejected writers cannot
     /// cause journal appends, broadcasts, or engine state changes.
     fn client_update(&mut self, conn: u64, payload: &[u8]) {
+        if snapshot_envelope(payload) {
+            self.client_snapshot(conn, payload);
+            return;
+        }
         let Some(socket) = self.sockets.get(&conn) else {
             return;
         };
@@ -552,6 +595,15 @@ impl Room {
             ),
         }
     }
+}
+
+fn snapshot_envelope(payload: &[u8]) -> bool {
+    payload.len() >= 11
+        && payload[0] == b'E'
+        && payload[1] == b'S'
+        && payload[2] == b'B'
+        && payload[3] == b'M'
+        && matches!(payload[6], 3 | 6)
 }
 
 fn resource_pressure(code: &ErrorCode) -> bool {

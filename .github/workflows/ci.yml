@@ -43,6 +43,7 @@ jobs:
         uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: clippy, rustfmt
+          targets: wasm32-unknown-unknown
 
       - name: Refuse rustc drift from rust-version
         run: |
@@ -93,6 +94,9 @@ jobs:
 
       - name: Markdown renderer tests
         run: npm run test:markdown
+
+      - name: Wasm client plumbing tests
+        run: npm run test:wasm
 
       - name: Browser auth protocol tests
         run: npm run test:auth
