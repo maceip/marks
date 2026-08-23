@@ -19,6 +19,7 @@ Object.assign(globalThis, {
 });
 
 const {
+  deleteCounterfactual,
   listContextSignals,
   listCounterfactuals,
   listIntents,
@@ -96,4 +97,38 @@ test('counterfactual shelf persists bounded patch content by document', async ()
   await putCounterfactual(patch);
   assert.deepEqual(await listCounterfactuals(documentId), [patch]);
   assert.deepEqual(await listCounterfactuals(`${documentId}-other`), []);
+  await assert.rejects(
+    deleteCounterfactual(`${documentId}-other`, patch.id),
+    /does not belong to this document/u,
+  );
+  await deleteCounterfactual(documentId, patch.id);
+  assert.deepEqual(await listCounterfactuals(documentId), []);
+});
+
+test('context reconciliation never exceeds its per-document transaction bound', async () => {
+  const documentId = `context-bound-${crypto.randomUUID()}`;
+  const signals = Array.from({ length: 500 }, (_, index): ContextSignal => ({
+    id: `context:${documentId}:explicit:${index}`,
+    documentId,
+    kind: 'explicit',
+    label: `Signal ${index}`,
+    detail: 'Bound fixture',
+    expected: `value-${index}`,
+    range: { from: index, to: index + 1, line: 1, column: index + 1 },
+    firstSeenAt: index,
+    lastSeenAt: index,
+    reviewedAt: null,
+    ttlMs: 1_000,
+    active: true,
+    dismissed: false,
+  }));
+  await reconcileContextSignals(documentId, signals);
+  await reconcileContextSignals(documentId, [{
+    ...signals[0],
+    id: `context:${documentId}:derived-overflow`,
+    kind: 'relative-time',
+  }]);
+  const stored = await listContextSignals(documentId);
+  assert.equal(stored.length, 500);
+  assert.equal(stored.some((signal) => signal.id.endsWith('derived-overflow')), false);
 });

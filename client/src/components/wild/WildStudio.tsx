@@ -15,7 +15,7 @@ import { reviewRepository } from '../../data/review.ts';
 import { lineDiff } from '../../intelligence/operations.ts';
 import type { SourceRange } from '../../intelligence/types.ts';
 import { useDocumentIntelligence } from '../../intelligence/useDocumentIntelligence.ts';
-import { WILD_SURFACES } from '../../lib/wild.ts';
+import { WILD_SURFACES } from '../../lib/wild-surfaces.ts';
 import type { Shell } from '../../lib/posture.ts';
 import {
   applyCounterfactual,
@@ -24,6 +24,7 @@ import {
   predictConsequences,
 } from '../../wild/model.ts';
 import {
+  deleteCounterfactual,
   listCausalReceipts,
   listContextSignals,
   listCounterfactuals,
@@ -444,6 +445,7 @@ function CounterfactualSurface({
   const [note, setNote] = useState('');
   const [replacement, setReplacement] = useState('');
   const [showArchived, setShowArchived] = useState(false);
+  const [removeArmedId, setRemoveArmedId] = useState<string | null>(null);
   const visible = patches.filter((patch) => showArchived || !patch.archived);
   const firstVisibleId = visible[0]?.id ?? null;
   const [selectedId, setSelectedId] = useState<string | null>(visible[0]?.id ?? null);
@@ -461,6 +463,8 @@ function CounterfactualSurface({
     if (!selectedId && firstVisibleId) setSelectedId(firstVisibleId);
     else if (selectedId && !patches.some((patch) => patch.id === selectedId)) setSelectedId(firstVisibleId);
   }, [firstVisibleId, patches, selectedId]);
+
+  useEffect(() => { setRemoveArmedId(null); }, [selected?.id]);
 
   const create = (event: FormEvent) => {
     event.preventDefault();
@@ -506,6 +510,22 @@ function CounterfactualSurface({
     }
   };
 
+  const remove = async () => {
+    if (!selected) return;
+    if (removeArmedId !== selected.id) {
+      setRemoveArmedId(selected.id);
+      return;
+    }
+    try {
+      await deleteCounterfactual(session.docId, selected.id);
+      setRemoveArmedId(null);
+      setSelectedId(null);
+      onNotify('Alternative removed', 'The local patch was removed from this document’s shelf.', 'success');
+    } catch (error) {
+      onNotify('Alternative not removed', error instanceof Error ? error.message : 'Local possibility storage is unavailable.', 'danger');
+    }
+  };
+
   return (
     <div className="counterfactual-layout">
       <form className="counterfactual-compose" onSubmit={create}>
@@ -530,6 +550,7 @@ function CounterfactualSurface({
             <button type="button" className="button" disabled={Boolean(previewError)} onClick={() => void branch()}>Branch as document</button>
             <button type="button" className="button" onClick={() => downloadJson({ format: 'marks.counterfactual.v1', patch: selected }, `${selected.label.replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'alternative'}.marks-alternative.json`)}>Export patch</button>
             <button type="button" className="button quiet" onClick={() => void putCounterfactual({ ...selected, archived: !selected.archived, updatedAt: Date.now() }).catch((error) => onNotify('Shelf not updated', error instanceof Error ? error.message : 'Local possibility storage is unavailable.', 'danger'))}>{selected.archived ? 'Restore' : 'Archive'}</button>
+            <button type="button" className="button quiet" data-remove-armed={removeArmedId === selected.id || undefined} onClick={() => void remove()}>{removeArmedId === selected.id ? 'Confirm remove' : 'Remove local copy'}</button>
           </div>
         </section>
       )}

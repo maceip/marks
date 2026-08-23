@@ -154,16 +154,22 @@ export async function reconcileContextSignals(documentId: string, discovered: re
   const current = await requested<ContextSignal[]>(store.index('documentId').getAll(documentId));
   const existing = new Map(current.map((signal) => [signal.id, signal]));
   const seen = new Set(discovered.map((signal) => signal.id));
+  let remaining = Math.max(0, MAX_CONTEXT_PER_DOCUMENT - current.length);
   for (const signal of discovered.slice(0, MAX_CONTEXT_PER_DOCUMENT)) {
     const prior = existing.get(signal.id);
-    store.put(prior ? {
-      ...signal,
-      firstSeenAt: prior.firstSeenAt,
-      reviewedAt: prior.reviewedAt,
-      ttlMs: prior.ttlMs,
-      dismissed: prior.dismissed,
-      active: true,
-    } : signal);
+    if (prior) {
+      store.put({
+        ...signal,
+        firstSeenAt: prior.firstSeenAt,
+        reviewedAt: prior.reviewedAt,
+        ttlMs: prior.ttlMs,
+        dismissed: prior.dismissed,
+        active: true,
+      });
+    } else if (remaining > 0) {
+      store.put(signal);
+      remaining -= 1;
+    }
   }
   for (const signal of current) {
     if (signal.kind !== 'explicit' && signal.active && !seen.has(signal.id)) {
@@ -205,10 +211,24 @@ export async function putCounterfactual(patch: CounterfactualPatch): Promise<voi
     textEncoder.encode(patch.expected).byteLength + textEncoder.encode(patch.replacement).byteLength,
   );
   if (withoutCurrent.length >= MAX_COUNTERFACTUALS_PER_DOCUMENT || totalBytes > MAX_COUNTERFACTUAL_BYTES) {
-    return abortWith(database, transaction, 'The counterfactual shelf reached its 80-item or 8 MiB per-document bound. Archive and export alternatives before adding more.');
+    return abortWith(database, transaction, 'The counterfactual shelf reached its 80-item or 8 MiB per-document bound. Export and remove alternatives before adding more.');
   }
   store.put(patch);
   await completed(transaction);
   database.close();
   emit(patch.documentId);
+}
+
+export async function deleteCounterfactual(documentId: string, id: string): Promise<void> {
+  const database = await openDatabase();
+  const transaction = database.transaction(COUNTERFACTUALS, 'readwrite');
+  const store = transaction.objectStore(COUNTERFACTUALS);
+  const current = await requested<CounterfactualPatch | undefined>(store.get(id));
+  if (!current || current.documentId !== documentId) {
+    return abortWith(database, transaction, 'The counterfactual does not belong to this document.');
+  }
+  store.delete(id);
+  await completed(transaction);
+  database.close();
+  emit(documentId);
 }

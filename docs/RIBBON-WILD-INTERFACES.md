@@ -40,7 +40,7 @@ The wild branch is stacked on `codex/ribbon-practical`. It adds no Rust route, d
 
 - Stores one bounded source replacement per alternative: base digest, exact range, expected text, replacement, and 80-character prefix/suffix anchors.
 - Automatically creates a reversal patch for a successful source-changing ribbon or agent command when the minimal changed span is at most 512 KiB.
-- Lets a person preserve an alternative for the current source selection, preview a bounded line diff, export the patch, archive or restore it, apply it, or branch it as a new document.
+- Lets a person preserve an alternative for the current source selection, preview a bounded line diff, export the patch, archive or restore it, explicitly remove its local copy with a two-step action, apply it, or branch it as a new document.
 - Application requires edit **and** version-checkpoint authority. Marks creates the existing durable version checkpoint first, then applies source, waits for `CollabSession.whenDurable()`, and records application time.
 - A branch uses the existing access-aware document repository and never overwrites the current document.
 - Stale alternatives apply only at the exact range or one uniquely matching context. Missing or ambiguous anchors fail closed.
@@ -56,7 +56,7 @@ Database: `marks-wild-studio`, version 1.
 | `context` | 500 | Exact aging claim, source range, cadence, and review state |
 | `counterfactuals` | 80 and 8 MiB | Bounded expected/replacement text and stale-safe anchors |
 
-Every object is keyed by an opaque ID and indexed by `documentId`. New writes enforce the bound transactionally. Local same-tab changes use `marks:wild-store-change`; other tabs use `marks:wild-store-change:v1`. The stores never synchronize through the collaboration protocol and are not included in a document share.
+Every object is keyed by an opaque ID and indexed by `documentId`. New writes and automatic context reconciliation enforce the bound transactionally. Local same-tab changes use `marks:wild-store-change`; other tabs use `marks:wild-store-change:v1`. The stores never synchronize through the collaboration protocol and are not included in a document share.
 
 The command-observation backlog exists only before the telemetry listener mounts. It is bounded to 40 observations and 2 MiB of source characters; oversized observations are dropped rather than retained in memory.
 

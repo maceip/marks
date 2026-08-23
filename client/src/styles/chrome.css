@@ -518,7 +518,10 @@
   from { opacity: 0; transform: translateY(4px); }
 }
 
-.mini-toolbar {
+/* The material host establishes z-order for ordinary children. Keep this
+   contextual control out of the ribbon grid so a selection can never shrink
+   the command deck or cover its tab hit targets. */
+.app-ribbon.surface-material-host > .mini-toolbar {
   position: absolute;
   top: 10px;
   left: 50%;

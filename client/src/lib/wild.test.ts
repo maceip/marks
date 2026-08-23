@@ -1,11 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { UI_ACTIONS } from './ui-actions.ts';
-import {
-  WILD_ACTIONS,
-  WILD_SURFACES,
-  wildCapabilityForAction,
-} from './wild.ts';
+import { WILD_SURFACES } from './wild-surfaces.ts';
+import { WILD_ACTIONS, wildCapabilityForAction } from './wild.ts';
 
 test('all five wild capabilities have one registered action and destination', () => {
   assert.equal(WILD_ACTIONS.length, 5);
