@@ -8,16 +8,16 @@ use marks_auth::{
     Actor, ControllerBootstrap, ControllerRecord, DeviceCapabilities, DeviceChallengeRecord,
     DeviceId, DeviceRecord, DeviceSessionProof, DocumentAction, DocumentId, DocumentOwner,
     DocumentRecord, DocumentRole, EsbtSiteId, PairingId, PairingRecord, PrincipalId,
-    PrincipalRecord, RoomActor, ScratchId, ScratchRecord, SelectedPrincipal, SessionId,
-    SessionRecord, TicketId, allocate_esbt_site, authorize_controller_bootstrap,
-    authorize_device_session, authorize_document_action, authorize_pairing_finalize,
-    authorize_pairing_request, authorize_room_action, bind_pending_device, claim_scratch_document,
-    issue_document_ticket, issue_scratch_document_ticket, mark_pairing_consumed,
-    mark_scratch_claimed, owner_acl_row, pairing_secret_hash, redeem_document_ticket,
-    redeem_scratch_document_ticket, require_active_principal, resolve_document_role,
-    scratch_capability_hash, select_principal_for_controller_grant, select_scratch_claim,
-    session_secret_hash, validate_claimed_scratch_capability, validate_scratch_capability,
-    validate_session,
+    PrincipalRecord, RoomActor, ScratchId, ScratchRecord, SelectedPrincipal, SelfBootstrap,
+    SessionId, SessionRecord, TicketId, allocate_esbt_site, authorize_controller_bootstrap,
+    authorize_device_session, authorize_document_action, authorize_pairing,
+    authorize_pairing_finalize, authorize_pairing_request, authorize_room_action,
+    authorize_self_bootstrap, bind_pending_device, claim_scratch_document, issue_document_ticket,
+    issue_scratch_document_ticket, mark_pairing_consumed, mark_scratch_claimed, owner_acl_row,
+    pairing_secret_hash, redeem_document_ticket, redeem_scratch_document_ticket,
+    require_active_principal, resolve_document_role, scratch_capability_hash,
+    select_principal_for_controller_grant, select_scratch_claim, session_secret_hash,
+    validate_claimed_scratch_capability, validate_scratch_capability, validate_session,
 };
 use p256::ecdsa::{Signature, SigningKey, signature::Signer};
 use rand_core::OsRng;
@@ -255,4 +255,147 @@ fn scratch_phone_bootstrap_finalize_session_and_room_actor_are_one_path() {
         DocumentRole::Viewer,
         DocumentAction::EditText
     ));
+}
+
+/// A visitor whose only device holds the scratch workspace promotes it with
+/// the single-device rail, then acts as the controller that approves a second
+/// browser through the ordinary pairing rail. One principal, no second claim.
+#[test]
+fn phone_only_self_bootstrap_then_pairing_approval_are_one_path() {
+    let now_ms = 11_000;
+    let capability = [9_u8; 32];
+
+    // 1. The phone tab is an ordinary scratch workspace with its pending key.
+    let scratch = ScratchRecord {
+        id: ScratchId::new("scratch_phoneonly").unwrap(),
+        capability_hash: scratch_capability_hash(&capability),
+        expires_at_ms: 86_400_000,
+        claimed_by: None,
+        claimed_at_ms: None,
+        finalize_expires_at_ms: None,
+        revoked_at_ms: None,
+    };
+    let authority = validate_scratch_capability(&scratch, &capability, now_ms).unwrap();
+    let phone_key = SigningKey::random(&mut OsRng);
+    let phone_public = phone_key.verifying_key().to_encoded_point(false);
+    let pending = bind_pending_device(
+        &authority,
+        DeviceId::new("device_phone_123").unwrap(),
+        phone_public.as_bytes(),
+        now_ms,
+        86_400_000,
+    )
+    .unwrap();
+
+    // 2. The pending key signs its own promotion. No pairing exists.
+    let statement = SelfBootstrap {
+        version: 1,
+        controller_id: marks_auth::ControllerId::new("controller_phone1").unwrap(),
+        scratch_id: scratch.id.clone(),
+        device_id: pending.id.clone(),
+        device_public_key_hash: pending.public_key_hash,
+        issued_at_ms: now_ms - 1_000,
+        expires_at_ms: now_ms + 60_000,
+    };
+    let signature: Signature = phone_key.sign(&statement.signing_bytes());
+    let signature: [u8; 64] = signature.to_bytes().into();
+    let authorized =
+        authorize_self_bootstrap(&authority, &pending, &statement, &signature, now_ms).unwrap();
+    assert_eq!(authorized.device_id, pending.id);
+
+    // 3. The server generates the principal and the claim is monotonic: the
+    //    same scratch cannot be claimed again by a later promotion.
+    let principal = PrincipalId::new("principal_phone").unwrap();
+    assert_eq!(
+        select_scratch_claim(&scratch, &principal, now_ms).unwrap(),
+        marks_auth::ScratchClaim::ClaimNow
+    );
+    let claimed_scratch = mark_scratch_claimed(&scratch, principal.clone(), now_ms).unwrap();
+    assert_eq!(
+        select_scratch_claim(
+            &claimed_scratch,
+            &PrincipalId::new("principal_other").unwrap(),
+            now_ms + 1,
+        ),
+        Err(marks_auth::PromotionError::ScratchConflict)
+    );
+    assert_eq!(
+        validate_scratch_capability(&claimed_scratch, &capability, now_ms + 1),
+        Err(marks_auth::ScratchError::Claimed)
+    );
+
+    // 4. The promoted key is the controller record the pairing rail consumes
+    //    when a laptop appears later with its own scratch and QR pairing.
+    let controller = ControllerRecord {
+        id: authorized.controller_id.clone(),
+        principal_id: principal.clone(),
+        public_key_sec1: pending.public_key_sec1.clone(),
+        epoch: 1,
+        capabilities: DeviceCapabilities::CONTROLLER,
+        revoked_at_ms: None,
+    };
+    assert_eq!(
+        select_principal_for_controller_grant(&controller).unwrap(),
+        SelectedPrincipal::Existing(principal.clone())
+    );
+
+    let laptop_key = SigningKey::random(&mut OsRng);
+    let laptop_public = laptop_key.verifying_key().to_encoded_point(false);
+    let laptop_scratch = ScratchRecord {
+        id: ScratchId::new("scratch_laptop1").unwrap(),
+        capability_hash: scratch_capability_hash(&[8_u8; 32]),
+        expires_at_ms: 86_400_000,
+        claimed_by: None,
+        claimed_at_ms: None,
+        finalize_expires_at_ms: None,
+        revoked_at_ms: None,
+    };
+    let laptop_authority =
+        validate_scratch_capability(&laptop_scratch, &[8_u8; 32], now_ms).unwrap();
+    let laptop_pending = bind_pending_device(
+        &laptop_authority,
+        DeviceId::new("device_laptop12").unwrap(),
+        laptop_public.as_bytes(),
+        now_ms,
+        86_400_000,
+    )
+    .unwrap();
+    let pairing_secret = [7_u8; 32];
+    let pairing = PairingRecord {
+        id: PairingId::new("pairing_laptop1").unwrap(),
+        scratch_id: laptop_scratch.id.clone(),
+        pending_device_id: laptop_pending.id.clone(),
+        pending_device_public_key_hash: laptop_pending.public_key_hash,
+        secret_hash: pairing_secret_hash(&pairing_secret),
+        word_code_hash: None,
+        expires_at_ms: now_ms + 120_000,
+        consumed_at_ms: None,
+        approved_principal_id: None,
+    };
+    let grant = marks_auth::DeviceGrant {
+        version: 1,
+        principal_id: principal.clone(),
+        controller_id: controller.id.clone(),
+        controller_epoch: controller.epoch,
+        pairing_id: pairing.id.clone(),
+        scratch_id: pairing.scratch_id.clone(),
+        pending_device_id: pairing.pending_device_id.clone(),
+        pending_device_public_key_hash: pairing.pending_device_public_key_hash,
+        capabilities: DeviceCapabilities::MEMBER,
+        issued_at_ms: now_ms,
+        expires_at_ms: pairing.expires_at_ms,
+    };
+    let grant_signature: Signature = phone_key.sign(&grant.signing_bytes());
+    let grant_signature: [u8; 64] = grant_signature.to_bytes().into();
+    let approved = authorize_pairing(
+        &pairing,
+        &pairing_secret,
+        &controller,
+        &grant,
+        &grant_signature,
+        now_ms + 1,
+    )
+    .unwrap();
+    assert_eq!(approved.principal_id, principal);
+    assert_eq!(approved.pending_device_id, laptop_pending.id);
 }

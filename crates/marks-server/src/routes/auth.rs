@@ -17,16 +17,16 @@ use axum::response::{IntoResponse, Response};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use marks_auth::{
     ChallengeId, ControllerBootstrap, DeviceCapabilities, DeviceGrant, DeviceId,
-    DeviceSessionProof, PairingId, PrincipalId, SESSION_COOKIE_NAME, ScratchId, SessionId,
-    VerifiedEmailEvidence, authorize_controller_bootstrap, authorize_controller_bootstrap_words,
-    authorize_device_session, authorize_email_promotion, authorize_locator_attach,
-    authorize_pairing, authorize_pairing_finalize, authorize_pairing_inspect,
-    authorize_pairing_inspect_words, authorize_pairing_request, authorize_pairing_words,
-    authorize_revoke_device, bearer_secret_hash, bind_pending_device, encode_bearer_secret,
-    generate_pairing_words, normalize_pairing_words, pairing_matches_pending, pairing_secret_hash,
-    pairing_word_code_hash, scratch_capability_hash, select_principal_for_controller_grant,
-    select_principal_for_email_locator, session_csrf_token, session_secret_hash,
-    validate_claimed_scratch_capability,
+    DeviceSessionProof, PairingId, PrincipalId, SESSION_COOKIE_NAME, ScratchId, SelfBootstrap,
+    SessionId, VerifiedEmailEvidence, authorize_controller_bootstrap,
+    authorize_controller_bootstrap_words, authorize_device_session, authorize_email_promotion,
+    authorize_locator_attach, authorize_pairing, authorize_pairing_finalize,
+    authorize_pairing_inspect, authorize_pairing_inspect_words, authorize_pairing_request,
+    authorize_pairing_words, authorize_revoke_device, authorize_self_bootstrap, bearer_secret_hash,
+    bind_pending_device, encode_bearer_secret, generate_pairing_words, normalize_pairing_words,
+    pairing_matches_pending, pairing_secret_hash, pairing_word_code_hash, scratch_capability_hash,
+    select_principal_for_controller_grant, select_principal_for_email_locator, session_csrf_token,
+    session_secret_hash, validate_claimed_scratch_capability,
 };
 use rusqlite::{Connection, params};
 use serde::Deserialize;
@@ -240,6 +240,136 @@ pub async fn scratch_bind_device(
         Ok(())
     })?;
     Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelfBootstrapBody {
+    pub bootstrap: SelfBootstrapStatement,
+    /// 64-byte IEEE P1363 signature by the pending device key, base64url.
+    pub signature: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelfBootstrapStatement {
+    pub version: u8,
+    #[serde(rename = "controllerId")]
+    pub controller_id: String,
+    #[serde(rename = "scratchId")]
+    pub scratch_id: String,
+    #[serde(rename = "deviceId")]
+    pub device_id: String,
+    #[serde(rename = "devicePublicKeyHash")]
+    pub device_public_key_hash: String,
+    #[serde(rename = "issuedAtMs")]
+    pub issued_at_ms: u64,
+    #[serde(rename = "expiresAtMs")]
+    pub expires_at_ms: u64,
+}
+
+impl SelfBootstrapStatement {
+    fn decode(self) -> ApiResult<SelfBootstrap> {
+        Ok(SelfBootstrap {
+            version: self.version,
+            controller_id: marks_auth::ControllerId::new(self.controller_id)
+                .map_err(|_| ApiError::bad_request("invalid id"))?,
+            scratch_id: ScratchId::new(self.scratch_id)
+                .map_err(|_| ApiError::bad_request("invalid id"))?,
+            device_id: DeviceId::new(self.device_id)
+                .map_err(|_| ApiError::bad_request("invalid id"))?,
+            device_public_key_hash: b64_32(&self.device_public_key_hash)?,
+            issued_at_ms: self.issued_at_ms,
+            expires_at_ms: self.expires_at_ms,
+        })
+    }
+}
+
+/// `POST /v1/auth/scratch/{id}/bootstrap`: single-device promotion for a
+/// visitor with no second device to scan. The pending key already bound to
+/// this live scratch signs the statement and is promoted to controller. One
+/// serializable transaction creates the random principal, promotes the key,
+/// claims the scratch documents, and issues the first session; the
+/// `claimed_by IS NULL` scratch update serializes a race against a
+/// concurrent pairing promotion.
+pub async fn scratch_self_bootstrap(
+    State(app): State<Arc<App>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<SelfBootstrapBody>,
+) -> ApiResult<Response> {
+    rate(&app, &headers, &addr, "self-bootstrap", 10)?;
+    let scratch = guard::scratch_caller(&app, &headers)?;
+    if scratch.authority.scratch_id.as_str() != id {
+        return Err(ApiError::unauthenticated());
+    }
+    let signature = b64_any(&body.signature)?;
+    let statement = body.bootstrap.decode()?;
+    if statement.scratch_id != scratch.authority.scratch_id {
+        return Err(ApiError::unauthenticated());
+    }
+    let now = now_ms();
+
+    let (principal_id, session, device_id, changed) = app.db.tx(|conn| {
+        let pending = store::load_pending_device(conn, &scratch.authority.scratch_id)?
+            .ok_or_else(ApiError::unauthenticated)?;
+        let authorized =
+            authorize_self_bootstrap(&scratch.authority, &pending, &statement, &signature, now)
+                .map_err(|_| ApiError::unauthenticated())?;
+
+        // The server, never the client, generates the principal.
+        let principal_id =
+            PrincipalId::new(new_id("principal")).map_err(|_| ApiError::internal())?;
+        conn.execute(
+            "INSERT INTO principals (id, created_at) VALUES (?1, ?2)",
+            params![principal_id.as_str(), store::ms(now)],
+        )?;
+        insert_device(
+            conn,
+            &authorized.device_id,
+            &principal_id,
+            &pending.public_key_sec1,
+            DeviceCapabilities::CONTROLLER,
+            now,
+        )?;
+        conn.execute(
+            "INSERT INTO controllers (id, principal_id, device_id, key_epoch, created_at)
+             VALUES (?1, ?2, ?3, 1, ?4)",
+            params![
+                authorized.controller_id.as_str(),
+                principal_id.as_str(),
+                authorized.device_id.as_str(),
+                store::ms(now),
+            ],
+        )?;
+        let changed = identity::claim_scratch_documents(
+            conn,
+            &authorized.scratch_id,
+            &principal_id,
+            &authorized.device_id,
+            now,
+        )?;
+        identity::persist_scratch_claim(conn, &authorized.scratch_id, &principal_id, now)?;
+        // The device authenticated with the scratch capability plus its key
+        // signature; give it the first rotating session directly. There is
+        // no other tab to finalize.
+        let session = insert_session(conn, &app, &principal_id, &authorized.device_id, now)?;
+        Ok((principal_id, session, authorized.device_id, changed))
+    })?;
+
+    for (document_id, epoch) in changed {
+        app.rooms
+            .control(Control::EpochChanged { document_id, epoch })
+            .await;
+    }
+    let body = session_json(&session, &principal_id, &device_id)?;
+    Ok((
+        StatusCode::CREATED,
+        [(header::SET_COOKIE, session.cookie())],
+        Json(body),
+    )
+        .into_response())
 }
 
 /* ------------------------------ pairings -------------------------------- */

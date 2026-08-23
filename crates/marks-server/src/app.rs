@@ -43,6 +43,10 @@ pub fn router(app: Arc<App>) -> Router {
             "/v1/auth/scratch/{id}/device",
             put(routes::auth::scratch_bind_device),
         )
+        .route(
+            "/v1/auth/scratch/{id}/bootstrap",
+            post(routes::auth::scratch_self_bootstrap),
+        )
         .route("/v1/auth/pairings", post(routes::auth::pairing_create))
         .route(
             "/v1/auth/pairings/lookup",

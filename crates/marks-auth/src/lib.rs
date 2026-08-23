@@ -9,6 +9,8 @@
 //!
 //! - one principal model;
 //! - the approved scratch and phone-controller flow;
+//! - the approved single-device self-bootstrap for a visitor whose only
+//!   device is the one holding the scratch workspace;
 //! - the existing rotating session and device model;
 //! - the approved optional EVT adapter, behind its server flag;
 //! - one ACL model;
@@ -34,6 +36,7 @@ mod pairing;
 mod pending;
 mod promotion;
 mod scratch;
+mod self_bootstrap;
 mod session;
 mod ticket;
 mod wire;
@@ -94,6 +97,10 @@ pub use scratch::{
     ClaimedScratchAuthority, SCRATCH_FINALIZE_WINDOW_MS, ScratchAuthority, ScratchError,
     ScratchRecord, mark_scratch_claimed, scratch_capability_hash,
     validate_claimed_scratch_capability, validate_scratch_capability,
+};
+pub use self_bootstrap::{
+    AuthorizedSelfBootstrap, SELF_BOOTSTRAP_WINDOW_MS, SelfBootstrap, SelfBootstrapError,
+    authorize_self_bootstrap,
 };
 pub use session::{
     AuthenticatedSession, SessionError, SessionRecord, session_csrf_token, session_secret_hash,
