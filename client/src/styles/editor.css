@@ -15,7 +15,7 @@
 .esbt-caret::after {
   content: attr(data-name);
   position: absolute;
-  top: -1.4em;
+  bottom: calc(100% + 2px + var(--caret-stack, 0) * 18px);
   left: -2px;
   z-index: 30;
   padding: 1px 5px;
@@ -28,14 +28,31 @@
   line-height: 1.45;
   white-space: nowrap;
   opacity: 0;
+  transform: translateX(var(--label-shift-x, 0));
   transition: opacity 140ms ease;
   pointer-events: none;
   user-select: none;
 }
 
-/* Names stay out of the way until you look for them. */
-.cm-editor:hover .esbt-caret::after {
+.esbt-caret[data-placement='below']::after {
+  top: calc(100% + 2px + var(--caret-stack, 0) * 18px);
+  bottom: auto;
+  border-radius: 0 4px 4px 4px;
+}
+
+.esbt-caret[data-presentation='active']::after,
+.esbt-caret:hover::after {
   opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .esbt-caret::after { transition: none; }
+}
+
+@media (forced-colors: active) {
+  .esbt-caret { border-left-color: Highlight; }
+  .esbt-caret::after { background: Canvas; color: CanvasText; border: 1px solid CanvasText; }
+  .esbt-selection { background: Highlight; forced-color-adjust: none; }
 }
 
 .esbt-selection {
