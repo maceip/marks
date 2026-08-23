@@ -300,7 +300,7 @@ dependencies = [
 [[package]]
 name = "esbt"
 version = "0.2.0"
-source = "git+https://github.com/maceip/ESBT-web?rev=6de13dd1c84fca3f33d51658ed86d5502b288284#6de13dd1c84fca3f33d51658ed86d5502b288284"
+source = "git+https://github.com/maceip/ESBT-web?rev=3d11890684d6c23bf3c23131ac6197055175a601#3d11890684d6c23bf3c23131ac6197055175a601"
 
 [[package]]
 name = "fallible-iterator"
