@@ -20,6 +20,7 @@ export type CommandExecutor = (
   command: CommandDefinition,
   input: Record<string, unknown>,
   signal: AbortSignal,
+  run: Readonly<CommandRun>,
 ) => Promise<CommandExecutionResult>;
 
 export interface CommandRuntimeOptions {
@@ -153,7 +154,7 @@ export class CommandRuntime {
 
     this.update(runId, { status: 'running', startedAt: this.now(), message: `Running ${command.label}` });
     try {
-      const result = await this.executor(command, pending.run.input, pending.abort.signal);
+      const result = await this.executor(command, pending.run.input, pending.abort.signal, pending.run);
       if (pending.abort.signal.aborted) {
         this.finish(runId, 'cancelled', 'Cancelled before completion.');
       } else if (result.ok) {

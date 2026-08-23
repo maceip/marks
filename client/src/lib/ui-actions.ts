@@ -1,4 +1,5 @@
 import type { PracticalActionId } from './practical.ts';
+import type { WildActionId } from './wild.ts';
 
 export type UiActionId =
   | 'new'
@@ -25,7 +26,8 @@ export type UiActionId =
   | 'logout'
   | 'find'
   | 'draft-tools'
-  | PracticalActionId;
+  | PracticalActionId
+  | WildActionId;
 
 export interface UiActionDescriptor {
   id: UiActionId;
@@ -78,4 +80,9 @@ export const UI_ACTIONS: UiActionDescriptor[] = [
   { id: 'practical-paste', label: 'Paste intent & provenance', description: 'Control how clipboard material lands', group: 'Document' },
   { id: 'practical-blocks', label: 'Cross-document blocks', description: 'Reference another document section', group: 'Document' },
   { id: 'practical-quality', label: 'Audience & quality contract', description: 'Keep readability aligned to an audience', group: 'Review' },
+  { id: 'wild-intent-horizon', label: 'Intent Horizon', description: 'Turn declared outcomes and document signals into inspectable next moves', group: 'Review' },
+  { id: 'wild-causal-lightpath', label: 'Causal Lightpath', description: 'Trace real commands through source, rendering, collaboration, and durability', group: 'Review' },
+  { id: 'wild-consequence-lanes', label: 'Consequence Lanes', description: 'Stage a command and inspect every product plane it can touch', group: 'Review' },
+  { id: 'wild-context-half-life', label: 'Context Half-Life', description: 'Review claims as dates, versions, links, and assumptions age', group: 'Review' },
+  { id: 'wild-counterfactual-shelf', label: 'Counterfactual Shelf', description: 'Preserve, preview, branch, and safely apply alternate source patches', group: 'Review' },
 ];

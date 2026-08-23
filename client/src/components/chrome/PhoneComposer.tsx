@@ -77,6 +77,11 @@ const REVIEW_IDS = [
   'tools.asset-inspector',
   'tools.paste-intent',
   'insert.cross-document-block',
+  'wild.intent-horizon',
+  'wild.causal-lightpath',
+  'wild.consequence-lanes',
+  'wild.context-half-life',
+  'wild.counterfactual-shelf',
 ] as const;
 
 const MORE_IDS = [

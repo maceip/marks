@@ -31,9 +31,9 @@ import '../../styles/agent.css';
 
 const SUGGESTIONS = [
   'Check document health',
-  'Audit privacy and links',
-  'Show reader simulation',
-  'Open the task ledger',
+  'What should I do next?',
+  'Stage the consequences of sharing',
+  'Show aging context and alternatives',
 ] as const;
 
 type ProviderChoice = 'local' | 'openai';

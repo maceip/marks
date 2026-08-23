@@ -64,3 +64,16 @@ test('practical requests open the exact document-intelligence ribbon surface', (
     assert.equal(planAgentRequest(request, commands).steps[0]?.commandId, commandId, request);
   }
 });
+
+test('wild requests open the exact possibility-layer ribbon surface', () => {
+  const examples = new Map([
+    ['What should we do next? Show the intent horizon', 'wild.intent-horizon'],
+    ['Trace the causal lightpath', 'wild.causal-lightpath'],
+    ['Stage the command consequence lanes', 'wild.consequence-lanes'],
+    ['Review stale claims and context half-life', 'wild.context-half-life'],
+    ['Open the counterfactual shelf', 'wild.counterfactual-shelf'],
+  ]);
+  for (const [request, commandId] of examples) {
+    assert.equal(planAgentRequest(request, commands).steps[0]?.commandId, commandId, request);
+  }
+});
