@@ -6,6 +6,11 @@ import test from 'node:test';
 import { applyTextEdits, type TextEdit } from '../../text/change.ts';
 import { EsbtDocument, EsbtRuntime } from './esbt-document.ts';
 import { MARKS_DOCUMENT_CONFIG, marksSiteToEngine } from './index.ts';
+import {
+  captureSelectionPresence,
+  remoteSelections,
+} from '../presence-position.ts';
+import { encodeSelectionPresence } from '../protocol.ts';
 
 const wasmPath = join(dirname(fileURLToPath(import.meta.url)), '../../../public/esbt.wasm');
 
@@ -75,6 +80,92 @@ test('persisted anchors follow their identities through edits', async () => {
   document.delete(document.anchorToIndex(start), 2);
   assert.equal(document.anchorToIndex(start), document.anchorToIndex(end));
   document.destroy();
+});
+
+test('presence identities are deterministic across concurrent edits and offline merge', async () => {
+  const bytes = await readFile(wasmPath);
+  const runtime = await EsbtRuntime.fromBytes(bytes);
+  const left = await EsbtDocument.create({
+    runtime, siteId: marksSiteToEngine('31'), config: MARKS_DOCUMENT_CONFIG,
+  });
+  const right = await EsbtDocument.create({
+    runtime, siteId: marksSiteToEngine('32'), config: MARKS_DOCUMENT_CONFIG,
+  });
+  const seed = left.insert(0, 'abcdef')!;
+  right.applyUpdate(seed);
+
+  // Reversed selection direction survives independently of sorted decoration bounds.
+  const reversed = captureSelectionPresence(left, 5, 2, 1);
+  assert.equal(reversed.direction, 'backward');
+  assert.deepEqual(left.resolvePresencePosition(reversed), { anchor: 5, head: 2 });
+
+  // Concurrent insertion before and exactly at a caret uses explicit `before`
+  // affinity, giving a deterministic caret after both inserted runs.
+  const caret = captureSelectionPresence(left, 3, 3, 2);
+  const before = right.insert(1, 'B')!;
+  const exact = right.insert(4, 'X')!;
+  left.applyUpdate(before);
+  left.applyUpdate(exact);
+  assert.deepEqual(left.resolvePresencePosition(caret), { anchor: 5, head: 5 });
+
+  // Deleting through the identity collapses both endpoints safely.
+  const containing = captureSelectionPresence(left, 3, 5, 3);
+  const deletion = right.delete(2, 4)!;
+  left.applyUpdate(deletion);
+  const collapsed = left.resolvePresencePosition(containing);
+  assert.equal(collapsed.anchor, collapsed.head);
+
+  // Offline edits merge in either delivery order and resolve identically.
+  const offlineCaret = captureSelectionPresence(left, 1, 1, 4);
+  const leftOffline = left.insert(0, 'L')!;
+  const rightOffline = right.insert(right.length, 'R')!;
+  left.applyUpdate(rightOffline);
+  right.applyUpdate(leftOffline);
+  assert.equal(left.getText(), right.getText());
+  assert.deepEqual(left.resolvePresencePosition(offlineCaret), right.resolvePresencePosition(offlineCaret));
+
+  left.destroy();
+  right.destroy();
+});
+
+test('presence delivery order hides unavailable identities and retries after durable update', async () => {
+  const bytes = await readFile(wasmPath);
+  const runtime = await EsbtRuntime.fromBytes(bytes);
+  const source = await EsbtDocument.create({
+    runtime, siteId: marksSiteToEngine('41'), config: MARKS_DOCUMENT_CONFIG,
+  });
+  const receiver = await EsbtDocument.create({
+    runtime, siteId: marksSiteToEngine('42'), config: MARKS_DOCUMENT_CONFIG,
+  });
+  const update = source.insert(0, 'hello')!;
+  const presence = captureSelectionPresence(source, 3, 3, 1);
+  const states = { 'peer-cm-sel': encodeSelectionPresence(presence) };
+
+  // Presence-before-update cannot resolve and is hidden, not clamped.
+  assert.deepEqual(remoteSelections(states, 'self', receiver), []);
+  receiver.applyUpdate(update);
+  assert.deepEqual(remoteSelections(states, 'self', receiver).map(({ from, to }) => [from, to]), [[3, 3]]);
+
+  // Update-before-presence resolves immediately.
+  const second = await EsbtDocument.create({
+    runtime, siteId: marksSiteToEngine('43'), config: MARKS_DOCUMENT_CONFIG,
+  });
+  second.applyUpdate(update);
+  assert.equal(remoteSelections(states, 'self', second)[0]?.to, 3);
+
+  // Compact recovery retains live identity resolution without durable presence storage.
+  source.pruneHistoryThrough(source.version());
+  const compact = source.exportCompactSnapshot();
+  const recovered = await EsbtDocument.create({
+    runtime, siteId: marksSiteToEngine('44'), config: MARKS_DOCUMENT_CONFIG,
+  });
+  recovered.applySnapshot(compact);
+  assert.equal(remoteSelections(states, 'self', recovered)[0]?.to, 3);
+
+  source.destroy();
+  receiver.destroy();
+  second.destroy();
+  recovered.destroy();
 });
 
 test('Marks Wasm accepts a compact snapshot beyond the retired 4 MiB split', async () => {

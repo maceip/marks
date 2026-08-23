@@ -7,6 +7,14 @@ export type { EsbtExports } from './esbt-abi.generated.ts';
 
 const textDecoder = new TextDecoder();
 const MAX_ABI_BYTES = 64 * 1024 * 1024;
+const MAX_POSITION_ANCHOR_BYTES = 4_096;
+const PRESENCE_ANCHOR_MAGIC = 0x50;
+
+export type CaretAffinity = 'before' | 'after';
+export interface PresencePositionPair {
+  anchor: Uint8Array;
+  head: Uint8Array;
+}
 
 export const ESBT_WASM_URL = '/esbt.wasm';
 
@@ -280,6 +288,7 @@ export class EsbtDocument {
   readonly siteId: string;
   private readonly localUpdateListeners = new Set<(update: Uint8Array) => void>();
   private readonly changeListeners = new Set<(event: ChangeEvent) => void>();
+  private readonly replicaChangeListeners = new Set<() => void>();
   private transactionDepth = 0;
   private transactionOrigin: string | undefined;
   private destroyed = false;
@@ -323,6 +332,7 @@ export class EsbtDocument {
     this.destroyed = true;
     this.localUpdateListeners.clear();
     this.changeListeners.clear();
+    this.replicaChangeListeners.clear();
   }
 
   get length(): number {
@@ -443,7 +453,7 @@ export class EsbtDocument {
     return this.replaceRange(0, this.length, text, options);
   }
 
-  indexToAnchor(index: number, affinity: 'before' | 'after' = 'after'): Uint8Array {
+  indexToAnchor(index: number, affinity: CaretAffinity = 'after'): Uint8Array {
     this.assertLive();
     const encodedAffinity = affinity === 'before' ? 1 : 2;
     const result = this.runtime.check(
@@ -455,11 +465,41 @@ export class EsbtDocument {
 
   anchorToIndex(anchor: Uint8Array): number {
     this.assertLive();
+    if (anchor.byteLength === 0 || anchor.byteLength > MAX_POSITION_ANCHOR_BYTES) {
+      throw new EsbtError(4, 'esbt: invalid position anchor length');
+    }
     return this.runtime.withBytes(anchor, (pointer, length) =>
       this.runtime.check(
         this.runtime.exports.esbt_doc_resolve_anchor(this.handle, pointer, length),
       ),
     );
+  }
+
+  /** Capture the same ESBT identities used by durable text ranges, without metadata. */
+  capturePresencePosition(
+    anchor: number,
+    head: number,
+    anchorAffinity: CaretAffinity,
+    headAffinity: CaretAffinity,
+  ): PresencePositionPair {
+    const version = this.version();
+    return {
+      anchor: packPresenceAnchor(version, this.indexToAnchor(anchor, anchorAffinity)),
+      head: packPresenceAnchor(version, this.indexToAnchor(head, headAffinity)),
+    };
+  }
+
+  resolvePresencePosition(position: PresencePositionPair): { anchor: number; head: number } {
+    const anchor = unpackPresenceAnchor(position.anchor);
+    const head = unpackPresenceAnchor(position.head);
+    const current = this.version();
+    if (!versionDominates(current, anchor.version) || !versionDominates(current, head.version)) {
+      throw new EsbtError(25, 'esbt: presence anchor history is not available yet');
+    }
+    return {
+      anchor: this.anchorToIndex(anchor.identity),
+      head: this.anchorToIndex(head.identity),
+    };
   }
 
   applyUpdate(bytes: Uint8Array): ApplyReceipt {
@@ -474,6 +514,7 @@ export class EsbtDocument {
       throw new EsbtError(4, 'esbt: apply receipt disagrees with visible edits');
     }
     if (receipt.visibleEdits.length > 0) this.emitChange(receipt.visibleEdits, undefined, false);
+    this.emitReplicaChange();
     return receipt;
   }
 
@@ -491,6 +532,7 @@ export class EsbtDocument {
       throw new EsbtError(4, 'esbt: snapshot receipt disagrees with visible edits');
     }
     if (receipt.visibleEdits.length > 0) this.emitChange(receipt.visibleEdits, undefined, false);
+    this.emitReplicaChange();
     return receipt;
   }
 
@@ -583,6 +625,12 @@ export class EsbtDocument {
     return () => this.changeListeners.delete(listener);
   }
 
+  /** Fires for durable replica advances, including changes with no visible edit. */
+  onReplicaChange(listener: () => void): () => void {
+    this.replicaChangeListeners.add(listener);
+    return () => this.replicaChangeListeners.delete(listener);
+  }
+
   private consumeLocalResult(result: number, origin?: string): Uint8Array | null {
     if (result === 0) return null;
     const update = this.runtime.last();
@@ -601,6 +649,17 @@ export class EsbtDocument {
       }
     }
     if (edits.length > 0) this.emitChange(edits, origin, true);
+    this.emitReplicaChange();
+  }
+
+  private emitReplicaChange(): void {
+    for (const listener of [...this.replicaChangeListeners]) {
+      try {
+        listener();
+      } catch (error) {
+        surfaceListenerError(error);
+      }
+    }
   }
 
   private readVisibleEdits(): TextEdit[] {
@@ -689,6 +748,68 @@ function checkedIndex(value: number): number {
     throw new RangeError('esbt: index must be a nonnegative u32 integer');
   }
   return value >>> 0;
+}
+
+function packPresenceAnchor(version: Uint8Array, identity: Uint8Array): Uint8Array {
+  if (version.byteLength > 0xffff
+      || version.byteLength + identity.byteLength + 3 > MAX_POSITION_ANCHOR_BYTES) {
+    throw new EsbtError(7, 'esbt: presence anchor exceeds its limit');
+  }
+  const out = new Uint8Array(3 + version.byteLength + identity.byteLength);
+  out[0] = PRESENCE_ANCHOR_MAGIC;
+  new DataView(out.buffer).setUint16(1, version.byteLength, true);
+  out.set(version, 3);
+  out.set(identity, 3 + version.byteLength);
+  return out;
+}
+
+function unpackPresenceAnchor(bytes: Uint8Array): { version: Uint8Array; identity: Uint8Array } {
+  if (bytes.byteLength < 5 || bytes.byteLength > MAX_POSITION_ANCHOR_BYTES
+      || bytes[0] !== PRESENCE_ANCHOR_MAGIC) {
+    throw new EsbtError(4, 'esbt: invalid presence anchor');
+  }
+  const versionLength = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    .getUint16(1, true);
+  if (versionLength === 0 || 3 + versionLength >= bytes.byteLength) {
+    throw new EsbtError(4, 'esbt: invalid presence anchor envelope');
+  }
+  return {
+    version: bytes.subarray(3, 3 + versionLength),
+    identity: bytes.subarray(3 + versionLength),
+  };
+}
+
+function versionDominates(current: Uint8Array, required: Uint8Array): boolean {
+  const parse = (bytes: Uint8Array): Map<string, bigint> | null => {
+    if (bytes.byteLength < 4) return null;
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const count = view.getUint32(0, true);
+    let offset = 4;
+    const sites = new Map<string, bigint>();
+    for (let index = 0; index < count; index += 1) {
+      if (offset + 28 > bytes.byteLength) return null;
+      const site = [...bytes.subarray(offset, offset + 16)]
+        .map((byte) => byte.toString(16).padStart(2, '0')).join('');
+      offset += 16;
+      const contiguous = view.getBigUint64(offset, true);
+      offset += 8;
+      const sparse = view.getUint32(offset, true);
+      offset += 4;
+      if (offset + sparse * 8 > bytes.byteLength) return null;
+      // Presence is captured after locally-ready operations, so its causal
+      // requirement is the contiguous prefix. Skip validated sparse receipts.
+      offset += sparse * 8;
+      sites.set(site, contiguous);
+    }
+    return offset === bytes.byteLength ? sites : null;
+  };
+  const have = parse(current);
+  const need = parse(required);
+  if (!have || !need) throw new EsbtError(4, 'esbt: invalid presence version');
+  for (const [site, sequence] of need) {
+    if ((have.get(site) ?? 0n) < sequence) return false;
+  }
+  return true;
 }
 
 function encodeUtf16(text: string): Uint8Array {
