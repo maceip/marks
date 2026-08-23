@@ -97,6 +97,33 @@ fn asset_json(document_id: &DocumentId, asset: &AssetRow) -> serde_json::Value {
     })
 }
 
+pub async fn list(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let caller = caller(&app, &headers)?;
+    let document_id = DocumentId::new(id).map_err(|_| ApiError::not_found())?;
+    let assets = app.db.read(|conn| {
+        let row = load_live_document(conn, &document_id)?;
+        resolve_caller_role(conn, &caller, &row)?;
+        let mut statement = conn.prepare(
+            "SELECT id FROM document_assets
+             WHERE document_id = ?1 ORDER BY created_at ASC, id ASC",
+        )?;
+        let ids = statement
+            .query_map(params![document_id.as_str()], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        ids.into_iter()
+            .map(|asset_id| load_asset(conn, &document_id, &asset_id))
+            .collect::<ApiResult<Vec<_>>>()
+    })?;
+    Ok(Json(json!({
+        "assets": assets.iter().map(|asset| asset_json(&document_id, asset)).collect::<Vec<_>>(),
+    }))
+    .into_response())
+}
+
 pub async fn upload(
     State(app): State<Arc<App>>,
     Path(id): Path<String>,

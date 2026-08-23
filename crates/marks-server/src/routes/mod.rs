@@ -2,6 +2,7 @@ pub mod agent;
 pub mod assets;
 pub mod auth;
 pub mod documents;
+pub mod practical;
 pub mod review;
 
 use crate::app::App;

@@ -30,10 +30,10 @@ import { SurfaceMaterial } from '../ui/SurfaceMaterial';
 import '../../styles/agent.css';
 
 const SUGGESTIONS = [
-  'Show rendered view',
-  'Make this bold',
-  'Open comments',
-  'Pair my phone',
+  'Check document health',
+  'Audit privacy and links',
+  'Show reader simulation',
+  'Open the task ledger',
 ] as const;
 
 type ProviderChoice = 'local' | 'openai';
@@ -65,9 +65,11 @@ interface ActiveExecution {
 
 export interface AgentPillProps {
   documentId: string;
+  /** A command opened a companion inspector; keep the running receipt visible without covering it. */
+  linkedSurface?: string | null;
 }
 
-export function AgentPill({ documentId }: AgentPillProps) {
+export function AgentPill({ documentId, linkedSurface = null }: AgentPillProps) {
   const center = useCommandCenter();
   const [input, setInput] = useState('');
   const [expanded, setExpanded] = useState(false);
@@ -491,6 +493,10 @@ export function AgentPill({ documentId }: AgentPillProps) {
     setProvider('local');
   }, [center, documentId]);
 
+  useEffect(() => {
+    if (linkedSurface) setExpanded(false);
+  }, [linkedSurface]);
+
   useEffect(() => () => {
     // Leave the bounded server run recoverable across reload/focus-mode
     // remounts. Explicit Stop and document changes perform server cancellation.
@@ -499,7 +505,8 @@ export function AgentPill({ documentId }: AgentPillProps) {
 
   return (
     <aside
-      className={`agent-pill surface-material-host${expanded ? ' expanded' : ''}${busy || pending.length ? ' active' : ''}`}
+      className={`agent-pill surface-material-host${expanded ? ' expanded' : ''}${busy || pending.length ? ' active' : ''}${linkedSurface ? ' inspector-linked' : ''}`}
+      data-linked-surface={linkedSurface ?? undefined}
       aria-label="Marks command agent"
     >
       <SurfaceMaterial variant="floating" intensity={1.22} />

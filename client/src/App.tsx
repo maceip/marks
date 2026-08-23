@@ -39,6 +39,8 @@ import { LatencyTracker } from './lib/latency';
 import { UI_DATA_MODE, UI_MEDIA } from './lib/product';
 import { ScrollSync } from './lib/scroll-sync';
 import type { UiActionId } from './lib/ui-actions';
+import { practicalCapabilityForAction } from './lib/practical.ts';
+import type { PracticalCapability } from './intelligence/types.ts';
 import type { PreviewStats } from './markdown/preview';
 import type { Heading } from './markdown/types';
 
@@ -71,6 +73,9 @@ const Outline = lazy(() =>
 );
 const PerfHud = lazy(() =>
   import('./components/overlays/PerfHud').then((module) => ({ default: module.PerfHud })),
+);
+const PracticalInspector = lazy(() =>
+  import('./components/practical/PracticalInspector').then((module) => ({ default: module.PracticalInspector })),
 );
 
 /** How often the HUD and word counts refresh. Editing never waits on this. */
@@ -152,6 +157,7 @@ export function App() {
   );
   const [dialog, setDialog] = useState<AppDialog | null>(null);
   const [draftToolsOpen, setDraftToolsOpen] = useState(false);
+  const [practicalSurface, setPracticalSurface] = useState<PracticalCapability | null>(null);
   const [reviewSurface, setReviewSurface] = useState<ReviewSurface | null>(null);
   const [overlaysMounted, setOverlaysMounted] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -482,6 +488,14 @@ export function App() {
 
   const runAction = useCallback(
     (action: UiActionId) => {
+      const practical = practicalCapabilityForAction(action);
+      if (practical) {
+        if (!docId || !session) return;
+        setPracticalSurface(practical);
+        setReviewSurface(null);
+        setDraftToolsOpen(false);
+        return;
+      }
       switch (action) {
         case 'new':
           void createDocument();
@@ -563,6 +577,7 @@ export function App() {
               setHudOpen(false);
               setOutlineOpen(false);
               setReviewSurface(null);
+              setPracticalSurface(null);
             } else {
               const restore = focusRestoreRef.current;
               setSidebarOpen(restore?.sidebarOpen ?? !overlayNavigation);
@@ -710,6 +725,7 @@ export function App() {
     setReviewSurface(null);
     setOutlineOpen(false);
     setDraftToolsOpen(false);
+    setPracticalSurface(null);
   }, [route.name]);
 
   const commandEnvironment = useMemo<CommandEnvironment>(() => ({
@@ -764,7 +780,7 @@ export function App() {
   }), [getView, runAction, session, surface.toggleVoice, toggleTheme]);
 
   const appSurface = (
-    <div className={`app route-${route.name}${sidebarOpen && !focusMode && !posture.foldable ? ' with-sidebar' : ''}${focusMode ? ' focus-mode' : ''}${ribbonCollapsed ? ' ribbon-collapsed' : ''}`} data-shell={posture.shell} data-doc={docId ?? undefined}>
+    <div className={`app route-${route.name}${sidebarOpen && !focusMode && !posture.foldable ? ' with-sidebar' : ''}${focusMode ? ' focus-mode' : ''}${ribbonCollapsed ? ' ribbon-collapsed' : ''}${practicalSurface ? ' practical-open' : ''}`} data-shell={posture.shell} data-doc={docId ?? undefined}>
       {sidebarOpen && !focusMode && !posture.foldable && (
         <Sidebar
           documents={documents.documents}
@@ -978,9 +994,36 @@ export function App() {
         </Suspense>
       )}
 
+      {practicalSurface && route.name === 'document' && session && (
+        <Suspense fallback={null}>
+          <PracticalInspector
+            capability={practicalSurface}
+            documentId={route.id}
+            documentTitle={title}
+            session={session}
+            documents={documents.documents}
+            userName={user.name}
+            status={status}
+            peers={peers}
+            shell={posture.shell}
+            mode={mode}
+            selection={{ from: cursor.from, to: cursor.to }}
+            getView={getView}
+            onModeChange={setMode}
+            onSelect={setPracticalSurface}
+            onOpenDocument={(id) => {
+              setPracticalSurface(null);
+              openDocument(id);
+            }}
+            onClose={() => setPracticalSurface(null)}
+            onNotify={notify}
+          />
+        </Suspense>
+      )}
+
       {route.name === 'document' && session && !focusMode && (
         <Suspense fallback={null}>
-          <AgentPill documentId={route.id} />
+          <AgentPill documentId={route.id} linkedSurface={practicalSurface} />
         </Suspense>
       )}
 

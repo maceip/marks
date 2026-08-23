@@ -443,3 +443,42 @@ h4:hover .marks-anchor {
     font-size: 15.5px;
   }
 }
+.marks-document-block {
+  margin: 1.2em 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+  box-shadow: 0 10px 28px -24px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+.marks-document-block > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.marks-document-block > header a {
+  color: var(--accent);
+  font-size: .8em;
+  font-weight: 720;
+  text-decoration: none;
+}
+
+.marks-document-block > header span {
+  color: var(--text-faint);
+  font-size: .62em;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.marks-document-block-content { padding: 12px 14px; }
+.marks-document-block-content > :first-child { margin-top: 0; }
+.marks-document-block-content > :last-child { margin-bottom: 0; }
+.marks-document-block[data-marks-hydrated="error"],
+.marks-document-block[data-marks-hydrated="missing"] { border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }

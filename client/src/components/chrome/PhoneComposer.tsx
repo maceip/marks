@@ -28,7 +28,7 @@ interface PhoneComposerProps {
   temporary?: boolean;
 }
 
-type PhoneSheet = 'insert' | 'more' | null;
+type PhoneSheet = 'insert' | 'review' | 'more' | null;
 
 const FORMAT_IDS = [
   'format.bold',
@@ -50,6 +50,27 @@ const INSERT_IDS = [
   'insert.mermaid',
   'insert.code-block',
   'review.comments',
+] as const;
+
+const REVIEW_IDS = [
+  'review.document-health',
+  'review.render-diagnostics',
+  'review.accessibility',
+  'review.privacy-exposure',
+  'review.quality-contract',
+  'view.reader-simulation',
+  'review.link-intelligence',
+  'review.citation-ledger',
+  'review.task-decision-ledger',
+  'review.collaboration-console',
+  'document.recovery',
+  'review.version-compare',
+  'tools.front-matter',
+  'document.publish-profile',
+  'tools.structure',
+  'tools.asset-inspector',
+  'tools.paste-intent',
+  'insert.cross-document-block',
 ] as const;
 
 const MORE_IDS = [
@@ -82,11 +103,17 @@ export function PhoneComposer(props: PhoneComposerProps) {
   const contextual = [...available.values()].filter((command) => command.contextual);
   const format = FORMAT_IDS.flatMap((id) => available.get(id) ?? []);
   const insert = INSERT_IDS.flatMap((id) => available.get(id) ?? []);
+  const review = REVIEW_IDS.flatMap((id) => available.get(id) ?? []);
   const more = MORE_IDS.flatMap((id) => available.get(id) ?? []);
   const writing = center.environment.mode !== 'preview';
   const editMode = available.get('view.editor');
   const previewMode = available.get('view.preview');
   const tools = available.get('tools.draft');
+  const sheetTitle = sheet === 'insert'
+    ? 'Insert'
+    : sheet === 'review'
+      ? 'Document intelligence'
+      : 'Page';
 
   const invoke = (command: ProjectedCommand) => {
     if (!command.enabled) return;
@@ -121,16 +148,16 @@ export function PhoneComposer(props: PhoneComposerProps) {
       {sheet && (
         <div className="phone-sheet-layer">
           <button type="button" className="phone-sheet-scrim" aria-label="Close sheet" onClick={() => setSheet(null)} />
-          <div className="phone-sheet surface-material-host" role="dialog" aria-label={sheet === 'insert' ? 'Insert' : 'Page commands'}>
+          <div className="phone-sheet surface-material-host" role="dialog" aria-label={`${sheetTitle} commands`}>
             <SurfaceMaterial variant="floating" intensity={1.08} />
             <header>
-              <h2>{sheet === 'insert' ? 'Insert' : 'Page'}</h2>
+              <h2>{sheetTitle}</h2>
               <button type="button" className="icon-button" aria-label="Close" onClick={() => setSheet(null)}>
                 <Glyph name="clear" size={16} interactive={false} />
               </button>
             </header>
             <div className="phone-sheet-grid">
-              {(sheet === 'insert' ? insert : more).map((command) => (
+              {(sheet === 'insert' ? insert : sheet === 'review' ? review : more).map((command) => (
                 <PhoneSheetCommand key={command.id} command={command} onInvoke={invoke} />
               ))}
             </div>
@@ -150,7 +177,10 @@ export function PhoneComposer(props: PhoneComposerProps) {
           <Glyph name="plus" size={22} />
           <span>Insert</span>
         </button>
-        {tools && <PhoneNavCommand command={tools} label="Tools" active={false} onInvoke={invoke} />}
+        <button type="button" className={sheet === 'review' ? 'active' : undefined} onClick={() => setSheet((current) => current === 'review' ? null : 'review')}>
+          <Glyph name="gauge" size={22} />
+          <span>Review</span>
+        </button>
         <button type="button" className={sheet === 'more' ? 'active' : undefined} onClick={() => setSheet((current) => current === 'more' ? null : 'more')}>
           <Glyph name="more" size={22} />
           <span>More</span>

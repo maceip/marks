@@ -46,3 +46,21 @@ test('help and unmatched requests do not guess mutations', () => {
   assert.equal(planAgentRequest('What can you help me with?', commands).steps.length, 0);
   assert.equal(planAgentRequest('Contemplate the nature of authorship', commands).steps.length, 0);
 });
+
+test('practical requests open the exact document-intelligence ribbon surface', () => {
+  const examples = new Map([
+    ['Check document health', 'review.document-health'],
+    ['Audit accessibility and alt text', 'review.accessibility'],
+    ['Edit the front matter', 'tools.front-matter'],
+    ['Open the citation sources', 'review.citation-ledger'],
+    ['Show collaborators', 'review.collaboration-console'],
+    ['Is this saved? Show durability', 'document.recovery'],
+    ['Simulate phone reading', 'view.reader-simulation'],
+    ['Audit privacy and secrets', 'review.privacy-exposure'],
+    ['Open task decisions', 'review.task-decision-ledger'],
+    ['Set the audience quality contract', 'review.quality-contract'],
+  ]);
+  for (const [request, commandId] of examples) {
+    assert.equal(planAgentRequest(request, commands).steps[0]?.commandId, commandId, request);
+  }
+});

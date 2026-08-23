@@ -1,3 +1,5 @@
+import type { PracticalActionId } from './practical.ts';
+
 export type UiActionId =
   | 'new'
   | 'templates'
@@ -22,7 +24,8 @@ export type UiActionId =
   | 'pairing'
   | 'logout'
   | 'find'
-  | 'draft-tools';
+  | 'draft-tools'
+  | PracticalActionId;
 
 export interface UiActionDescriptor {
   id: UiActionId;
@@ -57,4 +60,22 @@ export const UI_ACTIONS: UiActionDescriptor[] = [
   { id: 'logout', label: 'Sign out', description: 'Revoke the session cookie when one exists', group: 'Workspace' },
   { id: 'find', label: 'Find in document', description: 'Open the editor search panel', group: 'Workspace', shortcut: '⌘F' },
   { id: 'draft-tools', label: 'Draft tools', description: 'Apply deterministic local Markdown transformations', group: 'Workspace' },
+  { id: 'practical-health', label: 'Document health', description: 'Prioritize issues across the document', group: 'Review' },
+  { id: 'practical-render', label: 'Render diagnostics', description: 'Inspect compiled-output problems', group: 'Review' },
+  { id: 'practical-accessibility', label: 'Accessibility', description: 'Check semantic reading quality', group: 'Review' },
+  { id: 'practical-schema', label: 'Front matter & schema', description: 'Edit portable document metadata', group: 'Document' },
+  { id: 'practical-publish', label: 'Publish profiles', description: 'Configure web, print, README, or slides', group: 'Document' },
+  { id: 'practical-links', label: 'Link intelligence', description: 'Resolve internal and inspect external links', group: 'Review' },
+  { id: 'practical-citations', label: 'Citation ledger', description: 'Reconcile citations and sources', group: 'Review' },
+  { id: 'practical-structure', label: 'Structural refactoring', description: 'Move, rename, or extract sections', group: 'Document' },
+  { id: 'practical-collaboration', label: 'Collaboration console', description: 'Inspect peers, roles, and savedness', group: 'Review' },
+  { id: 'practical-recovery', label: 'Durability & recovery', description: 'Create and verify recovery checkpoints', group: 'Document' },
+  { id: 'practical-versions', label: 'Versions & branches', description: 'Compare and branch durable snapshots', group: 'Review' },
+  { id: 'practical-assets', label: 'Asset inspector', description: 'Audit image origins, reuse, and alt text', group: 'Review' },
+  { id: 'practical-reader', label: 'Reader simulation', description: 'Preview reading pace and layouts', group: 'Review' },
+  { id: 'practical-privacy', label: 'Privacy & exposure', description: 'Find sensitive values before sharing', group: 'Review' },
+  { id: 'practical-ledger', label: 'Task & decision ledger', description: 'Collect work and decisions from Markdown', group: 'Review' },
+  { id: 'practical-paste', label: 'Paste intent & provenance', description: 'Control how clipboard material lands', group: 'Document' },
+  { id: 'practical-blocks', label: 'Cross-document blocks', description: 'Reference another document section', group: 'Document' },
+  { id: 'practical-quality', label: 'Audience & quality contract', description: 'Keep readability aligned to an audience', group: 'Review' },
 ];

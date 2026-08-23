@@ -100,6 +100,10 @@ pub fn router(app: Arc<App>) -> Router {
     let agent_tool_result = post(routes::agent::tool_result).layer(DefaultBodyLimit::max(
         crate::agent::protocol::MAX_AGENT_BODY_BYTES,
     ));
+    let practical_link_check = post(routes::practical::check_links)
+        .layer(DefaultBodyLimit::max(96 * 1024));
+    let practical_citation_lookup = post(routes::practical::citation_lookup)
+        .layer(DefaultBodyLimit::max(4 * 1024));
     let api = Router::new()
         // Identity: docs/AUTHN-AUTHZ-PROTOCOL.md §10.
         .route("/v1/auth/scratch", post(routes::auth::scratch_create))
@@ -174,7 +178,18 @@ pub fn router(app: Arc<App>) -> Router {
             "/v1/documents/{id}/export-bundle",
             get(routes::assets::export_bundle),
         )
-        .route("/v1/documents/{id}/assets", asset_upload)
+        .route(
+            "/v1/documents/{id}/assets",
+            get(routes::assets::list).merge(asset_upload),
+        )
+        .route(
+            "/v1/documents/{id}/link-checks",
+            practical_link_check,
+        )
+        .route(
+            "/v1/documents/{id}/citation-lookup",
+            practical_citation_lookup,
+        )
         .route("/a/{document}/{asset}", get(routes::assets::get))
         .route(
             "/v1/documents/{id}/snapshot",

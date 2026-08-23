@@ -22,6 +22,10 @@ const COMPOSE_IDS = [
   'insert.picture-file',
   'insert.table',
   'tools.draft',
+  'tools.front-matter',
+  'tools.structure',
+  'tools.paste-intent',
+  'insert.cross-document-block',
 ] as const;
 
 const INSPECT_IDS = [
@@ -31,6 +35,13 @@ const INSPECT_IDS = [
   'view.outline',
   'review.comments',
   'review.history',
+  'review.document-health',
+  'review.accessibility',
+  'review.privacy-exposure',
+  'review.quality-contract',
+  'view.reader-simulation',
+  'review.link-intelligence',
+  'review.task-decision-ledger',
   'document.share',
   'document.export-markdown',
   'document.print',

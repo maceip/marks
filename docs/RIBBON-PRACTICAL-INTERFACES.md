@@ -95,3 +95,81 @@ This slice does not alter ESBT, CRDT operations or snapshots, WebSocket frames,
 room tickets, document ACL roles, collaboration presence, asset storage,
 backups, or static-artifact verification. Later practical features must append
 their own rationale here before changing any of those protected surfaces.
+
+## Document-intelligence lookup exceptions
+
+Three practical inspectors need data that cannot be derived from the open
+Markdown alone. They add the following document-authorized routes without
+changing ESBT, collaboration frames, document roles, or stored Markdown:
+
+| Method | Route | Capability and boundary |
+| --- | --- | --- |
+| `GET` | `/v1/documents/{id}/assets` | Asset Inspector lists bounded metadata for assets already attached to a readable live document. It returns no blob bytes or content hashes. |
+| `POST` | `/v1/documents/{id}/link-checks` | Link Intelligence explicitly checks at most 32 user-selected HTTP(S) destinations. It never receives document source. |
+| `POST` | `/v1/documents/{id}/citation-lookup` | Citation Ledger sends one syntactically validated DOI to the fixed Crossref API and returns bounded bibliographic fields. |
+
+Both network lookups require existing document read authority. Principal
+requests additionally require exact origin and the existing session CSRF
+proof; scratch requests remain protected by their explicit authorization
+header and CORS preflight. The shared lookup budget is 30 requests per minute
+per principal or scratch workspace.
+
+The link checker does not provide a general server fetch primitive. It accepts
+only HTTP(S), rejects credentials, resolves every hop itself, pins the chosen
+public address into a no-proxy/no-redirect client, rejects private, loopback,
+link-local, carrier-grade NAT, benchmark, documentation, multicast, and
+unspecified IPv4/IPv6 space, follows at most three revalidated redirects, and
+never reads a response body. DOI lookup has a fixed host, no redirects or
+ambient proxy, a 12-second deadline, and a 1 MiB streamed-response ceiling.
+
+Cross-document blocks use the existing ACL-filtered document list and existing
+authorized Markdown export route. The renderer shows one indistinguishable
+unavailable state for missing and unreadable targets, withholds circular
+self-references, and resolves readable blocks again during explicit publish
+export. No dependency or document content is copied into server metadata.
+
+## Complete practical capability map
+
+The client implementation is deliberately one intelligence system rather than
+eighteen unrelated dialogs. A lazy worker receives the current canonical
+Markdown and a monotonically increasing content revision, analyzes at most 8
+MiB, and returns UTF-16 source ranges that line up exactly with CodeMirror and
+ESBT. The UI accepts a result only for the latest revision. Every automatic fix
+also carries its expected source text and fails closed if that text has moved.
+
+| Ribbon capability | Production behavior and durable representation |
+| --- | --- |
+| Document Health | Prioritizes concrete errors, warnings, and suggestions from the exact worker revision; source-backed findings reveal or apply guarded fixes. |
+| Render/Compile Diagnostics | Detects unclosed fences/math and broken or duplicate reference definitions before compiled output silently drifts. |
+| Accessibility | Audits heading order, image alternatives, generic link labels, and table headers with exact source navigation. |
+| Front Matter/Document Schema | Parses YAML with duplicate-key and alias limits; known fields round-trip through the YAML document tree while comments and unknown keys survive. |
+| Publish Profiles | Persists web, print, README, or slide intent in Markdown front matter and downloads a sanitized, self-contained artifact from the current revision. |
+| Link Intelligence | Resolves anchors locally and runs bounded external checks only after an explicit click through the protected interface above. |
+| Citation/Source Ledger | Reconciles footnotes, Pandoc keys, and local bibliography records; DOI lookup is explicit and inserts a Markdown-native anchored footnote. |
+| Structural Refactoring | Renames, promotes, demotes, moves, or extracts a complete heading subtree; extraction first creates a named version when authority permits. |
+| Collaboration Console | Presents the live role, peers, connection, pending operations, journal state, snapshot size, history floor, and network receipt from the existing session. |
+| Durability/Recovery | Waits for the real durability receipt before a named checkpoint and always offers a local emergency Markdown download. |
+| Version Branching/Comparison | Loads durable Markdown versions, performs a bounded line comparison, and branches into a new document without overwriting either input. |
+| Asset Inspector | Reconciles source image references with authorized stored-asset metadata and identifies missing alternatives, external dependencies, and unreferenced blobs. |
+| Reader Simulation | Computes reading/speaking pace and renders bounded article, phone, print, and heading-led slide simulations without changing source. |
+| Privacy/Exposure | Locally identifies likely credentials, keys, email addresses, and IP addresses, supports stale-safe redaction, and explains each outbound boundary. |
+| Task/Decision Ledger | Projects Markdown task items and explicit decisions into an actionable ledger; toggles and additions edit the canonical Markdown rather than a shadow database. |
+| Paste Intent/Provenance | Reads the clipboard only after a click and inserts preserved, plain, quoted, or collision-safe fenced Markdown with an optional portable provenance comment. |
+| Cross-document Blocks | Inserts `![[document-id#heading|label]]`, hydrates only through existing read authority, and visibly withholds missing, unreadable, or circular content. |
+| Audience/Quality Contract | Persists audience, target grade, and sentence length in front matter, then compares current local readability metrics to that explicit contract. |
+
+All eighteen capabilities are registry commands, so desktop, phone, unfolded
+foldable, palette, local agent, hosted agent, and the in-page command bridge use
+the same availability, authority, consequence, visual-focus, and receipt path.
+Clipboard access remains intentionally unavailable to remote agents.
+
+## Verification boundaries
+
+Unit coverage owns source ranges, stale fixes, YAML preservation, structural
+operations, DOI normalization, cross-document parsing, and the complete action
+map. Rust integration coverage owns real cookie/CSRF/ACL behavior, asset
+metadata disclosure, input limits, and refusal of private or credentialed link
+destinations. The browser gate owns responsive inspector placement and the
+human/agent command path. It must not characterize a successful build or a
+mock provider as proof of an external OpenAI, Crossref, or arbitrary public-link
+transaction; those are separate opt-in live checks.

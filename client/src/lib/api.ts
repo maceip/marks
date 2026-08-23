@@ -1,4 +1,5 @@
 import { applyServiceCallerHeaders, ensureServiceCaller } from '../auth/caller';
+import { getCachedSession } from '../auth/session-cache.ts';
 import { ServiceError } from './service-errors';
 
 export interface DocumentMeta {
@@ -65,7 +66,7 @@ export interface DocumentAssetDto {
   bytes: number;
 }
 
-async function authenticatedResponse(path: string, init?: RequestInit): Promise<Response> {
+export async function authenticatedResponse(path: string, init?: RequestInit): Promise<Response> {
   let caller = await ensureServiceCaller();
   const perform = () => {
     const headers = new Headers(init?.headers);
@@ -79,6 +80,28 @@ async function authenticatedResponse(path: string, init?: RequestInit): Promise<
   }
   if (!response.ok) throw new ServiceError(response.status);
   return response;
+}
+
+async function csrfRequest<T>(path: string, body: unknown): Promise<T> {
+  let caller = await ensureServiceCaller();
+  if (caller.kind === 'session' && !getCachedSession()) {
+    caller = await ensureServiceCaller({ forceProbe: true });
+  }
+  const headers = new Headers({ 'Content-Type': 'application/json' });
+  applyServiceCallerHeaders(headers, caller);
+  if (caller.kind === 'session') {
+    const session = getCachedSession();
+    if (!session) throw new ServiceError(401);
+    headers.set('X-Marks-CSRF', session.csrf);
+  }
+  const response = await fetch(path, {
+    method: 'POST',
+    body: JSON.stringify(body),
+    headers,
+    credentials: 'same-origin',
+  });
+  if (!response.ok) throw new ServiceError(response.status);
+  return (await response.json()) as T;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -165,6 +188,50 @@ export async function downloadDocumentBundle(id: string): Promise<Blob> {
     { headers: { Accept: 'application/zip' } },
   );
   return response.blob();
+}
+
+export async function downloadDocumentMarkdown(id: string): Promise<string> {
+  const response = await authenticatedResponse(
+    `/v1/documents/${encodeURIComponent(id)}/export`,
+    { headers: { Accept: 'text/markdown' } },
+  );
+  return response.text();
+}
+
+export function listDocumentAssets(id: string): Promise<{ assets: DocumentAssetDto[] }> {
+  return request(`/v1/documents/${encodeURIComponent(id)}/assets`);
+}
+
+export interface ExternalLinkCheckDto {
+  url: string;
+  status: 'reachable' | 'redirected' | 'missing' | 'blocked' | 'unavailable';
+  httpStatus: number | null;
+  finalUrl: string | null;
+  checkedAtMs: number;
+}
+
+export function checkDocumentLinks(
+  id: string,
+  urls: string[],
+): Promise<{ checks: ExternalLinkCheckDto[] }> {
+  return csrfRequest(`/v1/documents/${encodeURIComponent(id)}/link-checks`, { urls });
+}
+
+export interface CitationLookupDto {
+  doi: string;
+  title: string;
+  authors: string[];
+  publisher: string;
+  published: string | null;
+  url: string;
+  citation: string;
+}
+
+export function lookupDocumentCitation(
+  id: string,
+  doi: string,
+): Promise<{ citation: CitationLookupDto }> {
+  return csrfRequest(`/v1/documents/${encodeURIComponent(id)}/citation-lookup`, { doi });
 }
 
 export function listDocumentShares(id: string): Promise<{ shares: DocumentShare[] }> {

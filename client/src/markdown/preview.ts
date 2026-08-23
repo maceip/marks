@@ -3,6 +3,7 @@ import MarkdownWorker from '../workers/markdown.worker?worker';
 import type { TextEdit } from '../text/change';
 import { hydrateLocalAssetImages, revokeLocalAssetImages } from '../data/assets';
 import { watchDiagrams } from './mermaid';
+import { hydrateCrossDocumentBlocks } from './cross-document.ts';
 import type { BlockPatch, Heading, RenderRequest, RenderResponse, RenderStats } from './types';
 
 /** First paint inserts this many blocks before yielding to the browser. */
@@ -26,7 +27,7 @@ export interface PreviewStats extends RenderStats {
 
 const SANITIZE_CONFIG = {
   USE_PROFILES: { html: true, svg: true, mathMl: true },
-  ADD_ATTR: ['target', 'rel', 'align', 'colspan', 'rowspan', 'checked', 'disabled', 'hidden', 'data-align', 'data-shape', 'data-fill', 'data-marks-local-asset'],
+  ADD_ATTR: ['target', 'rel', 'align', 'colspan', 'rowspan', 'checked', 'disabled', 'hidden', 'data-align', 'data-shape', 'data-fill', 'data-marks-local-asset', 'data-marks-document-block', 'data-marks-heading'],
 } satisfies Config;
 
 function sanitize(html: string): string {
@@ -211,11 +212,13 @@ export class PreviewRenderer {
         node.dataset.key = block.key;
         node.innerHTML = sanitize(block.html ?? '');
         void hydrateLocalAssetImages(node);
+        void hydrateCrossDocumentBlocks(node);
         touched += 1;
       } else if (block.html !== undefined) {
         revokeLocalAssetImages(node);
         node.innerHTML = sanitize(block.html);
         void hydrateLocalAssetImages(node);
+        void hydrateCrossDocumentBlocks(node);
         touched += 1;
       }
 

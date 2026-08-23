@@ -68,6 +68,12 @@ The session-only agent surface is `GET /v1/agent/capabilities`,
 `DELETE /v1/agent/runs/{id}`. Mutations use the existing exact-origin and CSRF
 guards; run creation also performs the existing document read-ACL check.
 
+Practical document intelligence adds three narrowly scoped, read-authorized
+surfaces: asset metadata listing, explicit public-link checking, and fixed-host
+DOI lookup. Their SSRF, CSRF, body, concurrency, timeout, and disclosure bounds
+are recorded in
+[`RIBBON-PRACTICAL-INTERFACES.md`](../../docs/RIBBON-PRACTICAL-INTERFACES.md).
+
 ## Rooms
 
 `GET /collab/esbt/{id}` upgrades only with the subprotocol offer
