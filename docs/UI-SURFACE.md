@@ -43,24 +43,7 @@ styles.
 
 ## Product posture
 
-Marks is a quiet writing surface with a powerful command layer. The visual
-model is **cold glass, hot core**:
-
-- Cool silver, white, and deep navy establish the workspace.
-- Electric blue identifies intent, selection, and primary action.
-- Green identifies revision, local completion, and healthy state.
-- Teal and amber are supporting semantic accents, not ambient decoration.
-- The folded Markdown page is the product mark. It is code-native and inline,
-  so neither the app nor marketing waits for an image or icon-font request.
-- Liquid glass belongs to persistent chrome: the ribbon, drawers, floating
-  inspectors, menus, dialogs, and marketing navigation.
-- The editor and preview remain opaque. Scrolling text must never continuously
-  repaint a full-screen backdrop filter.
-- The ribbon may be dense; the page itself must remain calm.
-- Raw request, storage, and protocol errors never belong in user-facing copy.
-
-The supplied folded-document icon and replacement editor screenshot are fuzzy
-directional references, not source code or pixel-exact specifications.
+Marks is a quiet writing surface with a powerful command layer. The normative visual language, semantic roles, materials, motion tiers, state requirements, and token-change rules live in [`DESIGN-SYSTEM.md`](DESIGN-SYSTEM.md) and its executable [`/design-system`](../client/src/design-system/DesignSystem.tsx) catalog. This surface contract defines ownership and integration only; it intentionally does not duplicate visual values.
 
 ## Surface ownership
 
@@ -69,6 +52,7 @@ directional references, not source code or pixel-exact specifications.
 | Workspace home | `/` | App shell, local catalog, and home CSS only | `App` + `pages/Home` |
 | Document | `/d/:id` | Session, CodeMirror, workspace, preview, and review overlays load on demand | `App` + `TopBar` + `components/workspace` |
 | Benchmark | `/bench` | Benchmark view, CSS, and worker load only on this route | `pages/Benchmark` |
+| Design system | `/design-system` | Internal catalog and CSS load only on direct navigation; never linked in production navigation | `design-system/DesignSystem` |
 | About / welcome | `/welcome/` → `/d/about-marks` | Tiny HTML bounce, then the real document editor showing the Markdown marketing page | `content/about.ts` + document chrome |
 
 The welcome URL exists so a public deployment can keep a stable marketing
@@ -218,18 +202,7 @@ horizontally scroll.
 
 ## Motion and material
 
-- Motion uses transform and opacity for response, deck changes, popovers,
-  drawers, dialogs, toasts, and view entrances.
-- Typical durations are 120–180ms for command response and 220–280ms for a
-  surface entering or leaving.
-- Layout itself is not continuously animated.
-- `prefers-reduced-motion` and the in-product reduced-motion preference collapse
-  animation and transition duration.
-- `prefers-reduced-transparency` and the reduced-glass preference replace blur
-  with opaque raised surfaces.
-- The only allowed continuous movement communicates live state: opening,
-  dictation, caret, or a bounded loading skeleton.
-- Ambient gradients and grids remain static paint layers.
+The design-system contract owns material recipes, rendering tiers, duration tokens, and reduced-preference alternatives. Product surfaces must consume those shared tokens and patterns rather than restating values here. See [`DESIGN-SYSTEM.md`](DESIGN-SYSTEM.md#token-change-policy) and the catalog’s [material](/design-system#materials) and [motion](/design-system#motion) sections.
 
 ## Runtime and loading budgets
 
