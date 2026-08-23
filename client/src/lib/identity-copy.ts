@@ -30,6 +30,22 @@ export const SCRATCH_HONEST_LINE =
 export const SCRATCH_LOCAL_LINE =
   'This build keeps the page in this browser. The phone QR is the pairing shape the service will fill. No invitation is sent.';
 
+/** Single-device keep: the phone-only visitor has nothing to scan with. */
+export const SELF_KEEP_PHONE_LINE =
+  'This workspace is temporary. Keep it on this phone: its key becomes the account key, and this phone approves any device you add later.';
+
+export const SELF_KEEP_DEVICE_LINE =
+  'No phone with you? Keep the workspace on this device only. Its key becomes the account key until you link another device.';
+
+export const SELF_KEEP_HONEST_LINE =
+  'One device means one key. Lose this device and its browser data before linking another, and the documents are unrecoverable.';
+
+export const SELF_KEEP_OTHER_DEVICE_LINE =
+  'Already keep documents on another device? Link instead — keeping here starts a separate workspace, and workspaces never merge on their own.';
+
+export const SELF_KEEP_LOCAL_LINE =
+  'This build keeps the page in this browser. The service turns this button into a real account key on this device.';
+
 export const SHARE_LOCAL_LINE =
   'Access is staged in the interface. Scratch cannot share. Owner cannot be granted.';
 

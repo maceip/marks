@@ -2,7 +2,7 @@
 
 **Status:** implementer contract for the browser against the live Rust server
 **Owner:** Marks
-**Last updated:** 2026-08-22
+**Last updated:** 2026-08-23
 **Server source of truth:** `crates/marks-server/src/app.rs` plus the handlers
 it routes to
 **Protocol source of truth:** [`AUTHN-AUTHZ-PROTOCOL.md`](AUTHN-AUTHZ-PROTOCOL.md)
@@ -218,6 +218,21 @@ The durable-upgrade line the UI already owns:
 - Response `204`
 - Bind once per tab after the key exists. Generating the key does not promote
   the workspace.
+
+#### `POST /v1/auth/scratch/{scratchId}/bootstrap`
+
+- Single-device keep: the visitor's only device promotes its own workspace.
+  There is no pairing, nothing to scan, and no finalize step.
+- Authority: scratch, and `{scratchId}` must match the header; the pending
+  device must already be bound
+- Body: `{ "bootstrap": { version, controllerId, scratchId, deviceId, devicePublicKeyHash, issuedAtMs, expiresAtMs }, "signature" }`
+- `bootstrap` bytes are `encodeSelfBootstrap` / `marks-self-bootstrap-v1`,
+  signed by the pending device key; the statement may live at most two minutes
+- Response `201` plus `Set-Cookie` for **this** tab's session, and the session
+  JSON from §6.1. The pending key is now a controller: this device approves
+  future pairings.
+- After `201`, clear scratch storage and treat the tab as a session caller
+- A `409` means another promotion won. Do not retry into a second account.
 
 #### `POST /v1/auth/pairings`
 
@@ -449,16 +464,22 @@ These are UI jobs. The server already implements the other side.
 2. **Honest scratch:** closing an unpromoted tab is unrecoverable. Say so.
 3. **Upgrade QR or four words:** bind pending device, create pairing, render
    `url` and `words`, poll finalize, then switch caller to session.
-4. **Return visit:** session probe, then silent device redeem, then scratch.
-5. **Share dialog:** local mode stays staged; service mode calls §6.7 and
+4. **Single-device keep:** on phone posture, lead with “Keep on this phone”
+   (`selfBootstrap`) because there is no second screen to scan; keep the
+   pairing QR one tap away. On larger postures the QR leads and the
+   single-device keep is the quiet fallback. Say plainly that one device
+   means one key, and that keeping here never merges with an account that
+   lives elsewhere.
+5. **Return visit:** session probe, then silent device redeem, then scratch.
+6. **Share dialog:** local mode stays staged; service mode calls §6.7 and
    does not claim success on `401`/`404`.
-6. **Logout / devices:** CSRF header from the session bootstrap.
-7. **Reconnect:** new ticket, same `siteId`, `?vv=` when the replica has one.
-8. **Role copy:** owner / editor / commenter / viewer as in the protocol
+7. **Logout / devices:** CSRF header from the session bootstrap.
+8. **Reconnect:** new ticket, same `siteId`, `?vv=` when the replica has one.
+9. **Role copy:** owner / editor / commenter / viewer as in the protocol
    matrix. Scratch is “temporary workspace,” never a named account.
-9. **Comments and history:** keep the local adapters until a review HTTP
-   service exists. There are no comment routes on `marks-server` today.
-10. **Errors:** map §3.4 to toasts; never dump `{ "error": … }` strings that
+10. **Comments and history:** keep the local adapters until a review HTTP
+    service exists. There are no comment routes on `marks-server` today.
+11. **Errors:** map §3.4 to toasts; never dump `{ "error": … }` strings that
     leak which record failed.
 
 Presentation surfaces for every item in this list exist on desktop, phone, and
@@ -491,6 +512,7 @@ Use this as the frontend checklist. Server boxes are closed unless noted.
 | Snapshot + ticket mint | Yes, both prefixes | Yes (`room-access.ts`) |
 | Pending device bind | Yes | Yes (`pending-device.ts`, first paint in service mode) |
 | QR pairing + finalize | Yes | Yes (`identity.ts`, Keep workspace); local mode does not mint |
+| Single-device keep (phone-only signup) | Yes (`/scratch/{id}/bootstrap`) | Yes (`selfBootstrap`, Keep workspace phone posture) |
 | Four-word pairing | Yes (`/lookup`) | Yes (Keep + `/link`) |
 | Silent device redeem | Yes | Yes (`device-session.ts` before scratch mint) |
 | Logout / device revoke + CSRF | Yes | Yes (Account / Sign out in service mode) |

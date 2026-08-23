@@ -3,6 +3,7 @@ export const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 
 const DEVICE_GRANT_DOMAIN = textEncoder.encode('marks-device-grant-v1\0');
 const CONTROLLER_BOOTSTRAP_DOMAIN = textEncoder.encode('marks-controller-bootstrap-v1\0');
+const SELF_BOOTSTRAP_DOMAIN = textEncoder.encode('marks-self-bootstrap-v1\0');
 const DEVICE_SESSION_DOMAIN = textEncoder.encode('marks-device-session-v1\0');
 
 export const DEVICE_CAPABILITY_DOCUMENTS = 1 << 0;
@@ -37,6 +38,16 @@ export interface ControllerBootstrap {
   scratchId: string;
   pendingDeviceId: string;
   pendingDevicePublicKeyHash: Uint8Array;
+  issuedAtMs: bigint;
+  expiresAtMs: bigint;
+}
+
+export interface SelfBootstrap {
+  version: 1;
+  controllerId: string;
+  scratchId: string;
+  deviceId: string;
+  devicePublicKeyHash: Uint8Array;
   issuedAtMs: bigint;
   expiresAtMs: bigint;
 }
@@ -165,6 +176,24 @@ export function encodeControllerBootstrap(bootstrap: ControllerBootstrap): Uint8
   writer.text(bootstrap.scratchId);
   writer.text(bootstrap.pendingDeviceId);
   writer.bytes(bootstrap.pendingDevicePublicKeyHash);
+  writer.u64(bootstrap.issuedAtMs);
+  writer.u64(bootstrap.expiresAtMs);
+  return writer.finish();
+}
+
+export function encodeSelfBootstrap(bootstrap: SelfBootstrap): Uint8Array {
+  assertId(bootstrap.controllerId, 'controllerId');
+  assertId(bootstrap.scratchId, 'scratchId');
+  assertId(bootstrap.deviceId, 'deviceId');
+  assertBytes(bootstrap.devicePublicKeyHash, 32, 'devicePublicKeyHash');
+
+  const writer = new CanonicalWriter();
+  writer.bytesWithoutLength(SELF_BOOTSTRAP_DOMAIN);
+  writer.u8(bootstrap.version);
+  writer.text(bootstrap.controllerId);
+  writer.text(bootstrap.scratchId);
+  writer.text(bootstrap.deviceId);
+  writer.bytes(bootstrap.devicePublicKeyHash);
   writer.u64(bootstrap.issuedAtMs);
   writer.u64(bootstrap.expiresAtMs);
   return writer.finish();

@@ -154,6 +154,9 @@
 .keep-stage { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 16px; align-items: center; padding: 12px; border: 1px solid var(--glass-border); border-radius: 16px; background: var(--surface-sunken); }
 .keep-stage strong { display: block; font-size: 13px; }
 .keep-stage small { display: block; margin-top: 4px; color: var(--text-muted); font-size: 11px; line-height: 1.5; }
+.keep-solo { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--glass-border); border-radius: 16px; background: var(--surface-sunken); }
+.keep-solo small { color: var(--text-muted); font-size: 11px; line-height: 1.5; }
+.keep-solo .button { justify-self: start; }
 .qr-mark { width: 112px; height: 112px; border-radius: 12px; background: var(--surface-raised); box-shadow: var(--shadow-sm); }
 .qr-mark-page { fill: var(--surface-raised); }
 .qr-mark-modules { fill: var(--brand-navy); }

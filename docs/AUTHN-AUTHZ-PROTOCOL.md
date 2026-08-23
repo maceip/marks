@@ -3,7 +3,7 @@
 **Status:** normative Marks protocol; validators in `crates/marks-auth`, HTTP/database/room integration in `crates/marks-server`; real-browser runtime gates still open
 **Owner:** Marks
 **Protocol version:** `marks-auth-v1`
-**Last updated:** 2026-08-22
+**Last updated:** 2026-08-23
 
 This document defines the authentication and authorization implementation
 owned by Marks. [`V1-SCOPE.md`](V1-SCOPE.md) remains the overall editor/server
@@ -41,19 +41,25 @@ starts as a temporary scratch workspace. Its durable-upgrade message is:
 > This workspace is temporary. Scan with your phone to keep it and use it on
 > other devices.
 
-The two v1 promotion rails are:
+The three v1 promotion rails are:
 
 1. **Phone controller:** scan a high-entropy QR link. The phone becomes, or uses,
    a controller for a durable random Marks principal. Each linked browser keeps
    its own silent device key.
-2. **Verified email token:** on supported Chrome deployments, redeem fresh,
+2. **Single-device keep:** when the visitor's only device is the one holding
+   the scratch workspace — a phone at the landing page with no laptop in
+   reach, or a laptop with no phone — there is nothing to scan and nothing to
+   link to. The pending device key already bound to that scratch signs its own
+   promotion and becomes the first controller. The pairing UI stays one tap
+   away for people who do have a second device.
+3. **Verified email token:** on supported Chrome deployments, redeem fresh,
    key-bound Email Verification Token evidence. The raw verified email is
    immediately reduced to a server-keyed locator. This rail is experimental and
    feature-flagged.
 
-Both rails promote the same scratch workspace into the same principal model.
-They are not separate account types. A user may attach both to one principal
-after authenticating; Marks never automatically merges two existing
+All rails promote the same scratch workspace into the same principal model.
+They are not separate account types. A user may attach several to one
+principal after authenticating; Marks never automatically merges two existing
 principals.
 
 Normal return visits use a rotating HTTP-only session cookie. If that cookie is
@@ -111,6 +117,11 @@ SCRATCH
   |     phone has controller             | first Marks use on phone
   |     sign device grant                | create controller + self-proof
   |                                      |
+  +-- only device keeps itself ----------+
+  |                                      |
+  |     pending key signs                |
+  |     marks-self-bootstrap-v1          |
+  |                                      |
   +-------------------+------------------+
                       |
                       v
@@ -139,6 +150,9 @@ move the same scratch documents twice.
 
 - A phone controller always selects its existing principal.
 - A first-phone bootstrap creates a new random principal.
+- A single-device self-bootstrap creates a new random principal. It never
+  attaches to an account that lives elsewhere; linking to an existing
+  principal is always a pairing approved by that principal's controller.
 - An EVT locator already attached to a principal selects that principal.
 - A previously unseen EVT locator creates a new random principal.
 - A scratch already claimed by a different principal causes a conflict.
@@ -284,6 +298,43 @@ grant. Unknown capability bits fail decoding. The server verifies the signature
 against the stored controller key and requires every signed field to match the
 pending pairing exactly.
 
+### Single-device bootstrap
+
+A visitor whose only device holds the scratch workspace cannot scan its own
+screen. The pending device key bound in §4 signs a
+`marks-self-bootstrap-v1` statement containing:
+
+- protocol version;
+- a fresh random controller ID;
+- the scratch ID;
+- the pending device ID and public-key digest;
+- issue and expiry times, at most two minutes apart (the window a QR pairing
+  would have had).
+
+The request is authenticated by the live scratch capability
+(`POST /v1/auth/scratch/{scratchId}/bootstrap`). The server validates the
+statement bindings against the stored pending-device row, the time bounds,
+and the P1363 signature against the stored pending public key, then — inside
+one serializable transaction — generates the random principal, promotes the
+pending key as controller plus controller-capable device, moves the scratch
+documents exactly as in the pairing transaction, sets `scratch.claimed_by`,
+and issues that device's first rotating session directly. There is no pairing
+row to consume and no finalize step; the `claimed_by IS NULL` scratch update
+is the one-use anchor that serializes a race against a concurrent pairing
+promotion or duplicate submission.
+
+This rail grants no authority the pairing rail does not: a caller holding the
+scratch capability and the pending private key could already mint a pairing
+and consume it itself. It removes the second-device ceremony, not a check.
+Two consequences are deliberate:
+
+- The single key is the whole account. The UI must state plainly that losing
+  the device and its origin storage before linking another device is
+  unrecoverable, exactly like an unpromoted scratch tab.
+- When a second device appears later, it links through the ordinary QR
+  pairing: the second device mints the pairing from its own scratch, and this
+  device — now a controller — signs the `marks-device-grant-v1` approval.
+
 ### Canonical signature encoding
 
 Signed v1 messages use:
@@ -296,8 +347,9 @@ Signed v1 messages use:
 - a 64-byte IEEE P1363 `r || s` signature on the wire.
 
 The Rust functions `ControllerBootstrap::signing_bytes`,
-`DeviceGrant::signing_bytes`, and `DeviceSessionProof::signing_bytes` are the
-authoritative encoders. Browser golden fixtures must match them byte-for-byte.
+`SelfBootstrap::signing_bytes`, `DeviceGrant::signing_bytes`, and
+`DeviceSessionProof::signing_bytes` are the authoritative encoders. Browser
+golden fixtures must match them byte-for-byte.
 
 ### Atomic approval
 
@@ -600,6 +652,7 @@ reconstruct credentials.
 | --- | --- | --- |
 | `POST /v1/auth/scratch` | none, rate limited | Create temporary workspace capability |
 | `PUT /v1/auth/scratch/{id}/device` | scratch | Bind pending browser key |
+| `POST /v1/auth/scratch/{id}/bootstrap` | scratch + pending-key self-proof | Promote the only device to first controller |
 | `POST /v1/auth/pairings` | scratch | Create high-entropy QR pairing plus four-word code |
 | `POST /v1/auth/pairings/lookup` | four-word code | Camera-less inspect of the live pairing |
 | `POST /v1/auth/pairings/{id}/inspect` | pairing secret or words | Resolve safe phone confirmation details |
@@ -624,9 +677,10 @@ rate limits. Internal typed errors remain specific for tests and telemetry.
 ## 11. Threat model and non-claims
 
 V1 defends against guessed document IDs, stolen database hashes, replayed
-pairings/challenges/tickets, cross-document ticket reuse, device substitution,
-forged or stale controller grants, viewer/commenter update injection, CSRF,
-accidental credential logging, and revocation that only affects new sockets.
+pairings/self-bootstrap statements/challenges/tickets, cross-document ticket
+reuse, device substitution, forged or stale controller grants and
+self-bootstrap signatures, viewer/commenter update injection, CSRF, accidental
+credential logging, and revocation that only affects new sockets.
 
 V1 does not claim to defeat:
 
@@ -658,6 +712,7 @@ pure, database-independent validators and typed authenticated results:
 - bounded opaque IDs and known capability bits;
 - scratch and claimed-scratch authority;
 - first-controller bootstrap and existing-controller grants;
+- single-device self-bootstrap by the scratch's own pending key;
 - silent device-session challenges;
 - session secret/device/principal validation;
 - trusted EVT evidence binding and keyed locator derivation;
@@ -692,21 +747,25 @@ The identity gate is complete only when integration tests prove:
 2. closing an unpromoted scratch tab is honestly presented as unrecoverable;
 3. first-phone QR promotion preserves the scratch documents and creates one
    principal under duplicate/reordered requests;
-4. a second device linked by the same phone opens the first device's files;
-5. two unrelated scratch devices remain unrelated until explicit promotion;
-6. copied pairing secrets, grants, challenges, signatures, EVT presentations,
-   and room tickets fail after first use or expiry;
-7. controller/device/session revocation prevents silent relogin and closes live
+4. a single-device self-bootstrap on the only device preserves the scratch
+   documents, creates one principal, and the promoted key later approves a
+   second device through an ordinary pairing;
+5. a second device linked by the same phone opens the first device's files;
+6. two unrelated scratch devices remain unrelated until explicit promotion;
+7. copied pairing secrets, self-bootstrap statements, grants, challenges,
+   signatures, EVT presentations, and room tickets fail after first use or
+   expiry;
+8. controller/device/session revocation prevents silent relogin and closes live
    sockets;
-8. EVT absence or adapter failure falls back to phone without sending mail or
+9. EVT absence or adapter failure falls back to phone without sending mail or
    creating a second principal;
-9. raw email/token data is absent from database, logs, traces, and analytics;
-10. viewer and commenter `MSG_UPDATE` attempts never reach ESBT decoding or the
+10. raw email/token data is absent from database, logs, traces, and analytics;
+11. viewer and commenter `MSG_UPDATE` attempts never reach ESBT decoding or the
     journal;
-11. claiming scratch closes its scratch sockets and reconnects through the
+12. claiming scratch closes its scratch sockets and reconnects through the
     promoted principal without losing committed text;
-12. role downgrade takes effect on an already-open socket;
-13. ESBT snapshots and updates contain no Marks principal, session, email, role,
+13. role downgrade takes effect on an already-open socket;
+14. ESBT snapshots and updates contain no Marks principal, session, email, role,
     controller, device, or ticket data.
 
 Until those runtime gates pass against the Rust server and real browsers, the

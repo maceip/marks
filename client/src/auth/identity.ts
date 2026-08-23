@@ -5,15 +5,17 @@ import {
   saveDeviceKey,
   signControllerBootstrap,
   signDeviceGrant,
+  signSelfBootstrap,
 } from './device-key.ts';
 import { markController, markDeviceEnrolled } from './active-device.ts';
+import { bindPendingDevice } from './pending-device.ts';
 import {
   DEVICE_CAPABILITIES_MEMBER,
   decodeBase64Url,
   encodeBase64Url,
   pairingFragment,
 } from './protocol.ts';
-import { createOpaqueId } from './scratch.ts';
+import { clearScratchCredential, createOpaqueId } from './scratch.ts';
 import { cacheSession, clearCachedSession, getCachedSession, sessionFromUnknown, type SessionInfo } from './session-cache.ts';
 import { normalizePairingWords } from './words.ts';
 
@@ -197,6 +199,59 @@ export async function bootstrapPairing(
   cacheSession(session);
   setActiveCaller({ kind: 'session' });
   await markController(controllerId, deviceId);
+  return session;
+}
+
+/**
+ * Single-device promotion for a visitor with no second device to scan. The
+ * pending key already bound to this live scratch signs
+ * `marks-self-bootstrap-v1`; the server promotes it to controller, claims the
+ * scratch documents, and sets this tab's session cookie directly. There is
+ * no pairing and no finalize step.
+ */
+export async function selfBootstrap(): Promise<SessionInfo> {
+  const caller = await ensureServiceCaller();
+  if (caller.kind !== 'scratch') throw new Error('keep requires a temporary workspace');
+  const key = await bindPendingDevice();
+  const controllerId = createOpaqueId('controller');
+  const now = Date.now();
+  const expiresAtMs = now + 90_000;
+  const devicePublicKeyHash = await publicKeyHash(key.publicKeyRaw);
+  const signature = await signSelfBootstrap(key.privateKey, {
+    version: 1,
+    controllerId,
+    scratchId: caller.credential.scratchId,
+    deviceId: key.deviceId,
+    devicePublicKeyHash,
+    issuedAtMs: BigInt(now),
+    expiresAtMs: BigInt(expiresAtMs),
+  });
+  const headers = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' });
+  applyServiceCallerHeaders(headers, caller);
+  const response = await fetch(`/v1/auth/scratch/${caller.credential.scratchId}/bootstrap`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers,
+    body: JSON.stringify({
+      bootstrap: {
+        version: 1,
+        controllerId,
+        scratchId: caller.credential.scratchId,
+        deviceId: key.deviceId,
+        devicePublicKeyHash: encodeBase64Url(devicePublicKeyHash),
+        issuedAtMs: now,
+        expiresAtMs,
+      },
+      signature: encodeBase64Url(signature),
+    }),
+  });
+  if (!response.ok) throw new Error(`self bootstrap failed: ${response.status}`);
+  const session = sessionFromUnknown(await response.json());
+  if (!session) throw new Error('self bootstrap returned no session');
+  cacheSession(session);
+  setActiveCaller({ kind: 'session' });
+  clearScratchCredential(sessionStorage);
+  await markController(controllerId, key.deviceId);
   return session;
 }
 

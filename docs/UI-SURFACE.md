@@ -78,9 +78,13 @@ and the same Markdown that describes the product, accounts, and machinery.
 Identity chrome is presentation-complete in local mode on desktop, phone, and
 fold: Temporary chip, Keep workspace with an on-brand QR of `/link`, phone
 confirmation, Account devices/controllers/sessions, Share principal and link
-grants, mapped service-error toasts, and reconnect copy. In service mode the
-same surfaces mint a real pairing, show the QR and four-word code, finalize
-the desktop tab, and redeem a silent device session. The HTTP contract lives
+grants, mapped service-error toasts, and reconnect copy. Keep workspace is
+posture-aware: on the phone shell — where there is no second screen to scan —
+“Keep on this phone” leads and the pairing QR sits one tap behind it; on
+larger shells the QR leads and “Keep on this device only” is the quiet
+fallback. In service mode the same surfaces mint a real pairing, show the QR
+and four-word code, finalize the desktop tab, run the single-device
+self-bootstrap, and redeem a silent device session. The HTTP contract lives
 in [`UI-SERVICE-CONTRACT.md`](UI-SERVICE-CONTRACT.md).
 
 ## Replaceable data plumbing

@@ -6,6 +6,9 @@ import {
   RETURN_VISIT_STEPS,
   SCRATCH_HONEST_LINE,
   SCRATCH_UPGRADE_LINE,
+  SELF_KEEP_HONEST_LINE,
+  SELF_KEEP_OTHER_DEVICE_LINE,
+  SELF_KEEP_PHONE_LINE,
   SHARE_GRANT_LINE,
 } from './identity-copy.ts';
 
@@ -29,5 +32,15 @@ describe('identity copy', () => {
     assert.equal(RETURN_VISIT_STEPS.length, 3);
     assert.match(SHARE_GRANT_LINE, /live session/);
     assert.doesNotMatch(PAIRING_STEPS.map((step) => step.detail).join(' '), /password|passkey|oauth/i);
+  });
+
+  it('tells the phone-only visitor the truth about a single-device keep', () => {
+    assert.match(SELF_KEEP_PHONE_LINE, /this phone/i);
+    assert.match(SELF_KEEP_HONEST_LINE, /unrecoverable/i);
+    assert.match(SELF_KEEP_OTHER_DEVICE_LINE, /never merge/i);
+    assert.doesNotMatch(
+      [SELF_KEEP_PHONE_LINE, SELF_KEEP_HONEST_LINE, SELF_KEEP_OTHER_DEVICE_LINE].join(' '),
+      /password|passkey|oauth|email/i,
+    );
   });
 });

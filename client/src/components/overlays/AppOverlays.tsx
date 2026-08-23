@@ -38,6 +38,8 @@ interface AppOverlaysProps {
   theme: 'light' | 'dark';
   preferences: UiPreferences;
   hasDocument: boolean;
+  /** Phone posture: single-device keep leads, the pairing QR follows. */
+  phone: boolean;
   onCloseDialog: () => void;
   onCloseReview: () => void;
   onAction: (action: UiActionId) => void;
@@ -451,6 +453,7 @@ export function AppOverlays(props: AppOverlaysProps) {
         onNotify={props.onNotify}
         onOpenPhone={() => props.onAction('pairing')}
         onPromoted={props.onPromoted}
+        phone={props.phone}
       />
     );
   } else if (renderedDialog?.type === 'account') {

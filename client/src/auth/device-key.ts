@@ -3,9 +3,11 @@ import {
   type ControllerBootstrap,
   type DeviceGrant,
   type DeviceSessionProof,
+  type SelfBootstrap,
   encodeControllerBootstrap,
   encodeDeviceGrant,
   encodeDeviceSessionProof,
+  encodeSelfBootstrap,
 } from './protocol.ts';
 
 const KEY_PREFIX = 'marks.auth.device-key.v1.';
@@ -85,6 +87,13 @@ export function signControllerBootstrap(
   bootstrap: ControllerBootstrap,
 ): Promise<Uint8Array> {
   return sign(privateKey, encodeControllerBootstrap(bootstrap));
+}
+
+export function signSelfBootstrap(
+  privateKey: CryptoKey,
+  bootstrap: SelfBootstrap,
+): Promise<Uint8Array> {
+  return sign(privateKey, encodeSelfBootstrap(bootstrap));
 }
 
 export function signDeviceSessionProof(

@@ -789,6 +789,7 @@ export function App() {
             theme={theme}
             preferences={preferences}
             hasDocument={Boolean(docId && session)}
+            phone={phone}
             onCloseDialog={() => setDialog(null)}
             onCloseReview={() => setReviewSurface(null)}
             onAction={runAction}
