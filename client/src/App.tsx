@@ -856,6 +856,7 @@ export function App() {
         ) : session ? (
           <div
             className="workspace-shell"
+            onContextMenuCapture={surface.onContextMenu}
             onFocusCapture={(event) => {
               const target = event.target as HTMLElement;
               if (target.closest('.preview-pane')) surface.setLastSurface('preview');

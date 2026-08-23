@@ -191,7 +191,9 @@ export function useBrowserSurface(
       };
       if (!shouldOfferCustomMenu(request)) return;
       event.preventDefault();
-      event.stopPropagation();
+      // This handler runs on the mounted workspace capture boundary. Let the
+      // event finish propagating so React flushes the discrete menu update in
+      // the same event turn; preventing the native menu is sufficient.
       setLastSurface(surface === 'preview' ? 'preview' : 'editor');
       setContextMenu({ x: event.clientX, y: event.clientY, actions: buildActions(surface) });
     },
@@ -221,12 +223,10 @@ export function useBrowserSurface(
     };
 
     window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('contextmenu', onContextMenu);
     return () => {
       window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('contextmenu', onContextMenu);
     };
-  }, [getPreview, lastSurface, onContextMenu, session, toggleVoice]);
+  }, [getPreview, lastSurface, session, toggleVoice]);
 
   useEffect(() => {
     if (!session) return;

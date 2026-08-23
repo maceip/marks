@@ -101,9 +101,15 @@ export async function runSurface(session, { check }) {
     previewSelection ? `chars=${String(previewSelection).length}` : 'empty selection',
   );
 
+  // Cross the editor/preview focus boundary immediately before the context
+  // event. This catches listener lifetimes that accidentally follow React
+  // focus state instead of the mounted workspace surface.
+  await session.click('.cm-content');
+  await session.click('.preview-pane');
   await session.rightClick('.preview-pane', { x: 24, y: 24 });
-  await session.wait(250);
-  check('preview right-click opens the marks menu', (await session.count('.context-menu')) === 1);
+  await session.waitForSelector('.context-menu', { timeout: 2_000 });
+  check('preview right-click opens the marks menu',
+    (await session.count('.context-menu')) === 1 && (await session.isVisible('.context-menu')));
   await session.press('Escape');
 
   const themeBefore = await session.evaluate(() => document.documentElement.dataset.theme ?? 'light');
