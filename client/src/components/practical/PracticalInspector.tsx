@@ -31,6 +31,7 @@ import type {
   SourceRange,
 } from '../../intelligence/types.ts';
 import { useDocumentIntelligence } from '../../intelligence/useDocumentIntelligence.ts';
+import { createMarkdownIt } from '../../markdown/md.ts';
 import { formatBytes } from '../../lib/format.ts';
 import type { DocumentAssetDto, DocumentMeta, ExternalLinkCheckDto } from '../../lib/api.ts';
 import { loadServiceApi } from '../../lib/service-api.ts';
@@ -365,10 +366,7 @@ function PublishActions({
       if (profile === 'readme') {
         downloadText(bodySource, 'README.md', 'text/markdown;charset=utf-8');
       } else {
-        const [{ createMarkdownIt }, { default: DOMPurify }] = await Promise.all([
-          import('../../markdown/md.ts'),
-          import('dompurify'),
-        ]);
+        const { default: DOMPurify } = await import('dompurify');
         const rendered = createMarkdownIt().render(bodySource);
         const safe = String(DOMPurify.sanitize(rendered, {
           USE_PROFILES: { html: true },
