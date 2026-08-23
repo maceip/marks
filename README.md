@@ -17,7 +17,7 @@ work apart:
 | | Typical markdown editor | marks |
 | --- | --- | --- |
 | Preview | debounce, then re-render everything | per-block content hash, only dirty blocks repaint |
-| Parsing | on the main thread, blocking input | in a Web Worker |
+| Parsing | on the main thread, blocking input | in a Web Worker; dirty source blocks only |
 | Off-screen content | laid out and painted | skipped via `content-visibility` |
 | Merging | operational transform, server-ordered | CRDT, converges without a server |
 | Opening a document | replay the edit history | one snapshot over cacheable HTTP |
@@ -45,9 +45,11 @@ cargo run -p marks-server   # Rust API/room server on :3000
 
 The complete UI runs in local workspace mode by default: documents, templates,
 editing, preview, comments, history, dialogs, preferences, and exports work
-without a server. The Vite client proxies `/v1` and `/collab` to
-`MARKS_SERVER`, where `marks-server` now serves the identity, document, and
-room APIs. The browser artifact builds with:
+without a server. Local mode is a real Rust/Wasm ESBT replica with an
+IndexedDB journal, not a string buffer. The Vite client proxies `/v1` and
+`/collab` to `MARKS_SERVER`, where `marks-server` serves the identity,
+document, and room APIs on the same encodings the browser emits. The browser
+artifact builds with:
 
 ```bash
 npm run build
@@ -104,12 +106,16 @@ client/                     Vite + React + TypeScript
                             presence decorations for CodeMirror
   markdown/                 markdown-it setup, incremental block parse, DOM patch
   workers/                  markdown.worker.ts, bench.worker.ts
+  public/esbt.wasm          Rust core, same git rev as marks-server
   editor/                   CodeMirror 6 setup, commands, theme
   components/ pages/        UI
 esbt/                       TypeScript presence store + contract tests
 crates/marks-auth/          identity/authorization validators
 crates/marks-server/        the only HTTP/WebSocket process
 ```
+
+Rebuild the Wasm artifact from the pinned ESBT-web revision with
+`scripts/build-esbt-wasm.sh`.
 
 `marks-server` is one Rust process owning HTTP, sessions, ACLs, durable
 document rooms, and the native ESBT replica (the pinned
@@ -152,9 +158,9 @@ comment storage, commenter authorization, and cross-user history are still
 absent until the authenticated metadata service lands. The binding and release
 boundary is [docs/V1-SCOPE.md](docs/V1-SCOPE.md).
 
-**Benchmark engine** in the sidebar runs an editing trace against it, in a
-worker, in your browser. One run of the 25,000-edit trace in Node on one
-machine (your numbers will differ):
+**Benchmark engine** in the sidebar runs an editing trace against the Wasm
+core, in a worker, in your browser. One run of the 25,000-edit trace in Node
+on one machine (your numbers will differ):
 
 | | ESBT |
 | --- | --- |
@@ -165,12 +171,11 @@ machine (your numbers will differ):
 | Snapshot size | 1.6 MB |
 | Update traffic | 1.4 MB |
 
-Per keystroke that is ~12 µs, far below anything typing can notice. The
-encoded sizes are the honest cost today: identifiers are stored explicitly,
-one item per UTF-16 unit (sequence paths are prefix-delta-coded; HTTP
-responses gzip well). The paper lists compact identifier encoding as future
-work, and run-length item coalescing fits behind `export`/`import` without
-touching the contract.
+Per keystroke that is ~12 µs, far below anything typing can notice. Update
+payloads use format v3: one site dictionary per batch and front-coded
+identifier paths, so bytes-per-operation fall with transaction size. Sequence
+paths stay prefix-delta-coded and HTTP responses gzip well. Further
+identifier compression is engine research, not a Marks wiring gap.
 
 ### Sync protocol
 
@@ -195,8 +200,10 @@ session now speaks those encodings through the Wasm binding.
 ## Performance panel
 
 `Ctrl`/`Cmd` + `Shift` + `M` opens a live readout: edit-to-paint p50/p95/max,
-how many blocks were dirty on the last pass, how many DOM operations that cost,
-parse and render time, bytes on the wire, and the encoded size of the document.
+how many blocks were dirty on the last pass, whether that parse was
+incremental or full, how many DOM operations that cost, parse and render time,
+bytes on the wire, retained/pending operations, current Dmax, last update
+size, IndexedDB journal saved-ness, and the encoded size of the document.
 
 ![Performance panel](docs/screenshots/performance.png)
 
@@ -218,10 +225,11 @@ npm run measure          # latency on a large generated document
 ```
 
 GitHub Actions (`.github/workflows/ci.yml`) runs the commands above that do not
-need a browser or a running server, on the Rust version in `rust-toolchain.toml`
-(the same pin as `workspace.package.rust-version`). It does **not** run
-`smoke` / `smoke:platforms` / `measure`. A green CI check is not proof of
-multi-peer collaboration or service-mode admission.
+need a browser or a running server, including `test:wasm` against the checked-in
+`esbt.wasm`, on the Rust version in `rust-toolchain.toml` (the same pin as
+`workspace.package.rust-version`). It does **not** run `smoke` /
+`smoke:platforms` / `measure`. A green CI check is not proof of a live
+two-browser room against `marks-server`.
 
 
 `npm run smoke` is Playwright-only and checks the things that need two real
