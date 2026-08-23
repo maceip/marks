@@ -56,7 +56,7 @@ test('presence validates values before changing local state', () => {
   store.destroy();
 });
 
-test('presence expiry removes stale peers and notifies subscribers', async () => {
+test('a crashed client without a deletion disappears by TTL and notifies subscribers', async () => {
   const store = new PresenceStore(20);
   let notifications = 0;
   store.subscribe(() => {

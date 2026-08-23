@@ -295,7 +295,10 @@ export class PresenceStore implements PresenceStoreApi {
   delete(key: string): void {
     if (this.destroyed) return;
     const entry = this.entries.get(key);
-    if (!entry || entry.deleted) return;
+    if (entry?.deleted) return;
+    // A tombstone for an absent entry is useful during pagehide: an earlier
+    // idle tombstone may already have been swept locally, but peers still
+    // deserve one final best-effort deletion before the transport closes.
     this.entries.set(key, { value: undefined, at: Date.now(), deleted: true });
     this.emitLocal([key]);
     this.notify();

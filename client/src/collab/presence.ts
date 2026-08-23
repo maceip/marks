@@ -20,6 +20,7 @@ import {
   WidgetType,
 } from '@codemirror/view';
 import type { PresenceStoreApi } from './presence-store';
+import type { PresenceActivityController } from './presence-activity-controller';
 
 export const HEARTBEAT_MS = 15_000;
 
@@ -138,6 +139,7 @@ export function esbtPresence(
   getSiteId: () => string,
   getLength: () => number,
   presence: PresenceStoreApi,
+  activity: PresenceActivityController,
 ): Extension {
   const selectionKeyFor = () => `${getSiteId()}-cm-sel`;
 
@@ -146,6 +148,7 @@ export function esbtPresence(
     let scheduled = false;
 
     const publishSelection = (): void => {
+      if (!activity.active || !view.hasFocus) return;
       const main = view.state.selection.main;
       presence.set(selectionKeyFor(), { from: main.from, to: main.to });
     };
@@ -175,12 +178,18 @@ export function esbtPresence(
     const unsubscribe = presence.subscribe(scheduleRefresh);
     const heartbeat = window.setInterval(publishSelection, HEARTBEAT_MS);
 
-    publishSelection();
+    if (view.hasFocus) {
+      activity.recordActivity();
+      publishSelection();
+    }
     scheduleRefresh();
 
     return {
       update(update) {
         if (update.selectionSet || update.docChanged || update.focusChanged) {
+          // CodeMirror updates are meaningful only when locally focused;
+          // remote reconciliation must not wake an idle user.
+          if (view.hasFocus) activity.recordActivity();
           publishSelection();
         }
       },
