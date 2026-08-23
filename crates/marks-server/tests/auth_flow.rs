@@ -502,3 +502,118 @@ async fn leftover_scratch_header_does_not_hide_a_live_session() {
 
     server.stop().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn four_word_code_promotes_a_scratch_workspace() {
+    let server = TestServer::spawn(temp_db("auth-words")).await;
+    let http = reqwest::Client::new();
+    let base = server.base.clone();
+
+    let scratch = json_of(
+        http.post(format!("{base}/v1/auth/scratch"))
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    let scratch_id = scratch["scratchId"].as_str().unwrap().to_owned();
+    let capability = scratch["capability"].as_str().unwrap().to_owned();
+    let scratch_auth = format!("MarksScratch {scratch_id}.{capability}");
+
+    let browser_key = DeviceKey::generate();
+    let browser_device_id = "device_words_browser".to_owned();
+    assert_eq!(
+        http.put(format!("{base}/v1/auth/scratch/{scratch_id}/device"))
+            .header("Authorization", &scratch_auth)
+            .json(&json!({
+                "deviceId": browser_device_id,
+                "publicKey": b64(&browser_key.public_sec1())
+            }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        204
+    );
+
+    let pairing = json_of(
+        http.post(format!("{base}/v1/auth/pairings"))
+            .header("Authorization", &scratch_auth)
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    let pairing_id = pairing["pairingId"].as_str().unwrap().to_owned();
+    let words = pairing["words"].as_str().unwrap().to_owned();
+    assert_eq!(words.split_whitespace().count(), 4);
+
+    let guessed = http
+        .post(format!("{base}/v1/auth/pairings/lookup"))
+        .json(&json!({ "words": "correct horse battery staple" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(guessed.status(), 401);
+
+    let inspect = json_of(
+        http.post(format!("{base}/v1/auth/pairings/lookup"))
+            .json(&json!({ "words": words }))
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(inspect["pairingId"], pairing_id.as_str());
+    assert_eq!(inspect["scratchId"], scratch_id.as_str());
+    assert_eq!(inspect["pendingDeviceId"], browser_device_id.as_str());
+
+    let controller_key = DeviceKey::generate();
+    let now = now_ms();
+    let bootstrap = marks_auth::ControllerBootstrap {
+        version: 1,
+        controller_id: marks_auth::ControllerId::new("controller_words1").unwrap(),
+        controller_device_id: marks_auth::DeviceId::new("device_words_phone").unwrap(),
+        controller_public_key_hash: controller_key.public_key_hash(),
+        pairing_id: marks_auth::PairingId::new(pairing_id.clone()).unwrap(),
+        scratch_id: marks_auth::ScratchId::new(scratch_id.clone()).unwrap(),
+        pending_device_id: marks_auth::DeviceId::new(browser_device_id.clone()).unwrap(),
+        pending_device_public_key_hash: browser_key.public_key_hash(),
+        issued_at_ms: now,
+        expires_at_ms: now + 60_000,
+    };
+    let signature = controller_key.sign_p1363(&bootstrap.signing_bytes());
+    let approved = http
+        .post(format!("{base}/v1/auth/pairings/{pairing_id}/bootstrap"))
+        .json(&json!({
+            "words": words,
+            "bootstrap": {
+                "version": 1,
+                "controllerId": "controller_words1",
+                "controllerDeviceId": "device_words_phone",
+                "controllerPublicKeyHash": b64(&bootstrap.controller_public_key_hash),
+                "pairingId": pairing_id,
+                "scratchId": scratch_id,
+                "pendingDeviceId": browser_device_id,
+                "pendingDevicePublicKeyHash": b64(&bootstrap.pending_device_public_key_hash),
+                "issuedAtMs": now,
+                "expiresAtMs": now + 60_000,
+            },
+            "controllerPublicKey": b64(&controller_key.public_sec1()),
+            "signature": b64(&signature),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(approved.status(), 201);
+
+    let finalized = http
+        .post(format!("{base}/v1/auth/pairings/{pairing_id}/finalize"))
+        .header("Authorization", &scratch_auth)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(finalized.status(), 201);
+
+    server.stop().await;
+}

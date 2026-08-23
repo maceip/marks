@@ -35,7 +35,7 @@ Production on `marks.secure.build` is documented in [`deploy/`](../../deploy/).
 ## HTTP surface
 
 The identity endpoints are `docs/AUTHN-AUTHZ-PROTOCOL.md` §10 verbatim:
-scratch creation and pending-device binding, QR pairings
+scratch creation and pending-device binding, QR and four-word pairings
 (create/inspect/bootstrap/approve/finalize), silent device
 challenges/redemption, rotating session bootstrap/logout, device
 enumeration/revocation, and the flagged EVT challenge/redeem pair.

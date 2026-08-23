@@ -22,13 +22,14 @@ export function LinkPage({ pairing, onNotify, onKeep }: LinkPageProps) {
           <span className="home-kicker"><MarksMark size={16} /> Phone confirmation</span>
           <h2>Keep a workspace from this phone.</h2>
           <p>
-            Inspect, bootstrap, or approve. The secret stays in the fragment. This page does not
-            invent a second account type, a passcode, or a sent invitation.
+            Scan the QR, or type the four words if this client cannot scan. The secret stays in the
+            fragment or the words. This page does not invent a password, a passcode, or a sent
+            invitation.
           </p>
         </div>
       </section>
       <section className="home-section pairing-landing-body">
-        <PairingInspect state={state} onNotify={onNotify} />
+        <PairingInspect state={state} pairing={pairing} onNotify={onNotify} />
         <div className="dialog-actions">
           <button type="button" className="button" onClick={onKeep}>
             This tab is still temporary

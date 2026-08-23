@@ -228,19 +228,29 @@ The durable-upgrade line the UI already owns:
 {
   "pairingId": "pairing_…",
   "secret": "<b64url 32>",
+  "words": "correct horse battery staple",
   "expiresAtMs": 0,
   "url": "https://origin/link#v1.<pairingId>.<secret>"
 }
 ```
 
-Put only `url` (or the `#v1.…` fragment) in the QR. The secret is the
-capability. Two-minute default TTL.
+Put only `url` (or the `#v1.…` fragment) in the QR. Show `words` for
+camera-less clients. The secret is the capability. Two-minute default TTL.
+
+#### `POST /v1/auth/pairings/lookup`
+
+- Authority: body `{ "words": "four bip39 words" }`, no session
+- Rate limited per IP
+- Response `200`: the inspect JSON below, including `pairingId` and `scratchId`
+- Guessed or malformed words are `401`
 
 #### `POST /v1/auth/pairings/{id}/inspect`
 
-- Authority: body `{ "secret": "<b64url 32>" }`, no session
-- Response `200`: `{ "origin", "pendingDeviceId", "pendingDevicePublicKeyHash", "expiresAtMs" }`
-- Phone confirmation only. A guessed id without the secret is `401`.
+- Authority: body `{ "secret": "<b64url 32>" }` or `{ "words": "four bip39 words" }`, no session
+- Response `200`: `{ "origin", "pairingId", "scratchId", "pendingDeviceId", "pendingDevicePublicKeyHash", "expiresAtMs" }`
+- Phone confirmation only. A guessed id without the secret or words is `401`.
+- `scratchId` is required so the phone can sign bootstrap/grant bytes. It is
+  not a capability.
 
 #### `POST /v1/auth/pairings/{id}/bootstrap`
 
@@ -437,8 +447,8 @@ These are UI jobs. The server already implements the other side.
 1. **First paint (service):** `ensureServiceCaller` before catalog or editor
    work. No registration form.
 2. **Honest scratch:** closing an unpromoted tab is unrecoverable. Say so.
-3. **Upgrade QR:** bind pending device, create pairing, render `url`, poll or
-   wait, then `finalize` and switch caller to session.
+3. **Upgrade QR or four words:** bind pending device, create pairing, render
+   `url` and `words`, poll finalize, then switch caller to session.
 4. **Return visit:** session probe, then silent device redeem, then scratch.
 5. **Share dialog:** local mode stays staged; service mode calls §6.7 and
    does not claim success on `401`/`404`.
@@ -463,7 +473,7 @@ They stay honest. They do not mint pairings, send CSRF, or claim a session.
 - Treating leftover scratch as stronger than a live session
 - A second React app, Node document store, or `/api` alias
 - A TypeScript ESBT transcoding bridge or dual-engine room
-- Passwords, passkeys, magic links, OAuth, or short pairing codes
+- Passwords, passkeys, magic links, OAuth, or durable short recovery codes
 - Displaying scratch, device, or site IDs as people
 - Sending comments as opaque text updates
 - Logging tickets, scratch capabilities, pairing secrets, or CSRF tokens
@@ -479,10 +489,11 @@ Use this as the frontend checklist. Server boxes are closed unless noted.
 | Session probe prefers cookie | Yes (cookie wins) | Yes (`ensureServiceCaller`) |
 | Catalog / CRUD / export | Yes | Partial (`api.ts`); needs origin-safe mutations and service-mode UX |
 | Snapshot + ticket mint | Yes, both prefixes | Yes (`room-access.ts`) |
-| Pending device bind | Yes | Key exists; bind-on-paint not wired |
-| QR pairing + finalize | Yes | Product UI at Keep + `/link`; local mode does not mint |
-| Silent device redeem | Yes | Account explains the rail; no redeem call in local mode |
-| Logout / device revoke + CSRF | Yes | Account / Sign out chrome; no CSRF in local mode |
+| Pending device bind | Yes | Yes (`pending-device.ts`, first paint in service mode) |
+| QR pairing + finalize | Yes | Yes (`identity.ts`, Keep workspace); local mode does not mint |
+| Four-word pairing | Yes (`/lookup`) | Yes (Keep + `/link`) |
+| Silent device redeem | Yes | Yes (`device-session.ts` before scratch mint) |
+| Logout / device revoke + CSRF | Yes | Yes (Account / Sign out in service mode) |
 | Shares / link grants | Yes | Product UI; local staging only |
 | Room bytes / multi-peer | Yes (native ESBT) | Yes (Wasm `EsbtEngine` + journal) |
 | Comments / history service | No | Local adapters only |

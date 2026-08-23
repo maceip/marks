@@ -78,10 +78,10 @@ and the same Markdown that describes the product, accounts, and machinery.
 Identity chrome is presentation-complete in local mode on desktop, phone, and
 fold: Temporary chip, Keep workspace with an on-brand QR of `/link`, phone
 confirmation, Account devices/controllers/sessions, Share principal and link
-grants, mapped service-error toasts, and reconnect copy. It uses the same
-tokens as the desktop app. It does not claim a pairing ticket, a sent
-invitation, or a signed-in principal. The HTTP contract lives in
-[`UI-SERVICE-CONTRACT.md`](UI-SERVICE-CONTRACT.md).
+grants, mapped service-error toasts, and reconnect copy. In service mode the
+same surfaces mint a real pairing, show the QR and four-word code, finalize
+the desktop tab, and redeem a silent device session. The HTTP contract lives
+in [`UI-SERVICE-CONTRACT.md`](UI-SERVICE-CONTRACT.md).
 
 ## Replaceable data plumbing
 

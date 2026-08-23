@@ -47,6 +47,8 @@ interface AppOverlaysProps {
   onTheme: (theme: 'light' | 'dark') => void;
   onPreferences: (patch: Partial<UiPreferences>) => void;
   onNotify: (title: string, detail?: string, tone?: 'neutral' | 'success' | 'danger') => void;
+  onPromoted?: () => void;
+  onSignedOut?: () => void;
 }
 
 const DOCUMENT_ACTIONS = new Set<UiActionId>([
@@ -448,6 +450,7 @@ export function AppOverlays(props: AppOverlaysProps) {
       <KeepWorkspace
         onNotify={props.onNotify}
         onOpenPhone={() => props.onAction('pairing')}
+        onPromoted={props.onPromoted}
       />
     );
   } else if (renderedDialog?.type === 'account') {
@@ -457,6 +460,7 @@ export function AppOverlays(props: AppOverlaysProps) {
       <AccountSheet
         onNotify={props.onNotify}
         onKeep={() => props.onAction('keep-workspace')}
+        onSignedOut={props.onSignedOut}
       />
     );
   } else if (renderedDialog?.type === 'preferences') {

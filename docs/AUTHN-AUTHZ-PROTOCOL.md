@@ -77,7 +77,8 @@ The server must preserve all of these invariants:
 - The phone controller can enroll or revoke devices. An ordinary linked device
   can authenticate itself but cannot enroll another device.
 - Every bearer capability is 256 random bits. Only a domain-separated digest is
-  stored. Short numeric or word codes are not a v1 fallback.
+  stored. The only short-word path is the live pairing accessibility code
+  below; it is not a password, recovery phrase, or durable credential.
 - Every signature covers a versioned domain string and a canonical binary
   encoding. JSON is never signed.
 - Pairings, device challenges, EVT challenges, and document tickets expire and
@@ -227,17 +228,27 @@ the fragment, immediately clears it with `history.replaceState`, and submits it
 to Marks over HTTPS. “Copy secure link” carries the same high-entropy fragment
 and is the only non-camera fallback in v1.
 
-There is no PAKE in this flow. PAKE is needed when two parties share only a
-low-entropy password or short code and must prevent offline guessing. A
-machine-generated 256-bit QR/link secret already has sufficient entropy. If a
-future accessibility requirement introduces a six-digit or short-word fallback,
-that fallback must use a reviewed PAKE such as SPAKE2 and is a new protocol
-version; it must never compare or hash the short code directly.
+There is no PAKE in this flow. The 256-bit QR/link secret already has
+sufficient entropy. Camera-less clients use a separate four-word
+accessibility code minted with the pairing:
+
+- four BIP39 English words, 44 bits of CSPRNG;
+- stored only as `H("marks-pairing-words-v1", canonical words)`;
+- the same two-minute pairing TTL;
+- per-IP lookup rate limit;
+- accepted on inspect, bootstrap, and approve in place of the fragment secret.
+
+The words are not a password and do not survive the pairing window. Offline
+guessing of a stolen hash is possible only while that pairing is live; that is
+accepted because the pairing is already a short-lived capability. A guessed
+phrase returns the same 401 as a guessed fragment. A later durable short-code
+recovery path would still require a reviewed PAKE and a new protocol version.
 
 The phone page shows the Marks origin, the pending device label, and whether it
-is creating a new principal or linking to an existing one. Scanning is the
-explicit promotion action; an existing controller should still show a concise
-confirmation before granting a new device to reduce QR-login phishing.
+is creating a new principal or linking to an existing one. Scanning or typing
+the four words is the explicit promotion action; an existing controller should
+still show a concise confirmation before granting a new device to reduce
+QR-login phishing.
 
 ### First phone
 
@@ -537,6 +548,7 @@ sessions(
 pairings(
   id PK, scratch_id FK, pending_device_id FK,
   pending_device_public_key_hash BINARY(32), secret_hash BINARY(32),
+  word_code_hash BINARY(32) NULL UNIQUE,
   expires_at, consumed_at, approved_principal_id FK NULL
 )
 
@@ -588,8 +600,9 @@ reconstruct credentials.
 | --- | --- | --- |
 | `POST /v1/auth/scratch` | none, rate limited | Create temporary workspace capability |
 | `PUT /v1/auth/scratch/{id}/device` | scratch | Bind pending browser key |
-| `POST /v1/auth/pairings` | scratch | Create high-entropy QR pairing |
-| `POST /v1/auth/pairings/{id}/inspect` | pairing secret | Resolve safe phone confirmation details |
+| `POST /v1/auth/pairings` | scratch | Create high-entropy QR pairing plus four-word code |
+| `POST /v1/auth/pairings/lookup` | four-word code | Camera-less inspect of the live pairing |
+| `POST /v1/auth/pairings/{id}/inspect` | pairing secret or words | Resolve safe phone confirmation details |
 | `POST /v1/auth/pairings/{id}/bootstrap` | pairing secret + controller self-proof | Create first principal/controller |
 | `POST /v1/auth/pairings/{id}/approve` | controller session + signed grant | Enroll into existing principal |
 | `POST /v1/auth/pairings/{id}/finalize` | claimed scratch | Issue pending browser's first session |
@@ -632,9 +645,10 @@ could grant abuse-resistance or qualification status, but it is not needed for
 session continuity and is outside v1 authentication.
 
 No v1 path uses passwords, passkeys, emailed magic links, OAuth access/refresh
-tokens, low-entropy recovery codes, or PAKE. Adding any one of them requires a
-new threat review and protocol version rather than silently overloading these
-records.
+tokens, durable recovery codes, or PAKE. The four-word pairing code is only a
+live, hashed, rate-limited accessibility rail for the current pairing. Adding
+a durable short-code path requires a new threat review and protocol version
+rather than silently overloading these records.
 
 ## 12. Implementation mapping and gates
 

@@ -174,8 +174,8 @@ export function encodeDeviceSessionProof(proof: DeviceSessionProof): Uint8Array 
   assertId(proof.challengeId, 'challengeId');
   assertId(proof.deviceId, 'deviceId');
   assertBytes(proof.challenge, 32, 'challenge');
-  if (!proof.audience.startsWith('https://')) {
-    throw new TypeError('audience must be an HTTPS origin');
+  if (!/^https?:\/\//u.test(proof.audience)) {
+    throw new TypeError('audience must be an HTTP or HTTPS origin');
   }
 
   const writer = new CanonicalWriter();

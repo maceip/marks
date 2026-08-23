@@ -45,6 +45,10 @@ pub fn router(app: Arc<App>) -> Router {
         )
         .route("/v1/auth/pairings", post(routes::auth::pairing_create))
         .route(
+            "/v1/auth/pairings/lookup",
+            post(routes::auth::pairing_lookup),
+        )
+        .route(
             "/v1/auth/pairings/{id}/inspect",
             post(routes::auth::pairing_inspect),
         )

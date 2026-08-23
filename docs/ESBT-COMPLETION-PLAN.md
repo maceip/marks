@@ -194,8 +194,9 @@ person are one principal, two device credentials, and two ESBT sites.
 - Generate a non-extractable P-256 pending-device key in IndexedDB without
   blocking first paint.
 - Create a two-minute pairing whose 256-bit secret appears only in the QR/link
-  fragment. The copied secure link is the only v1 fallback. There is no short
-  code and therefore no PAKE.
+  fragment. Camera-less clients type the four-word accessibility code minted
+  with that pairing. The words are hashed, rate-limited, and die with the
+  pairing. They are not a password and not PAKE.
 - Support first-phone controller bootstrap and existing-controller device
   grants. Bind signatures to pairing, scratch, pending device/key digest,
   controller epoch, capabilities, and expiry using the Rust canonical encoder.

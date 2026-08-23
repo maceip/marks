@@ -32,6 +32,9 @@ pub struct PairingRecord {
     pub pending_device_id: DeviceId,
     pub pending_device_public_key_hash: [u8; 32],
     pub secret_hash: [u8; 32],
+    /// Domain-separated digest of the four-word accessibility code, when the
+    /// pairing was minted with one. Absent on records that predate the rail.
+    pub word_code_hash: Option<[u8; 32]>,
     pub expires_at_ms: u64,
     pub consumed_at_ms: Option<u64>,
     pub approved_principal_id: Option<PrincipalId>,
@@ -182,6 +185,39 @@ pub fn authorize_pairing_inspect(
     Ok(())
 }
 
+/// Camera-less confirmation: the four-word code proves the typist holds the
+/// live pairing. A guessed or malformed phrase is the same failure as a
+/// guessed fragment secret.
+pub fn authorize_pairing_inspect_words(
+    pairing: &PairingRecord,
+    presented_words: &str,
+    now_ms: u64,
+) -> Result<(), PairingError> {
+    if pairing.consumed_at_ms.is_some() {
+        return Err(PairingError::Consumed);
+    }
+    if now_ms >= pairing.expires_at_ms {
+        return Err(PairingError::Expired);
+    }
+    require_pairing_words(pairing, presented_words)
+}
+
+fn require_pairing_words(
+    pairing: &PairingRecord,
+    presented_words: &str,
+) -> Result<(), PairingError> {
+    use subtle::ConstantTimeEq;
+    let Some(stored) = pairing.word_code_hash else {
+        return Err(PairingError::InvalidSecret);
+    };
+    let canonical = crate::words::normalize_pairing_words(presented_words)?;
+    let presented = crate::words::pairing_word_code_hash(&canonical);
+    if stored.ct_eq(&presented).unwrap_u8() != 1 {
+        return Err(PairingError::InvalidSecret);
+    }
+    Ok(())
+}
+
 fn require_fresh_pairing_secret(
     pairing: &PairingRecord,
     presented_secret: &[u8],
@@ -205,6 +241,28 @@ fn require_fresh_pairing_secret(
         return Err(PairingError::InvalidSecret);
     }
     Ok(())
+}
+
+fn require_fresh_pairing_words(
+    pairing: &PairingRecord,
+    presented_words: &str,
+    proof_issued_at_ms: u64,
+    proof_expires_at_ms: u64,
+    now_ms: u64,
+) -> Result<(), PairingError> {
+    if pairing.consumed_at_ms.is_some() {
+        return Err(PairingError::Consumed);
+    }
+    if now_ms >= pairing.expires_at_ms || now_ms >= proof_expires_at_ms {
+        return Err(PairingError::Expired);
+    }
+    if proof_issued_at_ms > now_ms.saturating_add(MAX_CLOCK_SKEW_MS) {
+        return Err(PairingError::IssuedInFuture);
+    }
+    if proof_expires_at_ms > pairing.expires_at_ms {
+        return Err(PairingError::GrantOutlivesPairing);
+    }
+    require_pairing_words(pairing, presented_words)
 }
 
 /// Bind a two-minute pairing to the authenticated scratch and its pending key.
@@ -255,6 +313,38 @@ pub fn authorize_pairing(
         grant.expires_at_ms,
         now_ms,
     )?;
+    finish_authorize_pairing(pairing, controller, grant, signature_p1363)
+}
+
+/// Existing-controller approval using the four-word code instead of the
+/// fragment secret. Signature and binding checks are unchanged.
+pub fn authorize_pairing_words(
+    pairing: &PairingRecord,
+    presented_words: &str,
+    controller: &ControllerRecord,
+    grant: &DeviceGrant,
+    signature_p1363: &[u8],
+    now_ms: u64,
+) -> Result<AuthorizedPairing, PairingError> {
+    if grant.version != 1 {
+        return Err(PairingError::UnsupportedVersion);
+    }
+    require_fresh_pairing_words(
+        pairing,
+        presented_words,
+        grant.issued_at_ms,
+        grant.expires_at_ms,
+        now_ms,
+    )?;
+    finish_authorize_pairing(pairing, controller, grant, signature_p1363)
+}
+
+fn finish_authorize_pairing(
+    pairing: &PairingRecord,
+    controller: &ControllerRecord,
+    grant: &DeviceGrant,
+    signature_p1363: &[u8],
+) -> Result<AuthorizedPairing, PairingError> {
     if controller.revoked_at_ms.is_some() {
         return Err(PairingError::ControllerRevoked);
     }
@@ -314,6 +404,47 @@ pub fn authorize_controller_bootstrap(
         bootstrap.expires_at_ms,
         now_ms,
     )?;
+    finish_controller_bootstrap(
+        pairing,
+        bootstrap,
+        controller_public_key_sec1,
+        signature_p1363,
+    )
+}
+
+/// First-phone bootstrap using the four-word code instead of the fragment secret.
+pub fn authorize_controller_bootstrap_words(
+    pairing: &PairingRecord,
+    presented_words: &str,
+    bootstrap: &ControllerBootstrap,
+    controller_public_key_sec1: &[u8],
+    signature_p1363: &[u8],
+    now_ms: u64,
+) -> Result<AuthorizedBootstrap, PairingError> {
+    if bootstrap.version != 1 {
+        return Err(PairingError::UnsupportedVersion);
+    }
+    require_fresh_pairing_words(
+        pairing,
+        presented_words,
+        bootstrap.issued_at_ms,
+        bootstrap.expires_at_ms,
+        now_ms,
+    )?;
+    finish_controller_bootstrap(
+        pairing,
+        bootstrap,
+        controller_public_key_sec1,
+        signature_p1363,
+    )
+}
+
+fn finish_controller_bootstrap(
+    pairing: &PairingRecord,
+    bootstrap: &ControllerBootstrap,
+    controller_public_key_sec1: &[u8],
+    signature_p1363: &[u8],
+) -> Result<AuthorizedBootstrap, PairingError> {
     if bootstrap.pairing_id != pairing.id
         || bootstrap.scratch_id != pairing.scratch_id
         || bootstrap.pending_device_id != pairing.pending_device_id
@@ -449,6 +580,7 @@ mod tests {
             pending_device_id: device_id("device_1234567"),
             pending_device_public_key_hash: key_hash,
             secret_hash: pairing_secret_hash(&secret),
+            word_code_hash: None,
             expires_at_ms: 20_000,
             consumed_at_ms: None,
             approved_principal_id: None,

@@ -43,11 +43,11 @@ export const PAIRING_STEPS = [
   },
   {
     title: 'Mint the pairing',
-    detail: 'The service returns a two-minute URL. Only that URL belongs in the QR.',
+    detail: 'The service returns a two-minute URL and four words. Only that URL belongs in the QR.',
   },
   {
     title: 'Phone confirms',
-    detail: 'Inspect needs the secret. A guessed pairing id is authentication failed.',
+    detail: 'Scan the QR or type the four words. A guessed pairing id is authentication failed.',
   },
   {
     title: 'Finalize this tab',
