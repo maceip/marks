@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "valid": [
+    { "name": "empty", "bytes": [5, 0], "entries": [] },
+    { "name": "user", "bytes": [5, 1, 6, 117, 115, 101, 114, 58, 50, 0, 0, 14, 123, 34, 110, 97, 109, 101, 34, 58, 34, 65, 100, 97, 34, 125], "entries": [{ "key": "user:2", "age_ms": 0, "value": { "name": "Ada" } }] },
+    { "name": "selection-delete", "bytes": [5, 1, 11, 115, 101, 108, 101, 99, 116, 105, 111, 110, 58, 50, 1], "entries": [{ "key": "selection:2", "age_ms": 0, "value": null, "deleted": true }] }
+  ],
+  "malformed": [
+    { "name": "empty-input", "bytes": [] },
+    { "name": "wrong-tag", "bytes": [4, 0] },
+    { "name": "truncated", "bytes": [5, 1] },
+    { "name": "noncanonical-count", "bytes": [5, 128, 0] },
+    { "name": "trailing", "bytes": [5, 0, 0] },
+    { "name": "bad-flags", "bytes": [5, 1, 1, 120, 2] }
+  ]
+}

@@ -15,6 +15,13 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use marks_server::room::protocol::{MutationKind, decode_committed, encode_mutation};
 
+const PRESENCE_TAG: u8 = 5;
+const PRESENCE_DELETED: u8 = 1;
+const MAX_PRESENCE_BYTES: usize = 64 * 1024;
+const MAX_PRESENCE_ENTRIES: usize = 256;
+const MAX_PRESENCE_KEY_BYTES: usize = 256;
+const MAX_PRESENCE_VALUE_BYTES: usize = 16 * 1024;
+
 pub const MSG_UPDATE: u8 = 0x01;
 pub const MSG_EPHEMERAL: u8 = 0x02;
 pub const MSG_SERVER_VV: u8 = 0x03;
@@ -53,7 +60,156 @@ pub enum PeerEvent {
     Applied,
     Committed([u8; 16], u64),
     Closed(Option<u16>),
+    Presence(Vec<PresenceEntry>),
     Other,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PresenceEntry {
+    pub key: String,
+    pub age_ms: u64,
+    pub value: Option<serde_json::Value>,
+}
+
+/// Encode the exact transient v1 payload used by the browser PresenceStore.
+pub fn encode_presence(entries: &[PresenceEntry]) -> Result<Vec<u8>, String> {
+    if entries.len() > MAX_PRESENCE_ENTRIES {
+        return Err("too many presence entries".into());
+    }
+    let mut out = vec![PRESENCE_TAG];
+    write_uint(&mut out, entries.len() as u64);
+    for entry in entries {
+        write_bytes(&mut out, entry.key.as_bytes(), MAX_PRESENCE_KEY_BYTES)?;
+        if entry.key.is_empty() {
+            return Err("empty presence key".into());
+        }
+        match &entry.value {
+            None => out.push(PRESENCE_DELETED),
+            Some(value) => {
+                out.push(0);
+                write_uint(&mut out, entry.age_ms);
+                let json = serde_json::to_vec(value).map_err(|error| error.to_string())?;
+                write_bytes(&mut out, &json, MAX_PRESENCE_VALUE_BYTES)?;
+            }
+        }
+        if out.len() > MAX_PRESENCE_BYTES {
+            return Err("presence payload exceeds 64 KiB".into());
+        }
+    }
+    Ok(out)
+}
+
+/// Decode atomically: no entry is returned unless the complete frame is valid.
+pub fn decode_presence(bytes: &[u8]) -> Result<Vec<PresenceEntry>, String> {
+    if bytes.is_empty() || bytes.len() > MAX_PRESENCE_BYTES {
+        return Err("invalid presence payload length".into());
+    }
+    let mut reader = PresenceReader { bytes, offset: 0 };
+    if reader.u8()? != PRESENCE_TAG {
+        return Err("unsupported presence payload".into());
+    }
+    let count = reader.uint()?;
+    if count > MAX_PRESENCE_ENTRIES as u64 {
+        return Err("too many presence entries".into());
+    }
+    let mut entries = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        let key = String::from_utf8(reader.bytes(MAX_PRESENCE_KEY_BYTES)?.to_vec())
+            .map_err(|_| "invalid presence key utf-8".to_owned())?;
+        if key.is_empty() {
+            return Err("empty presence key".into());
+        }
+        let flags = reader.u8()?;
+        if flags == PRESENCE_DELETED {
+            entries.push(PresenceEntry {
+                key,
+                age_ms: 0,
+                value: None,
+            });
+        } else if flags == 0 {
+            let age_ms = reader.uint()?;
+            let value = serde_json::from_slice(reader.bytes(MAX_PRESENCE_VALUE_BYTES)?)
+                .map_err(|_| "invalid presence json".to_owned())?;
+            entries.push(PresenceEntry {
+                key,
+                age_ms,
+                value: Some(value),
+            });
+        } else {
+            return Err("unsupported presence flags".into());
+        }
+    }
+    if reader.offset != bytes.len() {
+        return Err("trailing presence bytes".into());
+    }
+    Ok(entries)
+}
+
+struct PresenceReader<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+impl PresenceReader<'_> {
+    fn u8(&mut self) -> Result<u8, String> {
+        let value = self
+            .bytes
+            .get(self.offset)
+            .copied()
+            .ok_or_else(|| "truncated presence payload".to_owned())?;
+        self.offset += 1;
+        Ok(value)
+    }
+    fn uint(&mut self) -> Result<u64, String> {
+        let mut value = 0_u64;
+        for index in 0..10 {
+            let byte = self.u8()?;
+            if index == 9 && byte > 1 {
+                return Err("presence integer overflow".into());
+            }
+            value |= u64::from(byte & 0x7f) << (index * 7);
+            if byte & 0x80 == 0 {
+                if index > 0 && byte == 0 {
+                    return Err("non-canonical presence integer".into());
+                }
+                return Ok(value);
+            }
+        }
+        Err("presence integer overflow".into())
+    }
+    fn bytes(&mut self, maximum: usize) -> Result<&[u8], String> {
+        let length = usize::try_from(self.uint()?)
+            .map_err(|_| "invalid presence field length".to_owned())?;
+        if length > maximum
+            || self
+                .offset
+                .checked_add(length)
+                .is_none_or(|end| end > self.bytes.len())
+        {
+            return Err("invalid presence field length".into());
+        }
+        let start = self.offset;
+        self.offset += length;
+        Ok(&self.bytes[start..self.offset])
+    }
+}
+
+fn write_uint(out: &mut Vec<u8>, mut value: u64) {
+    loop {
+        let byte = (value & 0x7f) as u8;
+        value >>= 7;
+        out.push(byte | if value > 0 { 0x80 } else { 0 });
+        if value == 0 {
+            break;
+        }
+    }
+}
+fn write_bytes(out: &mut Vec<u8>, bytes: &[u8], maximum: usize) -> Result<(), String> {
+    if bytes.len() > maximum {
+        return Err("presence field exceeds its limit".into());
+    }
+    write_uint(out, bytes.len() as u64);
+    out.extend_from_slice(bytes);
+    Ok(())
 }
 
 impl Peer {
@@ -154,7 +310,9 @@ impl Peer {
                         let receipt = decode_committed(payload).expect("committed receipt");
                         PeerEvent::Committed(receipt.id, receipt.revision)
                     }
-                    MSG_EPHEMERAL => PeerEvent::Other,
+                    MSG_EPHEMERAL => PeerEvent::Presence(
+                        decode_presence(payload).expect("decode production presence payload"),
+                    ),
                     _ => PeerEvent::Other,
                 }
             }
@@ -171,6 +329,11 @@ impl Peer {
             .send(Message::Binary(framed.into()))
             .await
             .expect("ws send");
+    }
+
+    pub async fn send_presence(&mut self, entries: &[PresenceEntry]) {
+        let payload = encode_presence(entries).expect("encode production presence payload");
+        self.send(MSG_EPHEMERAL, &payload).await;
     }
 
     pub async fn send_mutation(&mut self, kind: MutationKind, payload: &[u8]) -> [u8; 16] {

@@ -177,7 +177,7 @@ function serializableValue(value: unknown): unknown {
   return JSON.parse(json) as unknown;
 }
 
-function decodeFrame(bytes: Uint8Array): DecodedEntry[] {
+export function decodePresenceFrame(bytes: Uint8Array): ReadonlyArray<DecodedEntry> {
   const reader = new Reader(bytes);
   if (reader.u8() !== PRESENCE_TAG) {
     throw new TypeError('marks: unsupported presence payload');
@@ -326,7 +326,7 @@ export class PresenceStore implements PresenceStoreApi {
   apply(bytes: Uint8Array): void {
     if (this.destroyed) return;
     // Decode the complete frame first. A malformed tail can never half-apply.
-    const decoded = decodeFrame(bytes);
+    const decoded = decodePresenceFrame(bytes);
     const now = Date.now();
     let changed = false;
     for (const incoming of decoded) {
