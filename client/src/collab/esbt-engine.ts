@@ -220,7 +220,7 @@ export class EsbtEngine implements CollabSession {
         }
         return [];
       }),
-      esbtPresence(() => this.presenceSiteId(), () => this.doc?.length ?? 0, this.ephemeral),
+      esbtPresence(() => this.presenceSiteId(), () => this.doc, this.ephemeral),
       this.syncExtension(),
       this.undoExtensions(),
     ];
@@ -1011,6 +1011,9 @@ export class EsbtEngine implements CollabSession {
         break;
       case MSG_EPHEMERAL:
         try {
+          // WebSocket messages are processed synchronously in receive order.
+          // Thus every durable frame already received on this socket has been
+          // imported before any presence identity is exposed to renderers.
           this.ephemeral.apply(payload);
         } catch {
           // presence is best-effort

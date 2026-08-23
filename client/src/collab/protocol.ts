@@ -16,6 +16,124 @@ const PROTOCOL_VERSION = 1;
 const MUTATION_HEADER_BYTES = 26;
 const COMMITTED_HEADER_BYTES = 33;
 
+/**
+ * Selection presence v1 offsets are accepted only during the rolling upgrade
+ * from the August 2026 client. Remove this decoder after every supported
+ * client has emitted v2 for one full presence TTL/deployment window.
+ */
+export const MAX_LEGACY_SELECTION_OFFSET = 2_000_000;
+export const MAX_SELECTION_ANCHOR_BYTES = 4_096;
+
+export type SelectionDirection = 'forward' | 'backward';
+
+export interface SelectionPresenceV2 {
+  version: 2;
+  anchor: Uint8Array;
+  head: Uint8Array;
+  direction: SelectionDirection;
+  sequence: number;
+}
+
+export interface LegacySelectionPresenceV1 {
+  version: 1;
+  anchorOffset: number;
+  headOffset: number;
+  direction: SelectionDirection;
+}
+
+interface SelectionPresenceV2Wire {
+  v: 2;
+  anchor: string;
+  head: string;
+  direction: SelectionDirection;
+  sequence: number;
+}
+
+export function encodeSelectionPresence(value: SelectionPresenceV2): SelectionPresenceV2Wire {
+  validateAnchor(value.anchor);
+  validateAnchor(value.head);
+  validateSequence(value.sequence);
+  validateDirection(value.direction);
+  return {
+    v: 2,
+    anchor: toBase64Url(value.anchor),
+    head: toBase64Url(value.head),
+    direction: value.direction,
+    sequence: value.sequence,
+  };
+}
+
+/** Decode untrusted ephemeral JSON, bounding anchor allocation before Wasm sees it. */
+export function decodeSelectionPresence(
+  value: unknown,
+): SelectionPresenceV2 | LegacySelectionPresenceV1 | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const wire = value as Record<string, unknown>;
+  if (wire.v === 2) {
+    if (typeof wire.anchor !== 'string' || typeof wire.head !== 'string') return null;
+    if (!isDirection(wire.direction) || !isSequence(wire.sequence)) return null;
+    const anchor = fromBase64Url(wire.anchor);
+    const head = fromBase64Url(wire.head);
+    if (!anchor || !head) return null;
+    return { version: 2, anchor, head, direction: wire.direction, sequence: wire.sequence };
+  }
+
+  // Bounded compatibility with the former `{from,to}` selection value.
+  if (isLegacyOffset(wire.from) && isLegacyOffset(wire.to)) {
+    const direction = wire.from <= wire.to ? 'forward' : 'backward';
+    return {
+      version: 1,
+      anchorOffset: wire.from,
+      headOffset: wire.to,
+      direction,
+    };
+  }
+  return null;
+}
+
+function fromBase64Url(value: string): Uint8Array | null {
+  if (!/^[A-Za-z0-9_-]+$/u.test(value)) return null;
+  // Check encoded size before decoding/allocating and reject non-canonical input.
+  if (value.length > Math.ceil(MAX_SELECTION_ANCHOR_BYTES * 4 / 3)) return null;
+  try {
+    const padded = value.replace(/-/g, '+').replace(/_/g, '/')
+      + '='.repeat((4 - value.length % 4) % 4);
+    const binary = atob(padded);
+    if (binary.length === 0 || binary.length > MAX_SELECTION_ANCHOR_BYTES) return null;
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  } catch {
+    return null;
+  }
+}
+
+function validateAnchor(value: Uint8Array): void {
+  if (!(value instanceof Uint8Array) || value.byteLength === 0
+      || value.byteLength > MAX_SELECTION_ANCHOR_BYTES) {
+    throw new RangeError('marks: invalid selection anchor length');
+  }
+}
+
+function isDirection(value: unknown): value is SelectionDirection {
+  return value === 'forward' || value === 'backward';
+}
+
+function validateDirection(value: unknown): asserts value is SelectionDirection {
+  if (!isDirection(value)) throw new TypeError('marks: invalid selection direction');
+}
+
+function isSequence(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function validateSequence(value: unknown): asserts value is number {
+  if (!isSequence(value)) throw new RangeError('marks: invalid selection sequence');
+}
+
+function isLegacyOffset(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= 0
+    && (value as number) <= MAX_LEGACY_SELECTION_OFFSET;
+}
+
 export type MutationKind = 'update' | 'snapshot';
 
 export interface CommittedReceipt {

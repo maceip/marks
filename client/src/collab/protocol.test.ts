@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { decodeCommitted, encodeMutation } from './protocol.ts';
+import {
+  MAX_LEGACY_SELECTION_OFFSET,
+  decodeCommitted,
+  decodeSelectionPresence,
+  encodeMutation,
+  encodeSelectionPresence,
+} from './protocol.ts';
 
 test('mutation envelope matches the Rust binary contract', () => {
   const encoded = encodeMutation('07070707070707070707070707070707', 'snapshot', new Uint8Array([1, 2]));
@@ -10,6 +16,35 @@ test('mutation envelope matches the Rust binary contract', () => {
   assert.deepEqual([...encoded.subarray(6, 22)], new Array(16).fill(7));
   assert.equal(new DataView(encoded.buffer).getUint32(22, true), 2);
   assert.deepEqual([...encoded.subarray(26)], [1, 2]);
+});
+
+test('selection presence v2 roundtrips bytes and rejects oversized anchors before decode', () => {
+  const encoded = encodeSelectionPresence({
+    version: 2,
+    anchor: new Uint8Array([0, 1, 254, 255]),
+    head: new Uint8Array([9, 8]),
+    direction: 'backward',
+    sequence: 42,
+  });
+  assert.deepEqual(decodeSelectionPresence(encoded), {
+    version: 2,
+    anchor: new Uint8Array([0, 1, 254, 255]),
+    head: new Uint8Array([9, 8]),
+    direction: 'backward',
+    sequence: 42,
+  });
+  assert.equal(decodeSelectionPresence({ ...encoded, anchor: 'A'.repeat(5_500) }), null);
+  assert.equal(decodeSelectionPresence({ ...encoded, sequence: -1 }), null);
+});
+
+test('selection presence retains only bounded v1 offsets for rolling upgrades', () => {
+  assert.deepEqual(decodeSelectionPresence({ from: 7, to: 2 }), {
+    version: 1,
+    anchorOffset: 7,
+    headOffset: 2,
+    direction: 'backward',
+  });
+  assert.equal(decodeSelectionPresence({ from: 0, to: MAX_LEGACY_SELECTION_OFFSET + 1 }), null);
 });
 
 test('committed receipt decoder rejects truncation and returns exact revision', () => {
