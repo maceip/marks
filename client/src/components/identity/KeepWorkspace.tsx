@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { getActiveCaller } from '../../auth/caller';
 import { bindPendingDevice } from '../../auth/pending-device';
 import {
   finalizePairing,
@@ -40,19 +41,24 @@ function copyForFailure(error: unknown) {
 
 export function KeepWorkspace({ onNotify, onOpenPhone, onPromoted, phone = false }: KeepWorkspaceProps) {
   const service = UI_DATA_MODE === 'service';
+  // Reopening the dialog on an already-promoted tab shows the kept state
+  // instead of a keep button that can only fail closed.
+  const [alreadyKept] = useState(() => service && getActiveCaller()?.kind === 'session');
   const [ticket, setTicket] = useState<PairingTicket | null>(null);
-  const [status, setStatus] = useState<'idle' | 'minting' | 'waiting' | 'kept' | 'failed'>('idle');
+  const [status, setStatus] = useState<'idle' | 'minting' | 'waiting' | 'kept' | 'failed'>(
+    alreadyKept ? 'kept' : 'idle',
+  );
   const [keeping, setKeeping] = useState(false);
   // On a phone there is nothing to scan this QR with; the pairing rail stays
   // one tap away instead of being the only door.
-  const [pairingOpen, setPairingOpen] = useState(!phone);
+  const [pairingOpen, setPairingOpen] = useState(!phone && !alreadyKept);
   const onNotifyRef = useRef(onNotify);
   const onPromotedRef = useRef(onPromoted);
   onNotifyRef.current = onNotify;
   onPromotedRef.current = onPromoted;
 
   useEffect(() => {
-    if (!service || !pairingOpen) return;
+    if (!service || !pairingOpen || alreadyKept) return;
     let cancelled = false;
     let poll: number | undefined;
     void (async () => {
@@ -88,7 +94,7 @@ export function KeepWorkspace({ onNotify, onOpenPhone, onPromoted, phone = false
       cancelled = true;
       if (poll) window.clearInterval(poll);
     };
-  }, [service, pairingOpen]);
+  }, [service, pairingOpen, alreadyKept]);
 
   const keepHere = async () => {
     if (!service) {
@@ -130,8 +136,14 @@ export function KeepWorkspace({ onNotify, onOpenPhone, onPromoted, phone = false
 
   return (
     <div className="identity-dialog">
-      <p className="identity-lede">{phone ? SELF_KEEP_PHONE_LINE : SCRATCH_UPGRADE_LINE}</p>
-      <p className="identity-note">{SCRATCH_HONEST_LINE}</p>
+      <p className="identity-lede">
+        {kept
+          ? 'This workspace is kept. Documents follow your account key and open on every device you link.'
+          : phone
+            ? SELF_KEEP_PHONE_LINE
+            : SCRATCH_UPGRADE_LINE}
+      </p>
+      {!kept && <p className="identity-note">{SCRATCH_HONEST_LINE}</p>}
 
       {phone && !kept && (
         <div className="keep-solo">
