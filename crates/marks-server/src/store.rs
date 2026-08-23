@@ -215,7 +215,7 @@ pub fn load_session(conn: &Connection, id: &SessionId) -> ApiResult<Option<Store
 pub fn load_pairing(conn: &Connection, id: &PairingId) -> ApiResult<Option<PairingRecord>> {
     conn.query_row(
         "SELECT id, scratch_id, pending_device_id, pending_device_public_key_hash, secret_hash,
-                expires_at, consumed_at, approved_principal_id
+                expires_at, consumed_at, approved_principal_id, word_code_hash
          FROM pairings WHERE id = ?1",
         params![id.as_str()],
         |row| {
@@ -228,18 +228,30 @@ pub fn load_pairing(conn: &Connection, id: &PairingId) -> ApiResult<Option<Pairi
                 row.get::<_, i64>(5)?,
                 row.get::<_, Option<i64>>(6)?,
                 row.get::<_, Option<String>>(7)?,
+                row.get::<_, Option<Vec<u8>>>(8)?,
             ))
         },
     )
     .optional()?
     .map(
-        |(id, scratch, pending, key_hash, secret_hash, expires_at, consumed_at, approved)| {
+        |(
+            id,
+            scratch,
+            pending,
+            key_hash,
+            secret_hash,
+            expires_at,
+            consumed_at,
+            approved,
+            words,
+        )| {
             Ok(PairingRecord {
                 id: PairingId::new(id).map_err(|_| ApiError::internal())?,
                 scratch_id: ScratchId::new(scratch).map_err(|_| ApiError::internal())?,
                 pending_device_id: DeviceId::new(pending).map_err(|_| ApiError::internal())?,
                 pending_device_public_key_hash: hash32(key_hash)?,
                 secret_hash: hash32(secret_hash)?,
+                word_code_hash: words.map(hash32).transpose()?,
                 expires_at_ms: from_ms(expires_at),
                 consumed_at_ms: opt_ms(consumed_at),
                 approved_principal_id: approved
@@ -249,6 +261,26 @@ pub fn load_pairing(conn: &Connection, id: &PairingId) -> ApiResult<Option<Pairi
         },
     )
     .transpose()
+}
+
+pub fn load_pairing_by_word_hash(
+    conn: &Connection,
+    word_code_hash: &[u8; 32],
+) -> ApiResult<Option<PairingRecord>> {
+    let id: Option<String> = conn
+        .query_row(
+            "SELECT id FROM pairings WHERE word_code_hash = ?1",
+            params![word_code_hash.as_slice()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    match id {
+        Some(id) => {
+            let pairing_id = PairingId::new(id).map_err(|_| ApiError::internal())?;
+            load_pairing(conn, &pairing_id)
+        }
+        None => Ok(None),
+    }
 }
 
 pub fn load_device_challenge(

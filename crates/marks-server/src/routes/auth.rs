@@ -18,13 +18,15 @@ use base64ct::{Base64UrlUnpadded, Encoding};
 use marks_auth::{
     ChallengeId, ControllerBootstrap, DeviceCapabilities, DeviceGrant, DeviceId,
     DeviceSessionProof, PairingId, PrincipalId, SESSION_COOKIE_NAME, ScratchId, SessionId,
-    VerifiedEmailEvidence, authorize_controller_bootstrap, authorize_device_session,
-    authorize_email_promotion, authorize_locator_attach, authorize_pairing,
-    authorize_pairing_finalize, authorize_pairing_inspect, authorize_pairing_request,
+    VerifiedEmailEvidence, authorize_controller_bootstrap, authorize_controller_bootstrap_words,
+    authorize_device_session, authorize_email_promotion, authorize_locator_attach,
+    authorize_pairing, authorize_pairing_finalize, authorize_pairing_inspect,
+    authorize_pairing_inspect_words, authorize_pairing_request, authorize_pairing_words,
     authorize_revoke_device, bearer_secret_hash, bind_pending_device, encode_bearer_secret,
-    pairing_matches_pending, pairing_secret_hash, scratch_capability_hash,
-    select_principal_for_controller_grant, select_principal_for_email_locator, session_csrf_token,
-    session_secret_hash, validate_claimed_scratch_capability,
+    generate_pairing_words, normalize_pairing_words, pairing_matches_pending, pairing_secret_hash,
+    pairing_word_code_hash, scratch_capability_hash, select_principal_for_controller_grant,
+    select_principal_for_email_locator, session_csrf_token, session_secret_hash,
+    validate_claimed_scratch_capability,
 };
 use rusqlite::{Connection, params};
 use serde::Deserialize;
@@ -254,6 +256,10 @@ pub async fn pairing_create(
     let now = now_ms();
     let id = new_id("pairing");
     let secret = new_secret();
+    let mut word_entropy = [0_u8; 6];
+    word_entropy.copy_from_slice(&new_secret()[..6]);
+    let words = generate_pairing_words(word_entropy);
+    let word_code_hash = pairing_word_code_hash(&words);
     let expires_at = now.saturating_add(app.config.pairing_ttl_ms);
     app.db.tx(|conn| {
         let pending = store::load_pending_device(conn, &scratch.authority.scratch_id)?
@@ -263,8 +269,8 @@ pub async fn pairing_create(
         conn.execute(
             "INSERT INTO pairings
                 (id, scratch_id, pending_device_id, pending_device_public_key_hash, secret_hash,
-                 expires_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                 expires_at, word_code_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 id,
                 scratch.authority.scratch_id.as_str(),
@@ -272,6 +278,7 @@ pub async fn pairing_create(
                 pending.public_key_hash,
                 pairing_secret_hash(&secret),
                 store::ms(expires_at),
+                word_code_hash,
             ],
         )?;
         Ok(())
@@ -282,6 +289,7 @@ pub async fn pairing_create(
         Json(json!({
             "pairingId": id,
             "secret": b64(&secret),
+            "words": words,
             "expiresAtMs": expires_at,
             "url": format!("{}/link{fragment}", app.config.origin),
         })),
@@ -292,30 +300,90 @@ pub async fn pairing_create(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PairingSecretBody {
-    pub secret: String,
+    pub secret: Option<String>,
+    pub words: Option<String>,
+}
+
+enum PairingPresented {
+    Secret([u8; 32]),
+    Words(String),
+}
+
+fn presented_pairing(body: &PairingSecretBody) -> ApiResult<PairingPresented> {
+    match (body.secret.as_deref(), body.words.as_deref()) {
+        (Some(secret), None) => Ok(PairingPresented::Secret(b64_32(secret)?)),
+        (None, Some(words)) => Ok(PairingPresented::Words(words.to_owned())),
+        _ => Err(ApiError::bad_request("pairing proof required")),
+    }
+}
+
+fn unlock_pairing(
+    pairing: &marks_auth::PairingRecord,
+    presented: &PairingPresented,
+    now: u64,
+) -> ApiResult<()> {
+    match presented {
+        PairingPresented::Secret(secret) => {
+            authorize_pairing_inspect(pairing, secret, now).map_err(|_| ApiError::unauthenticated())
+        }
+        PairingPresented::Words(words) => authorize_pairing_inspect_words(pairing, words, now)
+            .map_err(|_| ApiError::unauthenticated()),
+    }
+}
+
+fn pairing_inspect_json(app: &App, pairing: &marks_auth::PairingRecord) -> serde_json::Value {
+    json!({
+        "origin": app.config.origin,
+        "pairingId": pairing.id.as_str(),
+        "scratchId": pairing.scratch_id.as_str(),
+        "pendingDeviceId": pairing.pending_device_id.as_str(),
+        "pendingDevicePublicKeyHash": b64(&pairing.pending_device_public_key_hash),
+        "expiresAtMs": pairing.expires_at_ms,
+    })
+}
+
+/// `POST /v1/auth/pairings/lookup`: camera-less inspect. The four-word code
+/// selects the live pairing. A guessed phrase is the same 401 as a guessed
+/// fragment.
+pub async fn pairing_lookup(
+    State(app): State<Arc<App>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<PairingSecretBody>,
+) -> ApiResult<Response> {
+    rate(&app, &headers, &addr, "pairing-words", 10)?;
+    let PairingPresented::Words(words) = presented_pairing(&body)? else {
+        return Err(ApiError::bad_request("words required"));
+    };
+    let canonical = normalize_pairing_words(&words).map_err(|_| ApiError::unauthenticated())?;
+    let hash = pairing_word_code_hash(&canonical);
+    let now = now_ms();
+    let details = app.db.read(|conn| {
+        let pairing =
+            store::load_pairing_by_word_hash(conn, &hash)?.ok_or_else(ApiError::unauthenticated)?;
+        authorize_pairing_inspect_words(&pairing, &words, now)
+            .map_err(|_| ApiError::unauthenticated())?;
+        Ok(pairing_inspect_json(&app, &pairing))
+    })?;
+    Ok(Json(details).into_response())
 }
 
 /// `POST /v1/auth/pairings/{id}/inspect`: safe confirmation details for the
-/// phone. Requires the pairing secret; reveals nothing to a guessed ID.
+/// phone. Requires the pairing secret or the four-word code; reveals nothing
+/// to a guessed ID.
 pub async fn pairing_inspect(
     State(app): State<Arc<App>>,
     Path(id): Path<String>,
     Json(body): Json<PairingSecretBody>,
 ) -> ApiResult<Response> {
     let pairing_id = PairingId::new(id).map_err(|_| ApiError::unauthenticated())?;
-    let secret = b64_32(&body.secret).map_err(|_| ApiError::unauthenticated())?;
+    let presented = presented_pairing(&body)?;
     let now = now_ms();
     let details = app.db.read(|conn| {
         let pairing =
             store::load_pairing(conn, &pairing_id)?.ok_or_else(ApiError::unauthenticated)?;
-        authorize_pairing_inspect(&pairing, &secret, now)
-            .map_err(|_| ApiError::unauthenticated())?;
-        Ok(json!({
-            "origin": app.config.origin,
-            "pendingDeviceId": pairing.pending_device_id.as_str(),
-            "pendingDevicePublicKeyHash": b64(&pairing.pending_device_public_key_hash),
-            "expiresAtMs": pairing.expires_at_ms,
-        }))
+        unlock_pairing(&pairing, &presented, now)?;
+        Ok(pairing_inspect_json(&app, &pairing))
     })?;
     Ok(Json(details).into_response())
 }
@@ -323,7 +391,8 @@ pub async fn pairing_inspect(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BootstrapBody {
-    pub secret: String,
+    pub secret: Option<String>,
+    pub words: Option<String>,
     pub bootstrap: BootstrapStatement,
     /// Canonical SEC1 controller public key, base64url.
     #[serde(rename = "controllerPublicKey")]
@@ -410,7 +479,10 @@ pub async fn pairing_bootstrap(
     Json(body): Json<BootstrapBody>,
 ) -> ApiResult<Response> {
     let pairing_id = PairingId::new(id).map_err(|_| ApiError::unauthenticated())?;
-    let secret = b64_32(&body.secret).map_err(|_| ApiError::unauthenticated())?;
+    let presented = presented_pairing(&PairingSecretBody {
+        secret: body.secret.clone(),
+        words: body.words.clone(),
+    })?;
     let controller_public_key = b64_any(&body.controller_public_key)?;
     let signature = b64_any(&body.signature)?;
     let bootstrap = body.bootstrap.decode()?;
@@ -427,14 +499,24 @@ pub async fn pairing_bootstrap(
         pairing_matches_pending(&pairing, &pending).map_err(|_| ApiError::unauthenticated())?;
         marks_auth::require_live_pending_device(&pending, &pairing.scratch_id, now)
             .map_err(|_| ApiError::unauthenticated())?;
-        let authorized = authorize_controller_bootstrap(
-            &pairing,
-            &secret,
-            &bootstrap,
-            &controller_public_key,
-            &signature,
-            now,
-        )
+        let authorized = match &presented {
+            PairingPresented::Secret(secret) => authorize_controller_bootstrap(
+                &pairing,
+                secret,
+                &bootstrap,
+                &controller_public_key,
+                &signature,
+                now,
+            ),
+            PairingPresented::Words(words) => authorize_controller_bootstrap_words(
+                &pairing,
+                words,
+                &bootstrap,
+                &controller_public_key,
+                &signature,
+                now,
+            ),
+        }
         .map_err(|_| ApiError::unauthenticated())?;
 
         // The server, never the client, generates the principal.
@@ -513,7 +595,8 @@ pub async fn pairing_bootstrap(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ApproveBody {
-    pub secret: String,
+    pub secret: Option<String>,
+    pub words: Option<String>,
     pub grant: GrantStatement,
     pub signature: String,
 }
@@ -579,7 +662,10 @@ pub async fn pairing_approve(
     let cookie = guard::cookie_session(&app, &headers)?;
     guard::require_same_origin(&app, &headers)?;
     let pairing_id = PairingId::new(id).map_err(|_| ApiError::unauthenticated())?;
-    let secret = b64_32(&body.secret).map_err(|_| ApiError::unauthenticated())?;
+    let presented = presented_pairing(&PairingSecretBody {
+        secret: body.secret.clone(),
+        words: body.words.clone(),
+    })?;
     let signature = b64_any(&body.signature)?;
     let grant = body.grant.decode()?;
     if grant.pairing_id != pairing_id {
@@ -602,8 +688,15 @@ pub async fn pairing_approve(
         )?
         .ok_or_else(ApiError::forbidden)?;
         select_principal_for_controller_grant(&controller).map_err(|_| ApiError::forbidden())?;
-        let authorized = authorize_pairing(&pairing, &secret, &controller, &grant, &signature, now)
-            .map_err(|_| ApiError::unauthenticated())?;
+        let authorized = match &presented {
+            PairingPresented::Secret(secret) => {
+                authorize_pairing(&pairing, secret, &controller, &grant, &signature, now)
+            }
+            PairingPresented::Words(words) => {
+                authorize_pairing_words(&pairing, words, &controller, &grant, &signature, now)
+            }
+        }
+        .map_err(|_| ApiError::unauthenticated())?;
 
         insert_device(
             conn,

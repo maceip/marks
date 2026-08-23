@@ -37,6 +37,7 @@ mod scratch;
 mod session;
 mod ticket;
 mod wire;
+mod words;
 
 pub use acl::{
     AclError, DocumentAclRecord, LinkGrantRecord, authorize_link_grant_role, owner_acl_row,
@@ -77,8 +78,9 @@ pub use id::{
 pub use pairing::{
     AuthorizedBootstrap, AuthorizedFinalize, AuthorizedPairing, ControllerBootstrap,
     ControllerRecord, DeviceGrant, PairingError, PairingRecord, authorize_controller_bootstrap,
-    authorize_pairing, authorize_pairing_finalize, authorize_pairing_inspect,
-    authorize_pairing_request, mark_pairing_consumed, pairing_matches_pending, pairing_secret_hash,
+    authorize_controller_bootstrap_words, authorize_pairing, authorize_pairing_finalize,
+    authorize_pairing_inspect, authorize_pairing_inspect_words, authorize_pairing_request,
+    authorize_pairing_words, mark_pairing_consumed, pairing_matches_pending, pairing_secret_hash,
 };
 pub use pending::{
     PendingDeviceError, PendingDeviceRecord, bind_pending_device, require_live_pending_device,
@@ -101,4 +103,7 @@ pub use ticket::{
     DOCUMENT_TICKET_TTL_MS, DocumentTicketError, DocumentTicketRecord, ScratchDocumentTicketRecord,
     issue_document_ticket, issue_scratch_document_ticket, redeem_document_ticket,
     redeem_scratch_document_ticket, ticket_secret_hash,
+};
+pub use words::{
+    PAIRING_WORD_COUNT, generate_pairing_words, normalize_pairing_words, pairing_word_code_hash,
 };

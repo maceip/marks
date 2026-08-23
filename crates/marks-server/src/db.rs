@@ -285,4 +285,15 @@ const MIGRATIONS: &[(i64, &str)] = &[
     ALTER TABLE auth_challenges ADD COLUMN key_epoch INTEGER;
     ",
     ),
+    (
+        3,
+        "
+    -- Four-word accessibility code for camera-less pairing. Only the
+    -- domain-separated digest is stored; the words never persist.
+    ALTER TABLE pairings ADD COLUMN word_code_hash BLOB;
+    CREATE UNIQUE INDEX pairings_word_code_hash
+        ON pairings(word_code_hash)
+        WHERE word_code_hash IS NOT NULL;
+    ",
+    ),
 ];

@@ -59,6 +59,7 @@ fn scratch_phone_bootstrap_finalize_session_and_room_actor_are_one_path() {
         pending_device_id: pending.id.clone(),
         pending_device_public_key_hash: pending.public_key_hash,
         secret_hash: pairing_secret_hash(&pairing_secret),
+        word_code_hash: None,
         expires_at_ms: now_ms + 120_000,
         consumed_at_ms: None,
         approved_principal_id: None,
