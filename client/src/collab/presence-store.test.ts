@@ -67,7 +67,9 @@ test("presence validates values before changing local state", () => {
   store.destroy();
 });
 
+
 test("presence expiry removes stale peers and notifies subscribers", async () => {
+
   const store = new PresenceStore(20);
   let notifications = 0;
   store.subscribe(() => {

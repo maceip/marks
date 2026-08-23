@@ -329,6 +329,7 @@ export class PresenceStore implements PresenceStoreApi {
   delete(key: string): void {
     if (this.destroyed) return;
     const entry = this.entries.get(key);
+
     if (!entry || entry.deleted) return;
     this.entries.set(key, {
       value: undefined,
@@ -338,6 +339,7 @@ export class PresenceStore implements PresenceStoreApi {
       local: true,
     });
     this.emitLocal();
+
     this.notify();
   }
   keys(): string[] {

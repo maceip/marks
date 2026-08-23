@@ -31,6 +31,7 @@ import {
   type ReplicaJournalRecord,
 } from './journal';
 import { HEARTBEAT_MS, esbtPresence } from './presence';
+import { PresenceActivityController } from './presence-activity-controller';
 import { PresenceStore } from './presence-store';
 import { EDITOR_CHUNK_UNITS } from './profile';
 import {
@@ -126,6 +127,7 @@ export class EsbtEngine implements CollabSession {
   private reconnectDelay = RECONNECT_MIN_MS;
   private reconnectTimer: number | null = null;
   private presenceHeartbeat: number | null = null;
+  private readonly activity: PresenceActivityController;
   private snapshotReplyTimer: number | null = null;
   private lastServerVV: Uint8Array | null = null;
   private lastAckedVersion: Uint8Array | null = null;
@@ -210,6 +212,12 @@ export class EsbtEngine implements CollabSession {
       onUpdate: (bytes) => this.importFromTab(bytes, 'update'),
       onSnapshot: (bytes) => this.importFromTab(bytes, 'snapshot'),
     });
+    this.activity = new PresenceActivityController({
+      publishActive: () => this.publishUser(),
+      publishInactive: () => this.clearLocalPresence(),
+      windowTarget: window,
+      documentTarget: document,
+    });
 
     this.extension = [
       this.editable,
@@ -223,7 +231,9 @@ export class EsbtEngine implements CollabSession {
         }
         return [];
       }),
-      esbtPresence(() => this.presenceSiteId(), () => this.doc, this.ephemeral),
+
+      esbtPresence(() => this.presenceSiteId(), () => this.doc, this.ephemeral, this.activity),
+
       this.syncExtension(),
       this.undoExtensions(),
     ];
@@ -267,9 +277,9 @@ export class EsbtEngine implements CollabSession {
         void this.persistAndSendMutation(bytes, 'update', true);
       }),
     );
-    this.publishUser();
+    this.activity.start();
     if (this.presenceHeartbeat === null) {
-      this.presenceHeartbeat = window.setInterval(() => this.publishUser(), HEARTBEAT_MS);
+      this.presenceHeartbeat = window.setInterval(() => this.activity.heartbeat(), HEARTBEAT_MS);
     }
     this.unsubscribers.push(
       this.ephemeral.subscribe(() => this.refreshPeers()),
@@ -284,6 +294,12 @@ export class EsbtEngine implements CollabSession {
       active: true,
       colorPreference: this.user.colorIndex,
     });
+  }
+
+  private clearLocalPresence(): void {
+    const siteId = this.presenceSiteId();
+    this.ephemeral.delete(userKey(siteId));
+    this.ephemeral.delete(`${siteId}-cm-sel`);
   }
 
   private redo(): boolean {
@@ -939,15 +955,16 @@ export class EsbtEngine implements CollabSession {
   };
 
   private handleVisibility = (): void => {
-    if (document.visibilityState === 'hidden') {
-      this.flushLocalSave();
-      return;
-    }
-    this.tabs.requestSnapshot();
+    if (document.visibilityState === 'hidden') this.flushLocalSave();
+    else this.tabs.requestSnapshot();
   };
 
   private handlePageHide = (): void => {
     this.flushLocalSave();
+    // Emit tombstones while the transport is still available, then close it.
+    this.activity.pagehide();
+    this.socket?.close();
+    this.socket = null;
   };
 
   private importRemote(bytes: Uint8Array): void {
@@ -1422,6 +1439,7 @@ export class EsbtEngine implements CollabSession {
     if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
     if (this.snapshotReplyTimer !== null) clearTimeout(this.snapshotReplyTimer);
     if (this.presenceHeartbeat !== null) clearInterval(this.presenceHeartbeat);
+    this.activity.disconnect();
     if (this.markdownTimer !== null) window.clearTimeout(this.markdownTimer);
     for (const unsubscribe of this.unsubscribers) unsubscribe();
     this.tabs.destroy();

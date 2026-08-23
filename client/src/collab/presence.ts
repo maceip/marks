@@ -20,6 +20,8 @@ import {
   WidgetType,
 } from '@codemirror/view';
 import type { PresenceStoreApi } from './presence-store';
+import type { PresenceActivityController } from './presence-activity-controller';
+
 import {
   encodeSelectionPresence,
   type SelectionDirection,
@@ -30,6 +32,7 @@ import {
   type PresenceDocument,
 } from './presence-position';
 import type { EsbtDocument } from './wasm/esbt-document';
+
 
 export const HEARTBEAT_MS = 15_000;
 
@@ -112,6 +115,7 @@ export function esbtPresence(
   getSiteId: () => string,
   getDocument: () => EsbtDocument | null,
   presence: PresenceStoreApi,
+  activity: PresenceActivityController,
 ): Extension {
   const selectionKeyFor = () => `${getSiteId()}-cm-sel`;
 
@@ -126,10 +130,13 @@ export function esbtPresence(
 
 
     const publishSelection = (): void => {
+      if (!activity.active || !view.hasFocus) return;
+
       if (publishTimer !== null) clearTimeout(publishTimer);
       if (publishFrame !== null) cancelAnimationFrame(publishFrame);
       publishTimer = null;
       publishFrame = null;
+
       const main = view.state.selection.main;
 
       const document = getDocument();
@@ -169,13 +176,18 @@ export function esbtPresence(
     const unsubscribeReplica = getDocument()?.onReplicaChange(scheduleRefresh) ?? (() => {});
     const heartbeat = window.setInterval(publishSelection, HEARTBEAT_MS);
 
-    publishSelection();
+    if (view.hasFocus) {
+      activity.recordActivity();
+      publishSelection();
+    }
     scheduleRefresh();
 
     return {
       update(update) {
         if (update.selectionSet || update.docChanged || update.focusChanged) {
+
           scheduleSelection(dragging);
+
         }
       },
       destroy() {
