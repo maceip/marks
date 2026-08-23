@@ -23,6 +23,7 @@
     "test:esbt": "npm test --workspace=@marks/esbt",
     "test:browser": "node --experimental-strip-types --test client/src/browser/*.test.ts",
     "test:markdown": "node --experimental-strip-types --test client/src/markdown/*.test.ts",
+    "test:wasm": "node --experimental-strip-types --test client/src/collab/*.test.ts client/src/collab/wasm/*.test.ts",
     "test:auth": "node --experimental-strip-types --test client/src/auth/*.test.ts",
     "test:harness": "node --test scripts/harness/*.test.mjs",
     "harness:probe": "node scripts/harness/probe.mjs",

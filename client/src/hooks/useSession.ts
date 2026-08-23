@@ -65,9 +65,13 @@ export function useSession(
           });
 
     void factory
-      .then((create) => {
-        if (!active) return;
-        next = create();
+      .then((create) => create())
+      .then((session) => {
+        if (!active) {
+          session.destroy();
+          return;
+        }
+        next = session;
         setSession(next);
         setStatus(next.status());
         setPeers(next.peers());

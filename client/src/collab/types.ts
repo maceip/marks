@@ -25,11 +25,18 @@ export interface RoomTicket {
   roomUrl: string;
   ticketId: string;
   ticketSecret: string;
+  /** Room-allocated u32 site, decimal string. Persist and reuse. */
+  siteId: string;
 }
 
 export interface DocumentAccessProvider {
   fetchSnapshot(documentId: string, signal: AbortSignal): Promise<Response>;
-  admit(documentId: string, siteId: string, signal: AbortSignal): Promise<RoomTicket>;
+  admit(documentId: string, siteId: string | undefined, signal: AbortSignal): Promise<RoomTicket>;
+}
+
+export interface EngineErrorNotice {
+  code: number;
+  message: string;
 }
 
 export interface EngineStats {
@@ -39,6 +46,13 @@ export interface EngineStats {
   received: number;
   /** Bytes sent to the network since the session opened. */
   sent: number;
+  lastUpdateBytes: number;
+  retainedOperations: number;
+  pendingOperations: number;
+  historyFloorBytes: number;
+  currentDmax: number;
+  /** True after the local IndexedDB journal accepted the latest edit. */
+  localSaved: boolean;
 }
 
 /**
@@ -71,6 +85,7 @@ export interface CollabSession {
   onTextChange(listener: (text: string) => void): () => void;
   onStatusChange(listener: (status: ConnectionStatus) => void): () => void;
   onPeersChange(listener: (peers: Peer[]) => void): () => void;
+  onError?(listener: (error: EngineErrorNotice) => void): () => void;
 
   /** True once the local replica has been read, even if the document is empty. */
   hydrated(): boolean;
@@ -82,5 +97,5 @@ export interface CollabSession {
 export interface SessionOptions {
   docId: string;
   user: LocalUser;
-  access: DocumentAccessProvider;
+  access?: DocumentAccessProvider;
 }

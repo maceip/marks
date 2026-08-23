@@ -19,7 +19,7 @@ import {
   ViewPlugin,
   WidgetType,
 } from '@codemirror/view';
-import type { EphemeralStoreType, EsbtDoc } from '@marks/esbt';
+import type { EphemeralStoreType } from '@marks/esbt';
 
 export const HEARTBEAT_MS = 15_000;
 
@@ -134,8 +134,12 @@ function buildDecorations(
  * engine, which outlives the editor view — the presence bar must show
  * people even in preview-only mode, where no editor is mounted.
  */
-export function esbtPresence(doc: EsbtDoc, presence: EphemeralStoreType): Extension {
-  const selectionKey = `${doc.siteId}-cm-sel`;
+export function esbtPresence(
+  getSiteId: () => string,
+  getLength: () => number,
+  presence: EphemeralStoreType,
+): Extension {
+  const selectionKeyFor = () => `${getSiteId()}-cm-sel`;
 
   const plugin = ViewPlugin.define((view) => {
     let destroyed = false;
@@ -143,15 +147,15 @@ export function esbtPresence(doc: EsbtDoc, presence: EphemeralStoreType): Extens
 
     const publishSelection = (): void => {
       const main = view.state.selection.main;
-      presence.set(selectionKey, { from: main.from, to: main.to });
+      presence.set(selectionKeyFor(), { from: main.from, to: main.to });
     };
 
     const refresh = (): void => {
       if (destroyed) return;
       const decorations = buildDecorations(
         presence.getAllStates(),
-        doc.siteId,
-        view.state.doc.length,
+        getSiteId(),
+        getLength() || view.state.doc.length,
       );
       view.dispatch({ effects: setPresenceDecorations.of(decorations) });
     };
@@ -184,7 +188,7 @@ export function esbtPresence(doc: EsbtDoc, presence: EphemeralStoreType): Extens
         destroyed = true;
         clearInterval(heartbeat);
         unsubscribe();
-        presence.delete(selectionKey);
+        presence.delete(selectionKeyFor());
       },
     };
   });

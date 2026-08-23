@@ -21,6 +21,8 @@ export interface RenderStats {
   /** Blocks that had to be re-rendered this pass. */
   dirty: number;
   parseMs: number;
+  /** `incremental` when only dirty source blocks were tokenized. */
+  parseMode?: 'full' | 'incremental';
   renderMs: number;
   /** Bytes of HTML shipped to the main thread. */
   bytes: number;

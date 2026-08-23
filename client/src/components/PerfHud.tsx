@@ -59,7 +59,11 @@ export function PerfHud({ snapshot, onClose, onOpenBenchmark }: PerfHudProps) {
         />
         <Row label="Blocks" value={`${formatCount(snapshot.dirty)} dirty / ${formatCount(snapshot.blocks)}`} />
         <Row label="DOM ops" value={formatCount(snapshot.touched)} hint="Nodes created, replaced or moved" />
-        <Row label="Parse" value={formatMs(snapshot.parseMs)} hint="markdown-it tokenizing, in the worker" />
+        <Row
+          label="Parse"
+          value={`${formatMs(snapshot.parseMs)}${snapshot.parseMode ? ` · ${snapshot.parseMode}` : ''}`}
+          hint="markdown-it tokenizing, in the worker. Incremental parses only dirty source blocks."
+        />
         <Row label="Render" value={formatMs(snapshot.renderMs)} hint="HTML generation for dirty blocks only" />
         <Row label="Patch" value={formatMs(snapshot.patchMs)} hint="Main-thread DOM mutation" />
         <Row label="HTML shipped" value={formatBytes(snapshot.htmlBytes)} hint="Worker → main thread, this pass" />
@@ -70,6 +74,11 @@ export function PerfHud({ snapshot, onClose, onOpenBenchmark }: PerfHudProps) {
         <Row label="Engine" value={snapshot.engine} />
         <Row label="Size" value={`${formatCount(snapshot.chars)} chars`} />
         <Row label="Snapshot" value={formatBytes(snapshot.snapshotBytes)} hint="Encoded CRDT state" />
+        <Row label="Last update" value={formatBytes(snapshot.lastUpdateBytes)} hint="Canonical bytes of the last local transaction" />
+        <Row label="Retained ops" value={formatCount(snapshot.retainedOperations)} hint="Journal pressure; compaction prunes after a server ack" />
+        <Row label="Pending ops" value={formatCount(snapshot.pendingOperations)} hint="Causally early operations waiting on the transport" />
+        <Row label="Dmax" value={formatCount(snapshot.currentDmax)} hint="Adaptive allocation bound" />
+        <Row label="On this device" value={snapshot.localSaved ? 'saved' : 'writing'} hint="IndexedDB journal commit" />
         <Row label="Sent" value={formatBytes(snapshot.sent)} />
         <Row label="Received" value={formatBytes(snapshot.received)} />
       </section>

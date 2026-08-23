@@ -20,6 +20,12 @@ export interface HudSnapshot {
   snapshotBytes: number;
   sent: number;
   received: number;
+  lastUpdateBytes: number;
+  retainedOperations: number;
+  pendingOperations: number;
+  currentDmax: number;
+  parseMode: 'full' | 'incremental' | '';
+  localSaved: boolean;
 }
 
 export const EMPTY_SNAPSHOT: HudSnapshot = {
@@ -40,4 +46,10 @@ export const EMPTY_SNAPSHOT: HudSnapshot = {
   snapshotBytes: 0,
   sent: 0,
   received: 0,
+  lastUpdateBytes: 0,
+  retainedOperations: 0,
+  pendingOperations: 0,
+  currentDmax: 0,
+  parseMode: '',
+  localSaved: false,
 };

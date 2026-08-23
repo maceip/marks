@@ -1,64 +1,90 @@
 import { Annotation, Prec, type Extension } from '@codemirror/state';
 import { ViewPlugin, keymap, type EditorView } from '@codemirror/view';
-import { get as idbGet, set as idbSet } from 'idb-keyval';
-import { EphemeralStore, EsbtDoc, UndoManager, VersionVector } from '@marks/esbt';
+import { EphemeralStore } from '@marks/esbt';
 import {
-  persistLockName,
   readNetworkQuality,
   snapshotFetchTimeoutMs,
   TabChannel,
   tabChannelName,
-  writeSnapshotUnderLock,
 } from '../browser';
 import { roomTicketProtocols } from '../auth/room-access';
+import { readLocalDocumentText, writeLocalDocumentText } from '../demo/workspace';
+import {
+  appendJournalUpdate,
+  JOURNAL_RETAINED_THRESHOLD,
+  readReplicaJournal,
+  shouldPruneHistory,
+  writeReplicaJournal,
+  type ReplicaJournalRecord,
+} from './journal';
 import { HEARTBEAT_MS, esbtPresence } from './presence';
-import { MSG_EPHEMERAL, MSG_SERVER_VV, MSG_SNAPSHOT, MSG_SYNCED, MSG_UPDATE, frame, toBase64Url } from './protocol';
-import type { CollabSession, ConnectionStatus, EngineStats, Peer, SessionOptions } from './types';
+import {
+  MSG_EPHEMERAL,
+  MSG_SERVER_VV,
+  MSG_SNAPSHOT,
+  MSG_SYNCED,
+  MSG_UPDATE,
+  frame,
+  toBase64Url,
+} from './protocol';
+import type {
+  CollabSession,
+  ConnectionStatus,
+  EngineErrorNotice,
+  EngineStats,
+  Peer,
+  RoomTicket,
+  SessionOptions,
+} from './types';
+import {
+  ESBT_ERROR,
+  EsbtDocument,
+  EsbtError,
+  EsbtRuntime,
+  MARKS_DOCUMENT_CONFIG,
+  engineSiteToMarks,
+  exportReconnectPayload,
+  isEsbtError,
+  isRefusedEdit,
+  isSnapshotRefusal,
+  marksSiteToEngine,
+  userMessageForError,
+} from './wasm';
 
 const EPHEMERAL_TIMEOUT_MS = 30_000;
 const LOCAL_SAVE_DEBOUNCE_MS = 800;
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 8_000;
-/** The server's close code for a document that no longer exists. */
 const CLOSE_DOCUMENT_DELETED = 4404;
-
-/** Version vectors above this size are not worth putting in a URL. */
 const MAX_VV_QUERY_BYTES = 4_096;
-
-/** A burst of keystrokes inside this window is one undo step. */
 const UNDO_MERGE_MS = 500;
+const MARKDOWN_CHECKPOINT_MS = 220;
 
 const userKey = (siteId: string) => `${siteId}-cm-user`;
-
-/** Marks an editor transaction as replaying the CRDT, not as a user edit. */
 const fromCrdt = Annotation.define<boolean>();
-
-/**
- * Commit origin for changes the editor already shows.
- *
- * Everything else that mutates the document locally — a checkbox ticked in the
- * preview, an import, undo — has to be pushed into the editor, so the origin is
- * what tells the two directions apart.
- */
 const EDITOR_ORIGIN = 'editor';
 
+let sharedRuntime: Promise<EsbtRuntime> | null = null;
+
+function loadRuntime(): Promise<EsbtRuntime> {
+  sharedRuntime ??= EsbtRuntime.load();
+  return sharedRuntime;
+}
+
 /**
- * The ESBT engine: the sequence CRDT of Mechaoui & Imine (arXiv:2607.28101),
- * running as plain TypeScript on the main thread.
+ * Production Marks client for the Rust/Wasm ESBT document.
  *
- * Every keystroke applies to the local replica synchronously — no WebAssembly
- * boundary, no worker round-trip — and the update bytes it emits go to the
- * room over one WebSocket per document (tag byte + payload, version-vector
- * deltas on reconnect) and to sibling tabs over a BroadcastChannel.
+ * Owns configuration, the IndexedDB journal, history compaction, reconnect
+ * fallbacks, and transaction batching. The engine never schedules those
+ * loops itself.
  */
 export class EsbtEngine implements CollabSession {
   readonly engine = 'esbt' as const;
   readonly docId: string;
   readonly extension: Extension;
 
-  private readonly doc = new EsbtDoc();
+  private doc: EsbtDocument | null = null;
   private readonly ephemeral = new EphemeralStore(EPHEMERAL_TIMEOUT_MS);
-  private readonly undoManager: UndoManager;
   private readonly user: SessionOptions['user'];
   private readonly access: SessionOptions['access'];
   private readonly tabs: TabChannel;
@@ -70,27 +96,48 @@ export class EsbtEngine implements CollabSession {
   private presenceHeartbeat: number | null = null;
   private snapshotReplyTimer: number | null = null;
   private lastServerVV: Uint8Array | null = null;
+  private lastAckedVersion: Uint8Array | null = null;
+  private lastPruneAt = 0;
+  private pendingTicket: RoomTicket | null = null;
   private destroyed = false;
   private isHydrated = false;
+  private localSaved = false;
+  private undoGroup = 1n;
+  private lastUndoAt = 0;
+  private marksSiteId = '';
 
   private currentStatus: ConnectionStatus = 'connecting';
   private cachedPeers: Peer[] = [];
-  private counters = { received: 0, sent: 0, snapshotBytes: 0 };
+  private counters = {
+    received: 0,
+    sent: 0,
+    snapshotBytes: 0,
+    lastUpdateBytes: 0,
+    retainedOperations: 0,
+    pendingOperations: 0,
+    historyFloorBytes: 0,
+    currentDmax: 0,
+  };
 
   private saveTimer: number | null = null;
+  private markdownTimer: number | null = null;
   private readonly unsubscribers: Array<() => void> = [];
   private readonly textListeners = new Set<(text: string) => void>();
   private readonly statusListeners = new Set<(status: ConnectionStatus) => void>();
   private readonly peerListeners = new Set<(peers: Peer[]) => void>();
   private readonly hydratedListeners = new Set<() => void>();
+  private readonly errorListeners = new Set<(error: EngineErrorNotice) => void>();
+
+  static async open(options: SessionOptions): Promise<EsbtEngine> {
+    const engine = new EsbtEngine(options);
+    await engine.start();
+    return engine;
+  }
 
   constructor({ docId, user, access }: SessionOptions) {
     this.docId = docId;
     this.user = user;
     this.access = access;
-    this.undoManager = new UndoManager(this.doc, {
-      mergeIntervalMs: UNDO_MERGE_MS,
-    });
     this.tabs = new TabChannel(tabChannelName('esbt', docId), {
       onHello: () => this.scheduleTabSnapshot(),
       onRequestSnapshot: () => this.scheduleTabSnapshot(),
@@ -99,57 +146,79 @@ export class EsbtEngine implements CollabSession {
     });
 
     this.extension = [
-      // Remote carets and selections; the local selection is published from
-      // inside the editor, identity is published here (see below) so the
-      // presence bar works even when no editor pane is mounted.
-      esbtPresence(this.doc, this.ephemeral),
+      esbtPresence(() => this.presenceSiteId(), () => this.doc?.length ?? 0, this.ephemeral),
       this.syncExtension(),
       this.undoExtensions(),
     ];
-
-    this.unsubscribers.push(
-      this.doc.subscribe(() => {
-        this.emitText();
-        this.scheduleLocalSave();
-      }),
-      this.doc.subscribeLocalUpdates((bytes) => {
-        this.send(MSG_UPDATE, bytes);
-        this.tabs.sendUpdate(bytes);
-      }),
-      this.ephemeral.subscribe(() => this.refreshPeers()),
-      this.ephemeral.subscribeLocalUpdates((bytes) => this.send(MSG_EPHEMERAL, bytes)),
-    );
-
-    // Identity lives on the engine, not the editor extension: entries expire
-    // after 30 s, so it is re-published on the y-protocols heartbeat cadence.
-    this.publishUser();
-    this.presenceHeartbeat = window.setInterval(() => this.publishUser(), HEARTBEAT_MS);
 
     window.addEventListener('online', this.handleOnline);
     window.addEventListener('offline', this.handleOffline);
     document.addEventListener('visibilitychange', this.handleVisibility);
     window.addEventListener('pagehide', this.handlePageHide);
+    window.addEventListener('beforeunload', this.handlePageHide);
+  }
 
-    void this.start();
+  private presenceSiteId(): string {
+    return this.marksSiteId || this.doc?.siteId || 'local';
+  }
+
+  private requireDoc(): EsbtDocument {
+    if (!this.doc) throw new Error('esbt: document is not ready');
+    return this.doc;
+  }
+
+  private nextUndoGroup(): bigint {
+    const now = Date.now();
+    if (now - this.lastUndoAt > UNDO_MERGE_MS) this.undoGroup += 1n;
+    this.lastUndoAt = now;
+    return this.undoGroup;
+  }
+
+  private bindDocument(doc: EsbtDocument): void {
+    this.doc = doc;
+    this.marksSiteId = engineSiteToMarks(doc.siteId);
+    this.unsubscribers.push(
+      doc.onChange(() => {
+        this.refreshTelemetry();
+        this.emitText();
+        this.scheduleLocalSave();
+        this.scheduleMarkdownCheckpoint();
+      }),
+      doc.onLocalUpdate((bytes) => {
+        this.counters.lastUpdateBytes = bytes.byteLength;
+        this.localSaved = false;
+        this.send(MSG_UPDATE, bytes);
+        this.tabs.sendUpdate(bytes);
+        void this.appendLocalUpdate(bytes);
+      }),
+    );
+    this.publishUser();
+    if (this.presenceHeartbeat === null) {
+      this.presenceHeartbeat = window.setInterval(() => this.publishUser(), HEARTBEAT_MS);
+    }
+    this.unsubscribers.push(
+      this.ephemeral.subscribe(() => this.refreshPeers()),
+      this.ephemeral.subscribeLocalUpdates((bytes) => this.send(MSG_EPHEMERAL, bytes)),
+    );
+    this.refreshPeers();
+    this.refreshTelemetry();
   }
 
   private publishUser(): void {
-    this.ephemeral.set(userKey(this.doc.siteId), {
+    this.ephemeral.set(userKey(this.presenceSiteId()), {
       name: this.user.name,
       colorClassName: `marks-user${this.user.colorIndex}`,
     });
   }
 
   private redo(): boolean {
-    if (this.undoManager.canRedo()) this.undoManager.redo();
+    if (!this.doc?.canRedo) return true;
+    this.doc.redo({ origin: 'redo' });
     return true;
   }
 
-  /**
-   * Bring the editor in line with the CRDT using the smallest edit that does
-   * it, so the cursor, scroll position and any selection survive.
-   */
   private reconcile(view: EditorView): void {
+    if (!this.doc) return;
     const target = this.doc.getText();
     const current = view.state.doc.toString();
     if (current === target) return;
@@ -175,59 +244,124 @@ export class EsbtEngine implements CollabSession {
     });
   }
 
-  /**
-   * Two-way document sync between CodeMirror and the replica. Local edits
-   * enter the CRDT under the "editor" origin; everything else — remote
-   * updates, undo, redo, preview writes — flows back into the editor through
-   * `reconcile`, so all mutations follow one path.
-   */
   private syncExtension(): Extension {
     return ViewPlugin.define((view) => {
       let disposed = false;
 
-      // A freshly mounted editor starts empty — switching view modes or
-      // reopening a document builds a new EditorView — so pull the current
-      // text in once. Deferred by a microtask because CodeMirror forbids
-      // dispatching while the view is still being constructed.
       queueMicrotask(() => {
         if (!disposed) this.reconcile(view);
       });
 
-      const unsubscribe = this.doc.subscribe((event) => {
-        // Skip only the changes the editor itself just made; remote updates,
-        // undo, redo and local writes from elsewhere in the UI all need to be
-        // reflected back into it.
-        if (event.origin === EDITOR_ORIGIN) return;
+      const unsubscribe = () => {
+        /* replaced after bind */
+      };
+      let off = unsubscribe;
+      const attach = (): void => {
+        if (!this.doc || disposed) return;
+        off();
+        off = this.doc.onChange((event) => {
+          if (event.origin === EDITOR_ORIGIN) return;
+          this.reconcile(view);
+        });
         this.reconcile(view);
-      });
+      };
+      attach();
+      const ready = window.setInterval(() => {
+        if (this.doc) {
+          window.clearInterval(ready);
+          attach();
+        }
+      }, 16);
 
       return {
         update: (update) => {
-          if (!update.docChanged) return;
+          if (!update.docChanged || !this.doc) return;
           if (update.transactions.some((transaction) => transaction.annotation(fromCrdt))) return;
 
-          this.doc.transact(() => {
-            let adjust = 0;
-            update.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
-              const insert = inserted.sliceString(0, inserted.length, '\n');
-              if (toA > fromA) this.doc.delete(fromA + adjust, toA - fromA);
-              if (insert.length > 0) this.doc.insert(fromA + adjust, insert);
-              adjust += insert.length - (toA - fromA);
-            });
-          }, EDITOR_ORIGIN);
+          try {
+            this.doc.transact(
+              () => {
+                let adjust = 0;
+                update.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+                  const insert = inserted.sliceString(0, inserted.length, '\n');
+                  if (toA > fromA) this.doc?.delete(fromA + adjust, toA - fromA);
+                  if (insert.length > 0) this.doc?.insert(fromA + adjust, insert);
+                  adjust += insert.length - (toA - fromA);
+                });
+              },
+              { origin: EDITOR_ORIGIN, undoGroup: this.nextUndoGroup() },
+            );
+          } catch (error) {
+            if (isEsbtError(error) && error.code === ESBT_ERROR.MessageTooLarge) {
+              this.applyChangesInHalves(update, view);
+              return;
+            }
+            if (isRefusedEdit(error) && isEsbtError(error)) {
+              this.reconcile(view);
+              this.emitEngineError(error);
+              return;
+            }
+            throw error;
+          }
         },
         destroy: () => {
           disposed = true;
-          unsubscribe();
+          window.clearInterval(ready);
+          off();
         },
       };
     });
   }
 
-  /**
-   * Undo/redo driven by the CRDT's per-peer UndoManager, which scopes each
-   * step to this replica's own edits rather than the shared history.
-   */
+  private applyChangesInHalves(
+    update: {
+      changes: {
+        iterChanges(
+          fn: (
+            fromA: number,
+            toA: number,
+            fromB: number,
+            toB: number,
+            inserted: { sliceString(from: number, to: number, lineSep: string): string },
+          ) => void,
+        ): void;
+      };
+    },
+    view: EditorView,
+  ): void {
+    try {
+      update.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+        const insert = inserted.sliceString(0, 1e9, '\n');
+        this.replaceRangeChunked(fromA, toA, insert);
+      });
+    } catch (error) {
+      if (isEsbtError(error)) {
+        this.reconcile(view);
+        this.emitEngineError(error);
+        return;
+      }
+      throw error;
+    }
+  }
+
+  private replaceRangeChunked(from: number, to: number, insert: string): void {
+    const doc = this.requireDoc();
+    const options = { origin: EDITOR_ORIGIN, undoGroup: this.nextUndoGroup() };
+    try {
+      doc.transact(() => {
+        if (to > from) doc.delete(from, to - from);
+        if (insert.length > 0) doc.insert(from, insert);
+      }, options);
+    } catch (error) {
+      if (!isEsbtError(error) || error.code !== ESBT_ERROR.MessageTooLarge || insert.length <= 1) {
+        throw error;
+      }
+      const mid = Math.floor(insert.length / 2);
+      this.replaceRangeChunked(from, to, insert.slice(0, mid));
+      this.replaceRangeChunked(from + mid, from + mid, insert.slice(mid));
+    }
+  }
+
   private undoExtensions(): Extension {
     return Prec.high(
       keymap.of([
@@ -235,29 +369,38 @@ export class EsbtEngine implements CollabSession {
           key: 'Mod-z',
           preventDefault: true,
           run: () => {
-            if (this.undoManager.canUndo()) this.undoManager.undo();
+            if (this.doc?.canUndo) this.doc.undo({ origin: 'undo' });
             return true;
           },
         },
-        // Both redo conventions, on every platform.
         { key: 'Mod-y', preventDefault: true, run: () => this.redo() },
         { key: 'Mod-Shift-z', preventDefault: true, run: () => this.redo() },
       ]),
     );
   }
 
-  /* ---------------------------------------------------------------- reads */
-
   getText(): string {
-    return this.doc.getText();
+    return this.doc?.getText() ?? '';
   }
 
   setText(markdown: string): void {
-    this.doc.setText(markdown);
+    if (!this.doc) return;
+    try {
+      this.doc.setText(markdown, { origin: 'import' });
+    } catch (error) {
+      if (isEsbtError(error)) this.emitEngineError(error);
+      else throw error;
+    }
   }
 
   replaceRange(from: number, to: number, insert: string): void {
-    this.doc.replaceRange(from, to, insert);
+    if (!this.doc) return;
+    try {
+      this.replaceRangeChunked(from, to, insert);
+    } catch (error) {
+      if (isEsbtError(error)) this.emitEngineError(error);
+      else throw error;
+    }
   }
 
   status(): ConnectionStatus {
@@ -269,7 +412,17 @@ export class EsbtEngine implements CollabSession {
   }
 
   stats(): EngineStats {
-    return { ...this.counters };
+    return {
+      snapshotBytes: this.counters.snapshotBytes,
+      received: this.counters.received,
+      sent: this.counters.sent,
+      lastUpdateBytes: this.counters.lastUpdateBytes,
+      retainedOperations: this.counters.retainedOperations,
+      pendingOperations: this.counters.pendingOperations,
+      historyFloorBytes: this.counters.historyFloorBytes,
+      currentDmax: this.counters.currentDmax,
+      localSaved: this.localSaved,
+    };
   }
 
   onTextChange(listener: (text: string) => void): () => void {
@@ -287,6 +440,11 @@ export class EsbtEngine implements CollabSession {
     return () => this.peerListeners.delete(listener);
   }
 
+  onError(listener: (error: EngineErrorNotice) => void): () => void {
+    this.errorListeners.add(listener);
+    return () => this.errorListeners.delete(listener);
+  }
+
   hydrated(): boolean {
     return this.isHydrated;
   }
@@ -297,37 +455,68 @@ export class EsbtEngine implements CollabSession {
     return () => this.hydratedListeners.delete(listener);
   }
 
-  /* ------------------------------------------------------------- lifecycle */
-
   private async start(): Promise<void> {
-    // Local cache first: it is the fastest path to visible content.
-    await this.loadLocalSnapshot();
-    this.markHydrated();
-    this.tabs.hello();
-    // Then the server's authenticated snapshot over HTTP, which arrives
-    // without waiting for a WebSocket handshake. A local copy plus a slow
-    // network means we do not block the editor on that request.
-    await this.loadServerSnapshot();
+    const runtime = await loadRuntime();
     if (this.destroyed) return;
 
-    // Cache what we just loaded, which also seeds the encoded-size readout.
-    void this.saveLocalSnapshot();
+    const stored = await readReplicaJournal(this.docId);
+    if (stored && stored.snapshot.byteLength > 0) {
+      const doc = await EsbtDocument.create({
+        runtime,
+        siteId: marksSiteToEngine(stored.siteId),
+        config: MARKS_DOCUMENT_CONFIG,
+      });
+      this.bindDocument(doc);
+      doc.applySnapshot(stored.snapshot);
+      for (const update of stored.updates) {
+        try {
+          doc.import(update);
+        } catch (error) {
+          console.error('[marks] rejected journaled update', error);
+        }
+      }
+      this.lastAckedVersion = stored.ackedVersion;
+      this.lastPruneAt = stored.lastPruneAt;
+      this.localSaved = true;
+      this.emitText();
+    } else if (this.access) {
+      const ticket = await this.access.admit(this.docId, stored?.siteId, new AbortController().signal);
+      if (this.destroyed) return;
+      this.pendingTicket = ticket;
+      this.marksSiteId = ticket.siteId;
+      const doc = await EsbtDocument.create({
+        runtime,
+        siteId: marksSiteToEngine(ticket.siteId),
+        config: MARKS_DOCUMENT_CONFIG,
+      });
+      this.bindDocument(doc);
+    } else {
+      const localSite = stored?.siteId ?? randomLocalSite();
+      const doc = await EsbtDocument.create({
+        runtime,
+        siteId: marksSiteToEngine(localSite),
+        config: MARKS_DOCUMENT_CONFIG,
+      });
+      this.bindDocument(doc);
+      const markdown = readLocalDocumentText(this.docId);
+      if (markdown.length > 0) doc.setText(markdown, { origin: 'import' });
+    }
+
+    if (this.destroyed) {
+      this.doc?.destroy();
+      return;
+    }
+
+    this.markHydrated();
+    this.tabs.hello();
+    await this.loadServerSnapshot();
+    if (this.destroyed) return;
+    void this.checkpointJournal();
     this.connect();
   }
 
-  private async loadLocalSnapshot(): Promise<void> {
-    try {
-      const cached = await idbGet<Uint8Array>(this.cacheKey);
-      if (cached && cached.byteLength > 0 && !this.destroyed) {
-        this.doc.import(cached);
-        this.emitText();
-      }
-    } catch {
-      // A missing or unreadable cache is not an error, just a slower open.
-    }
-  }
-
   private async loadServerSnapshot(): Promise<void> {
+    if (!this.access || !this.doc) return;
     const quality = readNetworkQuality();
     const hasLocal = this.getText().length > 0 || this.counters.snapshotBytes > 0;
     const timeoutMs = snapshotFetchTimeoutMs(quality, hasLocal);
@@ -341,18 +530,23 @@ export class EsbtEngine implements CollabSession {
       const bytes = new Uint8Array(await response.arrayBuffer());
       if (bytes.byteLength === 0) return;
       this.counters.received += bytes.byteLength;
-      this.doc.import(bytes);
+      this.importRemote(bytes);
       this.emitText();
     } catch {
-      // Offline, aborted, or slow: the local cache and the WebSocket retry
-      // loop cover us. Do not surface a failed snapshot as a document error.
+      // Offline, aborted, or slow: the local journal and the WebSocket retry
+      // loop cover us.
     } finally {
       window.clearTimeout(timer);
     }
   }
 
   private connect(): void {
-    if (this.destroyed || this.socket || this.admissionAbort) return;
+    if (!this.access || this.destroyed || this.socket || this.admissionAbort) return;
+    if (this.pendingTicket) {
+      this.openSocket(this.pendingTicket);
+      this.pendingTicket = null;
+      return;
+    }
 
     const controller = new AbortController();
     this.admissionAbort = controller;
@@ -361,35 +555,17 @@ export class EsbtEngine implements CollabSession {
   }
 
   private async admitAndConnect(controller: AbortController): Promise<void> {
+    if (!this.access) return;
     try {
-      const ticket = await this.access.admit(this.docId, this.doc.siteId, controller.signal);
+      const ticket = await this.access.admit(
+        this.docId,
+        this.marksSiteId || undefined,
+        controller.signal,
+      );
       if (this.destroyed || controller.signal.aborted || this.admissionAbort !== controller) return;
       this.admissionAbort = null;
-
-      const url = new URL(ticket.roomUrl);
-
-      // Tell the server what we already have so it can reply with a delta
-      // instead of a full snapshot. Credentials never enter the URL.
-      try {
-        const vv = this.doc.oplogVersion().encode();
-        if (vv.byteLength > 0 && vv.byteLength <= MAX_VV_QUERY_BYTES) {
-          url.searchParams.set('vv', toBase64Url(vv));
-        }
-      } catch {
-        // No version vector: the server falls back to a snapshot.
-      }
-
-      const socket = new WebSocket(url, roomTicketProtocols(ticket));
-      socket.binaryType = 'arraybuffer';
-      this.socket = socket;
-
-      socket.addEventListener('message', (event) => this.onMessage(event.data as ArrayBuffer));
-      socket.addEventListener('open', () => {
-        this.reconnectDelay = RECONNECT_MIN_MS;
-        this.send(MSG_EPHEMERAL, this.ephemeral.encodeAll());
-      });
-      socket.addEventListener('close', (event) => this.onDisconnect(socket, event.code));
-      socket.addEventListener('error', () => this.onDisconnect(socket));
+      this.marksSiteId = ticket.siteId;
+      this.openSocket(ticket);
     } catch (error) {
       if (this.admissionAbort === controller) this.admissionAbort = null;
       if (this.destroyed || controller.signal.aborted) return;
@@ -398,24 +574,45 @@ export class EsbtEngine implements CollabSession {
     }
   }
 
+  private openSocket(ticket: RoomTicket): void {
+    const url = new URL(ticket.roomUrl);
+    try {
+      const vv = this.doc?.version() ?? new Uint8Array();
+      if (vv.byteLength > 0 && vv.byteLength <= MAX_VV_QUERY_BYTES) {
+        url.searchParams.set('vv', toBase64Url(vv));
+      }
+    } catch {
+      // No version vector: the server falls back to a snapshot.
+    }
+
+    const socket = new WebSocket(url, roomTicketProtocols(ticket));
+    socket.binaryType = 'arraybuffer';
+    this.socket = socket;
+
+    socket.addEventListener('message', (event) => this.onMessage(event.data as ArrayBuffer));
+    socket.addEventListener('open', () => {
+      this.reconnectDelay = RECONNECT_MIN_MS;
+      this.send(MSG_EPHEMERAL, this.ephemeral.encodeAll());
+    });
+    socket.addEventListener('close', (event) => this.onDisconnect(socket, event.code));
+    socket.addEventListener('error', () => this.onDisconnect(socket));
+  }
+
   private onDisconnect(socket: WebSocket, code?: number): void {
     if (this.socket !== socket) return;
     this.socket = null;
     if (this.destroyed) return;
 
     this.setStatus('offline');
-
-    // The document was deleted. Retrying would recreate it from this replica.
     if (code === CLOSE_DOCUMENT_DELETED) {
       this.destroyed = true;
       return;
     }
-
     this.scheduleReconnect();
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectTimer !== null || this.destroyed) return;
+    if (this.reconnectTimer !== null || this.destroyed || !this.access) return;
     const jitter = Math.random() * 0.3 + 0.85;
     const delay = Math.min(this.reconnectDelay * jitter, RECONNECT_MAX_MS);
     this.reconnectDelay = Math.min(this.reconnectDelay * 2, RECONNECT_MAX_MS);
@@ -431,13 +628,13 @@ export class EsbtEngine implements CollabSession {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    if (!this.socket) this.connect();
+    if (this.access && !this.socket) this.connect();
   };
 
   private handleOffline = (): void => {
     this.admissionAbort?.abort();
     this.admissionAbort = null;
-    this.setStatus('offline');
+    if (this.access) this.setStatus('offline');
   };
 
   private handleVisibility = (): void => {
@@ -452,27 +649,42 @@ export class EsbtEngine implements CollabSession {
     this.flushLocalSave();
   };
 
+  private importRemote(bytes: Uint8Array): void {
+    if (!this.doc || bytes.byteLength === 0) return;
+    try {
+      this.doc.import(bytes);
+    } catch (error) {
+      if (isSnapshotRefusal(error) && isEsbtError(error)) {
+        this.emitEngineError(error);
+        return;
+      }
+      if (isEsbtError(error)) {
+        console.error('[marks] rejected remote update', error);
+        return;
+      }
+      throw error;
+    }
+  }
+
   private importFromTab(bytes: Uint8Array, kind: 'update' | 'snapshot'): void {
     if (this.destroyed || bytes.byteLength === 0) return;
     try {
-      this.doc.import(bytes);
+      this.doc?.import(bytes);
     } catch (error) {
       console.error('[marks] rejected tab update', error);
       return;
     }
-    // Another tab typed this. If we are the one still on the socket, the
-    // server will not see it unless we forward. Import is idempotent.
     if (kind === 'update') this.send(MSG_UPDATE, bytes);
     else if (this.lastServerVV) this.sendMissingSince(this.lastServerVV);
   }
 
   private scheduleTabSnapshot(): void {
-    if (this.snapshotReplyTimer !== null || this.destroyed) return;
+    if (this.snapshotReplyTimer !== null || this.destroyed || !this.doc) return;
     this.snapshotReplyTimer = window.setTimeout(() => {
       this.snapshotReplyTimer = null;
-      if (this.destroyed) return;
+      if (this.destroyed || !this.doc) return;
       try {
-        this.tabs.sendSnapshot(this.doc.export({ mode: 'snapshot' }));
+        this.tabs.sendSnapshot(this.doc.exportFullSnapshot());
       } catch {
         // An empty replica has nothing to share.
       }
@@ -484,10 +696,9 @@ export class EsbtEngine implements CollabSession {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
-    void this.saveLocalSnapshot();
+    void this.checkpointJournal();
+    this.flushMarkdownCheckpoint();
   }
-
-  /* -------------------------------------------------------------- messages */
 
   private onMessage(raw: ArrayBuffer): void {
     const data = new Uint8Array(raw);
@@ -500,11 +711,7 @@ export class EsbtEngine implements CollabSession {
     switch (tag) {
       case MSG_UPDATE:
       case MSG_SNAPSHOT:
-        try {
-          this.doc.import(payload);
-        } catch (error) {
-          console.error('[marks] rejected remote update', error);
-        }
+        this.importRemote(payload);
         break;
       case MSG_EPHEMERAL:
         try {
@@ -515,7 +722,9 @@ export class EsbtEngine implements CollabSession {
         break;
       case MSG_SERVER_VV:
         this.lastServerVV = payload;
+        this.lastAckedVersion = payload;
         this.sendMissingSince(payload);
+        void this.maybePrune(payload);
         break;
       case MSG_SYNCED:
         this.setStatus('connected');
@@ -525,17 +734,19 @@ export class EsbtEngine implements CollabSession {
     }
   }
 
-  /** Answer the server's version vector with whatever it has not seen. */
-  private sendMissingSince(encodedVersionVector: Uint8Array): void {
+  private sendMissingSince(encodedVersion: Uint8Array): void {
+    if (!this.doc) return;
     try {
-      const missing = this.doc.export({
-        mode: 'update',
-        from: VersionVector.decode(encodedVersionVector),
-      });
-      if (missing.byteLength > 0) this.send(MSG_UPDATE, missing);
+      const payload = exportReconnectPayload(this.doc, encodedVersion);
+      if (payload.bytes.byteLength === 0) {
+        this.setStatus('connected');
+        return;
+      }
+      this.send(payload.kind === 'snapshot' ? MSG_SNAPSHOT : MSG_UPDATE, payload.bytes);
       this.setStatus('connected');
     } catch (error) {
-      console.error('[marks] could not diff against server version', error);
+      if (isEsbtError(error)) this.emitEngineError(error);
+      else console.error('[marks] could not diff against server version', error);
     }
   }
 
@@ -547,42 +758,97 @@ export class EsbtEngine implements CollabSession {
     this.counters.sent += message.byteLength;
   }
 
-  /* ------------------------------------------------------------ persistence */
-
-  private get cacheKey(): string {
-    return `marks:esbt:${this.docId}`;
-  }
-
   private scheduleLocalSave(): void {
     if (this.saveTimer !== null) clearTimeout(this.saveTimer);
     this.saveTimer = window.setTimeout(() => {
       this.saveTimer = null;
-      void this.saveLocalSnapshot();
+      void this.checkpointJournal();
     }, LOCAL_SAVE_DEBOUNCE_MS);
   }
 
-  private async saveLocalSnapshot(): Promise<void> {
-    if (this.destroyed) return;
-    // Export + write stay inside the lock so a second tab cannot clobber a
-    // newer snapshot with a stale capture (see persist-lock.ts). The in-memory
-    // EsbtDoc outlives `destroyed`, so a flush started from destroy() still
-    // writes after the flag flips while we wait for the lock.
+  private scheduleMarkdownCheckpoint(): void {
+    if (!this.access && this.markdownTimer !== null) window.clearTimeout(this.markdownTimer);
+    if (this.access) return;
+    this.markdownTimer = window.setTimeout(() => {
+      this.markdownTimer = null;
+      this.flushMarkdownCheckpoint();
+    }, MARKDOWN_CHECKPOINT_MS);
+  }
+
+  private flushMarkdownCheckpoint(): void {
+    if (this.access || !this.doc) return;
+    writeLocalDocumentText(this.docId, this.doc.getText());
+  }
+
+  private async appendLocalUpdate(bytes: Uint8Array): Promise<void> {
+    if (!this.doc || bytes.byteLength === 0) return;
+    const current = (await readReplicaJournal(this.docId)) ?? this.emptyRecord();
+    await writeReplicaJournal(this.docId, appendJournalUpdate(current, bytes));
+    this.localSaved = true;
+  }
+
+  private emptyRecord(): ReplicaJournalRecord {
+    return {
+      version: 1,
+      siteId: this.marksSiteId,
+      snapshot: new Uint8Array(),
+      updates: [],
+      ackedVersion: this.lastAckedVersion,
+      lastPruneAt: this.lastPruneAt,
+    };
+  }
+
+  private async checkpointJournal(): Promise<void> {
+    if (!this.doc) return;
+    const doc = this.doc;
     try {
-      await writeSnapshotUnderLock(
-        persistLockName('esbt', this.docId),
-        () => {
-          const snapshot = this.doc.export({ mode: 'snapshot' });
-          this.counters.snapshotBytes = snapshot.byteLength;
-          return snapshot;
-        },
-        (snapshot) => idbSet(this.cacheKey, snapshot),
-      );
+      const snapshot = doc.exportFullSnapshot();
+      await writeReplicaJournal(this.docId, {
+        version: 1,
+        siteId: this.marksSiteId,
+        snapshot,
+        updates: [],
+        ackedVersion: this.lastAckedVersion,
+        lastPruneAt: this.lastPruneAt,
+      });
+      this.counters.snapshotBytes = snapshot.byteLength;
+      this.refreshTelemetry();
+      this.localSaved = true;
     } catch {
       // Storage pressure or private mode: the server copy is authoritative.
     }
   }
 
-  /* --------------------------------------------------------------- emitters */
+  private async maybePrune(ackedVersion: Uint8Array): Promise<void> {
+    if (!this.doc) return;
+    if (!shouldPruneHistory(this.doc.retainedOperations, this.lastPruneAt)) return;
+    if (this.doc.retainedOperations > JOURNAL_RETAINED_THRESHOLD || this.lastPruneAt > 0) {
+      try {
+        this.doc.pruneHistoryThrough(ackedVersion);
+        this.lastPruneAt = Date.now();
+        this.lastAckedVersion = ackedVersion;
+        await this.checkpointJournal();
+      } catch (error) {
+        console.error('[marks] history prune failed', error);
+      }
+    }
+  }
+
+  private refreshTelemetry(): void {
+    if (!this.doc) return;
+    try {
+      this.counters.retainedOperations = this.doc.retainedOperations;
+      this.counters.pendingOperations = this.doc.pendingOperations;
+      this.counters.historyFloorBytes = this.doc.historyFloor().byteLength;
+      this.counters.currentDmax = this.doc.currentDmax();
+      this.counters.snapshotBytes = Math.max(
+        this.counters.snapshotBytes,
+        this.counters.lastUpdateBytes,
+      );
+    } catch {
+      // Destroyed between the mutation and the readout.
+    }
+  }
 
   private emitText(): void {
     if (this.textListeners.size === 0) return;
@@ -590,7 +856,16 @@ export class EsbtEngine implements CollabSession {
     for (const listener of this.textListeners) listener(text);
   }
 
+  private emitEngineError(error: EsbtError): void {
+    const notice = { code: error.code, message: userMessageForError(error) };
+    for (const listener of this.errorListeners) listener(notice);
+  }
+
   private setStatus(status: ConnectionStatus): void {
+    if (!this.access) {
+      if (this.currentStatus === 'connected') return;
+      status = 'connected';
+    }
     if (this.currentStatus === status) return;
     this.currentStatus = status;
     for (const listener of this.statusListeners) listener(status);
@@ -599,12 +874,13 @@ export class EsbtEngine implements CollabSession {
   private markHydrated(): void {
     if (this.isHydrated) return;
     this.isHydrated = true;
+    if (!this.access) this.setStatus('connected');
     for (const listener of this.hydratedListeners) listener();
   }
 
   private refreshPeers(): void {
     const states = this.ephemeral.getAllStates();
-    const selfKey = userKey(this.doc.siteId);
+    const selfKey = userKey(this.presenceSiteId());
     const peers: Peer[] = [];
 
     for (const [key, value] of Object.entries(states)) {
@@ -622,7 +898,7 @@ export class EsbtEngine implements CollabSession {
 
     if (!peers.some((peer) => peer.self)) {
       peers.unshift({
-        id: this.doc.siteId,
+        id: this.presenceSiteId(),
         name: this.user.name,
         colorIndex: this.user.colorIndex,
         self: true,
@@ -635,32 +911,38 @@ export class EsbtEngine implements CollabSession {
   }
 
   destroy(): void {
-    // Flush before the destroyed flag goes up: edits still sitting inside the
-    // save debounce — everything typed in the last 800 ms, which offline is
-    // the only copy of — would be lost.
     this.flushLocalSave();
-
     this.destroyed = true;
     window.removeEventListener('online', this.handleOnline);
     window.removeEventListener('offline', this.handleOffline);
     document.removeEventListener('visibilitychange', this.handleVisibility);
     window.removeEventListener('pagehide', this.handlePageHide);
+    window.removeEventListener('beforeunload', this.handlePageHide);
     this.admissionAbort?.abort();
     this.admissionAbort = null;
     if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
     if (this.snapshotReplyTimer !== null) clearTimeout(this.snapshotReplyTimer);
     if (this.presenceHeartbeat !== null) clearInterval(this.presenceHeartbeat);
+    if (this.markdownTimer !== null) window.clearTimeout(this.markdownTimer);
     for (const unsubscribe of this.unsubscribers) unsubscribe();
     this.tabs.destroy();
     this.socket?.close();
     this.socket = null;
-    this.undoManager.destroy();
+    this.doc?.destroy();
+    this.doc = null;
     this.ephemeral.destroy();
     this.textListeners.clear();
     this.statusListeners.clear();
     this.peerListeners.clear();
     this.hydratedListeners.clear();
+    this.errorListeners.clear();
   }
+}
+
+function randomLocalSite(): string {
+  const bytes = crypto.getRandomValues(new Uint32Array(1));
+  const site = (bytes[0] % 0x7fff_fffe) + 2;
+  return String(site);
 }
 
 function shouldRetryAdmission(error: unknown): boolean {

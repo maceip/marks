@@ -1,8 +1,9 @@
 /// <reference lib="webworker" />
 import type { Token } from 'markdown-it';
 import { collectHeadings, envSignature, groupTokens, hashString } from '../markdown/blocks';
+import { incrementalParseSafe, splitSourceBlocks } from '../markdown/incremental';
 import { createMarkdownIt, type MarkdownRendererFeatures } from '../markdown/md';
-import type { BlockPatch, RenderRequest, RenderResponse } from '../markdown/types';
+import type { BlockPatch, Heading, RenderRequest, RenderResponse } from '../markdown/types';
 
 /**
  * Markdown rendering, off the main thread.
@@ -40,11 +41,17 @@ let cache = new Map<string, string>();
 /** Keys the main thread currently has in its DOM. */
 let present = new Set<string>();
 let lastEnvSignature = '';
+let lastText = '';
+let lastEnv: Record<string, unknown> = {};
+let lastHeadings: Heading[] = [];
 
 function clearRenderCache(): void {
   cache = new Map();
   present = new Set();
   lastEnvSignature = '';
+  lastText = '';
+  lastEnv = {};
+  lastHeadings = [];
 }
 
 async function loadRequestedFeatures(text: string): Promise<void> {
@@ -69,6 +76,12 @@ async function loadRequestedFeatures(text: string): Promise<void> {
 
 async function render(seq: number, text: string): Promise<RenderResponse> {
   await loadRequestedFeatures(text);
+
+  const incremental = lastText.length > 0 ? incrementalParseSafe(lastText, text) : null;
+  if (incremental?.safe) {
+    return renderIncremental(seq, text, incremental.dirty.map((block) => block.key));
+  }
+
   const parseStart = performance.now();
   const env: Record<string, unknown> = {};
   const tokens = md.parse(text, env) as Token[];
@@ -82,6 +95,10 @@ async function render(seq: number, text: string): Promise<RenderResponse> {
     present = new Set();
     lastEnvSignature = signature;
   }
+
+  lastText = text;
+  lastEnv = env;
+  lastHeadings = collectHeadings(tokens);
 
   const lines = text.split('\n');
   const groups = groupTokens(tokens, lines);
@@ -130,16 +147,81 @@ async function render(seq: number, text: string): Promise<RenderResponse> {
     type: 'rendered',
     seq,
     blocks,
-    headings: collectHeadings(tokens),
+    headings: lastHeadings,
     stats: {
       blocks: blocks.length,
       dirty,
       parseMs,
+      parseMode: 'full',
       renderMs,
       bytes,
       chars: text.length,
     },
   };
+}
+
+function renderIncremental(seq: number, text: string, dirtyKeys: string[]): RenderResponse {
+  const dirtySet = new Set(dirtyKeys);
+  const parseStart = performance.now();
+  const sourceBlocks = splitSourceBlocks(text);
+  const parsedDirty = new Map<string, Token[]>();
+  for (const block of sourceBlocks) {
+    if (!dirtySet.has(block.key) && cache.has(block.key)) continue;
+    parsedDirty.set(block.key, md.parse(block.source, lastEnv) as Token[]);
+  }
+  const parseMs = performance.now() - parseStart;
+
+  const renderStart = performance.now();
+  const nextCache = new Map<string, string>();
+  const blocks: BlockPatch[] = [];
+  let dirty = 0;
+  let bytes = 0;
+
+  for (const block of sourceBlocks) {
+    let html = !dirtySet.has(block.key) ? cache.get(block.key) : undefined;
+    if (html === undefined) {
+      const tokens = parsedDirty.get(block.key) ?? (md.parse(block.source, lastEnv) as Token[]);
+      html = md.renderer.render(tokens, md.options, lastEnv);
+      dirty += 1;
+    }
+    nextCache.set(block.key, html);
+    const patch: BlockPatch = { key: block.key, line: block.start };
+    if (!present.has(block.key) || dirtySet.has(block.key)) {
+      patch.html = html;
+      bytes += html.length;
+    }
+    blocks.push(patch);
+  }
+
+  const renderMs = performance.now() - renderStart;
+  cache = nextCache;
+  present = new Set(blocks.map((block) => block.key));
+  lastText = text;
+  lastHeadings = remapHeadingLines(text, lastHeadings);
+
+  return {
+    type: 'rendered',
+    seq,
+    blocks,
+    headings: lastHeadings,
+    stats: {
+      blocks: blocks.length,
+      dirty,
+      parseMs,
+      parseMode: 'incremental',
+      renderMs,
+      bytes,
+      chars: text.length,
+    },
+  };
+}
+
+function remapHeadingLines(text: string, headings: Heading[]): Heading[] {
+  const headingBlocks = splitSourceBlocks(text).filter((block) => /^#{1,6}\s+\S/m.test(block.source));
+  return headings.map((heading, index) => ({
+    ...heading,
+    line: headingBlocks[index]?.start ?? heading.line,
+  }));
 }
 
 self.onmessage = async (event: MessageEvent<RenderRequest>) => {

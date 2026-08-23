@@ -18,6 +18,7 @@ interface TicketResponse {
   roomUrl: string;
   ticketId: string;
   ticketSecret: string;
+  siteId: string;
 }
 
 export class RoomAccessError extends Error {
@@ -67,7 +68,7 @@ export function createMarksDocumentAccess(
             'Content-Type': 'application/json',
             ...authorityHeaders(authority),
           },
-          body: JSON.stringify({ siteId }),
+          body: JSON.stringify(siteId ? { siteId } : {}),
           signal,
         });
       } catch (error) {
@@ -114,9 +115,12 @@ function authorityHeaders(authority: RoomAuthority): Record<string, string> {
 function validateTicketResponse(value: unknown, origin: string): RoomTicket {
   if (!isRecord(value)) throw new RoomAccessError('invalid room admission response', false);
 
-  const { roomUrl, ticketId, ticketSecret } = value as Partial<TicketResponse>;
+  const { roomUrl, ticketId, ticketSecret, siteId } = value as Partial<TicketResponse>;
   if (typeof roomUrl !== 'string' || typeof ticketId !== 'string' || typeof ticketSecret !== 'string') {
     throw new RoomAccessError('invalid room admission response', false);
+  }
+  if (typeof siteId !== 'string' || !/^[1-9][0-9]*$/.test(siteId)) {
+    throw new RoomAccessError('invalid room site assignment', false);
   }
   if (!OPAQUE_ID_PATTERN.test(ticketId)) throw new RoomAccessError('invalid room ticket ID', false);
   assertTicketSecret(ticketSecret);
@@ -145,7 +149,7 @@ function validateTicketResponse(value: unknown, origin: string): RoomTicket {
     throw new RoomAccessError('room URL is outside the Marks transport boundary', false);
   }
 
-  return { roomUrl: resolved.href, ticketId, ticketSecret };
+  return { roomUrl: resolved.href, ticketId, ticketSecret, siteId };
 }
 
 function assertTicketSecret(value: string): void {

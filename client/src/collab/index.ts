@@ -7,6 +7,6 @@ export { loadUser, saveUser, colorVar, initials, PALETTE_SIZE } from './user';
 
 export { ENGINE };
 
-export function createSession(options: SessionOptions): CollabSession {
-  return new EsbtEngine(options);
+export async function createSession(options: SessionOptions): Promise<CollabSession> {
+  return EsbtEngine.open(options);
 }

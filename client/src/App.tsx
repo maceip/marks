@@ -186,6 +186,12 @@ export function App() {
         snapshotBytes: engineStats.snapshotBytes,
         sent: engineStats.sent,
         received: engineStats.received,
+        lastUpdateBytes: engineStats.lastUpdateBytes,
+        retainedOperations: engineStats.retainedOperations,
+        pendingOperations: engineStats.pendingOperations,
+        currentDmax: engineStats.currentDmax,
+        parseMode: stats?.parseMode ?? '',
+        localSaved: engineStats.localSaved,
       });
     };
 
@@ -221,6 +227,13 @@ export function App() {
     },
     [],
   );
+
+  useEffect(() => {
+    if (!session?.onError) return;
+    return session.onError((error) => {
+      notify('Could not apply that edit', error.message, 'danger');
+    });
+  }, [session, notify]);
 
   const openDialog = useCallback((next: AppDialog) => {
     setOverlaysMounted(true);

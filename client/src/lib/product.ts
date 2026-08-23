@@ -2,7 +2,7 @@ export const PRODUCT_NAME = 'marks';
 
 /** Latest deterministic level-9 gzip receipt from `npm run check:ui-budgets`. */
 export const UI_PERFORMANCE_RECEIPT = {
-  appCriticalKb: '94.82',
+  appCriticalKb: '94.28',
   marketingCriticalKb: '11.77',
 } as const;
 
@@ -18,7 +18,7 @@ export const ENGINE = {
   id: 'esbt' as const,
   label: 'ESBT',
   blurb:
-    'Weighted-identifier sequence CRDT (Mechaoui & Imine). Pure TypeScript, tombstone-free deletes, delta reconnect.',
+    'Weighted-identifier sequence CRDT (Mechaoui & Imine). Rust/Wasm replica, per-peer undo, IndexedDB journal, compact format v3.',
 };
 
 export const UI_BREAKPOINTS = {
