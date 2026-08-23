@@ -78,7 +78,7 @@ service adapters use.
 | Contract | Local implementation now | Service implementation |
 | --- | --- | --- |
 | `DocumentRepository` | Local catalog, create, template, rename, duplicate, delete, and subscriptions | `/v1/documents` via `client/src/lib/api.ts` — see [`UI-SERVICE-CONTRACT.md`](UI-SERVICE-CONTRACT.md) §6.5 |
-| `CollabSession` | `LocalSession`, persistent text, CodeMirror sync, undo, stats, and text subscriptions | Ticket + `/collab/esbt/{id}` after the Rust/Wasm binding; do not transcode |
+| `CollabSession` | Wasm `EsbtEngine`: journaled replica, CodeMirror sync, per-replica undo, stats, text subscriptions | Ticket + `/collab/esbt/{id}` with the same Rust-core encodings; do not transcode |
 | `ReviewRepository` | Local comments, resolve/reopen, named versions, preview, and restore | No review HTTP service yet; keep the local adapter |
 
 Local mode is the default. Set `VITE_MARKS_DATA_MODE=service` at build time when

@@ -100,13 +100,13 @@ client/                     Vite + React + TypeScript
   auth/                     scratch/device primitives and room admission
   data/                     one document adapter; local workspace or Rust /v1
   browser/                  clipboard, context menu, voice, tab sync, cache
-  collab/                   CollabSession interface, the ESBT engine,
+  collab/                   CollabSession, Wasm ESBT document, journal,
                             presence decorations for CodeMirror
-  markdown/                 markdown-it setup, block diffing, DOM patching
+  markdown/                 markdown-it setup, incremental block parse, DOM patch
   workers/                  markdown.worker.ts, bench.worker.ts
   editor/                   CodeMirror 6 setup, commands, theme
   components/ pages/        UI
-esbt/                       temporary TypeScript ESBT browser adapter
+esbt/                       TypeScript presence store + contract tests
 crates/marks-auth/          identity/authorization validators
 crates/marks-server/        the only HTTP/WebSocket process
 ```
@@ -115,17 +115,17 @@ crates/marks-server/        the only HTTP/WebSocket process
 document rooms, and the native ESBT replica (the pinned
 [maceip/ESBT-web](https://github.com/maceip/ESBT-web) core). There is
 intentionally no Node server or compatibility layer: room payloads are the
-Rust core's canonical `ESBM`/`ESBS`/`ESBF` encodings, which the temporary
-TypeScript browser engine does not speak. Browser collaboration against the
-server therefore lands together with the Rust/Wasm client binding.
+Rust core's canonical `ESBM`/`ESBS`/`ESBF` encodings, which the browser
+speaks through the same core compiled to Wasm.
 
 ### The rendering path
 
 1. A keystroke applies to the local CRDT replica and paints in CodeMirror. No
    network, no worker, no wait.
-2. The new text goes to the markdown worker. It parses the **whole** document —
-   link references and footnotes are document-wide, so partial parsing would be
-   wrong — but renders only the blocks whose source hash changed.
+2. The new text goes to the markdown worker. A one-paragraph edit tokenizes
+   only the dirty source block. Link references, footnotes, abbreviations, and
+   heading-slug collisions still force a full document parse, because those
+   are document-wide.
 3. The worker returns HTML **only for blocks the main thread does not already
    have**. A one-word edit in a 700-block document ships a few hundred bytes.
 4. The main thread sanitises those blocks and reconciles them into the DOM by
@@ -141,16 +141,15 @@ Documents are stored in **ESBT** (Mechaoui & Imine,
 [arXiv:2607.28101](https://arxiv.org/abs/2607.28101)), a sequence CRDT that
 orders characters by weighted identifiers — Stern–Brocot fractions with an
 integer ladder and a sequence path behind them — so deletes remove state
-instead of leaving tombstones. The browser currently runs the temporary
-`@marks/esbt` TypeScript workspace synchronously on the main thread. It
-preserved the `CollabSession` seam while the editor was being built, but it is
-not a second production engine. The authoritative implementation is the Rust
-core in [maceip/ESBT-web](https://github.com/maceip/ESBT-web); v1 will use that
-same core natively in the room server and through Wasm in the browser after its
-undo, local-journal, and native/Wasm conformance gates pass. Comments and
-version history are fully usable in local prototype mode. Remote comment
-storage, commenter authorization, and cross-user history are still absent
-until the authenticated metadata service lands. The binding and release
+instead of leaving tombstones. The browser runs the Rust core through the
+`esbt_doc_*` Wasm ABI (`client/src/collab/wasm`), the same crate
+`marks-server` uses natively. Per-replica undo, transaction batching, and an
+IndexedDB full-snapshot + update journal live on the Marks side of that
+boundary; the engine does not schedule its own compaction or persistence.
+`@marks/esbt` remains only for ephemeral presence and the TypeScript contract
+suite. Comments and version history are fully usable in local mode. Remote
+comment storage, commenter authorization, and cross-user history are still
+absent until the authenticated metadata service lands. The binding and release
 boundary is [docs/V1-SCOPE.md](docs/V1-SCOPE.md).
 
 **Benchmark engine** in the sidebar runs an editing trace against it, in a
@@ -177,8 +176,9 @@ touching the contract.
 
 The room transport is the tag-byte framing in `client/src/collab/protocol.ts`
 (`MSG_UPDATE`, `MSG_EPHEMERAL`, `MSG_SERVER_VV`, `MSG_SNAPSHOT`, `MSG_SYNCED`)
-carrying the Rust core's canonical, versioned, bounded encodings. Admission is
-a one-use ticket in `Sec-WebSocket-Protocol` that binds an exact
+carrying the Rust core's canonical, versioned, bounded encodings — the same
+bytes the Wasm client emits. Admission is a one-use ticket in
+`Sec-WebSocket-Protocol` that binds an exact
 principal/session/device/document/site/role (or scratch/document/site) actor.
 The room validates role policy before decoding CRDT bytes, applies a valid
 update to the staged in-memory replica, commits the exact canonical bytes and
@@ -186,10 +186,11 @@ revision to the durable journal in one transaction, and only then broadcasts.
 Retry safety rides the engine's `(origin, seq)` operation identities: a
 replayed update commits nothing and re-broadcasts nothing, and a crash between
 commit and broadcast is recovered by journal replay plus the version-vector
-reconnect exchange. Snapshots are asynchronous compaction and never define
-whether an edit is saved. This is implemented and integration-tested in
-`crates/marks-server`; real-browser runtime proof still waits on the Rust/Wasm
-client binding.
+reconnect exchange. When a replica has compacted past a peer's version it
+sends a compact snapshot instead of a delta (`HistoryUnavailable`). Snapshots
+are asynchronous compaction and never define whether an edit is saved. This is
+implemented and integration-tested in `crates/marks-server`, and the browser
+session now speaks those encodings through the Wasm binding.
 
 ## Performance panel
 
@@ -204,7 +205,8 @@ parse and render time, bytes on the wire, and the encoded size of the document.
 ```bash
 npm run test:esbt        # 41 CRDT engine contract tests, including fuzzed convergence
 npm run test:browser     # clipboard, context-menu, select-all, tab isolation
-npm run test:markdown    # document-global preview invalidation
+npm run test:markdown    # document-global preview invalidation and incremental parse
+npm run test:wasm        # Wasm adapter, site conversion, journal, reconnect fallbacks
 npm run test:auth        # browser/Rust canonical auth wire and scratch helpers
 npm run test:harness     # helper units only: chrome discovery, budget parsers, wait-for-server
 cargo test --workspace   # marks-auth validators plus marks-server HTTP/room integration
@@ -243,25 +245,17 @@ MARKS_URL=http://127.0.0.1:3000 npm run smoke
 
 ## Known limits
 
-- The markdown worker re-parses the whole document on every keystroke. Parsing
-  is ~20 ms for a 50 KB document and it is off the main thread, but incremental
-  block-level parsing is the obvious next win.
-- The browser still uses the temporary TypeScript CRDT adapter. The qualified
-  Rust/Wasm binding, per-replica undo, and IndexedDB update journal are not yet
-  integrated into Marks.
-- Encoded documents are larger than the retired engines' columnar formats —
-  identifiers are stored explicitly, one item per UTF-16 unit. Compact
-  encoding is the paper's stated future work and fits behind `export`/`import`.
-- `crates/marks-server` now implements the identity surface, document API, and
-  durable ESBT rooms, consuming `marks-auth` admission results end to end, and
-  its integration tests prove convergence, offline deltas, role enforcement,
-  live revocation, and restart recovery with native ESBT replicas over real
-  WebSockets. The browser still runs the temporary TypeScript engine, whose
-  wire encoding is not the Rust core's, so browser-to-server collaboration is
-  not yet a runtime claim: it lands with the Wasm client binding.
-- Local UI mode is an interaction and persistence scaffold, not evidence of
-  remote admission, invitations, multi-peer convergence, or durable service
-  history. Those claims must be proven again in service mode.
+- A first preview pass, or an edit that changes link references, footnotes,
+  abbreviations, or heading slugs, still tokenizes the whole document. Ordinary
+  paragraph and fence edits use incremental block-level parsing.
+- Encoded identifier *paths* still grow with concurrent middle-insertion
+  churn; format v3 already front-codes and dictionary-codes update payloads,
+  which is the compact encoding the paper called future work. Further
+  identifier compression remains engine research, not a Marks wiring gap.
+- Local mode is a real Wasm replica with an IndexedDB journal. It is still
+  not a substitute for service-mode proof of remote admission, invitations,
+  or multi-peer rooms — run `VITE_MARKS_DATA_MODE=service` against
+  `marks-server` for those claims.
 
 ## Built on
 
@@ -280,4 +274,6 @@ multi-tab, slow/offline — is in [docs/BROWSER-SURFACE.md](docs/BROWSER-SURFACE
 The UI presentation contract is [docs/UI-SURFACE.md](docs/UI-SURFACE.md). The
 HTTP, cookie, and room-admission interfaces the frontend must implement
 against `marks-server` are in
-[docs/UI-SERVICE-CONTRACT.md](docs/UI-SERVICE-CONTRACT.md).
+[docs/UI-SERVICE-CONTRACT.md](docs/UI-SERVICE-CONTRACT.md). How the browser
+owns ESBT configuration, compaction, journaling, and reconnect is
+[docs/CLIENT-PLUMBING.md](docs/CLIENT-PLUMBING.md).

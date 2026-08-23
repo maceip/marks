@@ -4,7 +4,7 @@ Marks replaced Loro and Yjs with ESBT (Mechaoui & Imine, [arXiv:2607.28101](http
 
 This document is the API the ESBT implementation must satisfy so the existing markdown editor can keep CodeMirror sync, preview writes, offline delta reconnect, per-peer undo, and presence — without changing the algorithm later.
 
-## Status: temporary TypeScript prototype contract; not the production plan
+## Status: TypeScript contract inventory; production browser path is Wasm
 
 The normative Rust native/Wasm binding and release boundary is
 [`V1-SCOPE.md`](V1-SCOPE.md). This file remains useful as an inventory of the
@@ -13,13 +13,16 @@ WASM,” legacy snapshot compatibility, and Node room behavior do not constrain
 the production implementation. There are no released clients or production
 documents requiring a compatibility path.
 
-The contract below is implemented by the [`@marks/esbt`](../esbt) workspace
-(canonical sources in [maceip/ESBT-web `ts/`](https://github.com/maceip/ESBT-web)),
-and marks now runs on it exclusively in the browser: the client engine is
-`client/src/collab/esbt-engine.ts`. The retired Node room has been deleted and
-the production Rust room has not landed yet. `loro-crdt`, `loro-codemirror`, `yjs`,
-`y-codemirror.next`, `y-indexeddb`, and both Hocuspocus packages are gone from
-the dependency tree.
+The contract below is the inventory the temporary [`@marks/esbt`](../esbt)
+workspace still satisfies (canonical sources in
+[maceip/ESBT-web `ts/`](https://github.com/maceip/ESBT-web)). The production
+browser engine is the Rust/Wasm document in `client/src/collab/wasm`, wired by
+`client/src/collab/esbt-engine.ts` per
+[maceip/ESBT-web `docs/marks-client-plumbing.md`](https://github.com/maceip/ESBT-web/blob/main/docs/marks-client-plumbing.md).
+`@marks/esbt` remains for ephemeral presence and the TypeScript contract
+suite. The retired Node room has been deleted; `crates/marks-server` owns the
+live room. `loro-crdt`, `loro-codemirror`, `yjs`, `y-codemirror.next`,
+`y-indexeddb`, and both Hocuspocus packages are gone from the dependency tree.
 
 This is a working browser integration, not a completed connected product or a
 verified implementation of every paper claim. In particular, the current

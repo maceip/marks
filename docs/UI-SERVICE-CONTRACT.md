@@ -425,11 +425,10 @@ Frame tags the current test peer already speaks: `0x01` update, `0x02`
 ephemeral, `0x03` server version, `0x04` snapshot, `0x05` synced. Viewer and
 commenter sockets may not send `MSG_UPDATE`. Comments are not ESBT bytes.
 
-**Service-mode text sync is not finished in the browser.** The room speaks
-Rust-core encodings. The temporary TypeScript engine does not. Catalog,
-identity, admission, and snapshot *fetch* can land now; applying room bytes
-waits for the Rust/Wasm `CollabSession` binding. Do not add a TypeScript
-transcoder to “make the UI work.”
+**Service-mode text sync uses the Rust/Wasm `CollabSession`.** The room and
+the browser speak the same `ESBM`/`ESBS`/`ESBF` encodings. Do not add a
+TypeScript transcoder. Catalog, identity, admission, snapshot fetch, and
+room bytes all go through that one binding.
 
 ## 8. Product behavior the UI still owes
 
@@ -479,7 +478,7 @@ Use this as the frontend checklist. Server boxes are closed unless noted.
 | Silent device redeem | Yes | No product UI |
 | Logout / device revoke + CSRF | Yes | No product UI |
 | Shares / link grants | Yes | Local staging only |
-| Room bytes / multi-peer | Yes (native ESBT) | Blocked on Wasm `CollabSession` |
+| Room bytes / multi-peer | Yes (native ESBT) | Yes (Wasm `EsbtEngine` + journal) |
 | Comments / history service | No | Local adapters only |
 | EVT | Flagged | Do not prioritize |
 
