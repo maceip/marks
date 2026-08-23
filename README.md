@@ -228,11 +228,19 @@ npm run smoke:platforms  # portable glass checks on Playwright, Puppeteer, agent
 npm run measure          # latency on a large generated document
 ```
 
-GitHub Actions (`.github/workflows/ci.yml`) runs the commands above that do not
-need a browser or a running server, on the Rust version in `rust-toolchain.toml`
-(the same pin as `workspace.package.rust-version`). It does **not** run
-`smoke` / `smoke:platforms` / `measure`. A green CI check is not proof of
-multi-peer collaboration or service-mode admission.
+GitHub Actions (`.github/workflows/ci.yml`) has two required jobs on the Rust
+version in `rust-toolchain.toml`:
+
+- `test` — format, clippy, workspace tests (including in-process
+  `room_collab`), Node unit suites, and the default local client build.
+- `service-collab` — builds `marks-server` plus `VITE_MARKS_DATA_MODE=service`,
+  boots the binary, drives first-paint `/v1` from Playwright, then runs two
+  native ESBT peers against the UI-created document (`npm run ci:service`).
+
+A green workflow is proof of service-mode admission and multi-peer room
+convergence. It is not proof that the TypeScript editor applies Rust-core
+room bytes; that waits on the Wasm `CollabSession`. `smoke` /
+`smoke:platforms` / `measure` stay local for that reason.
 
 
 `npm run smoke` is Playwright-only and checks the things that need two real

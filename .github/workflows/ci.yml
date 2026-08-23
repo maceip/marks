@@ -1,15 +1,15 @@
 # What this workflow is for:
-#   Fail a PR before merge when the workspace does not compile, format, typecheck,
-#   or pass the unit/integration suites that run without a browser or a running
-#   server. That is the set that caught main going red when marks-server drifted
-#   off marks-auth.
+#   `test` — compile, format, typecheck, unit/integration suites that do not
+#   start the production binary (including in-process room_collab).
+#   `service-collab` — a live marks-server, a VITE_MARKS_DATA_MODE=service
+#   client, Playwright /v1 first-paint, and two native ESBT peers converging
+#   on the UI-created document. A green workflow is proof of those two things.
 #
 # What it is not:
-#   `npm run test:harness` is helper-unit tests (chrome discovery, budget parsers,
-#   wait-for-server). It is not `smoke` / `smoke:platforms`. Those need a running
-#   app and stay local until service-mode room bytes exist.
-#   Floating `stable` is forbidden here: local rust-version is 1.88; Actions
-#   `stable` was 1.98 and turned Clippy style into a false product failure.
+#   `npm run test:harness` is helper-unit tests. `smoke` / `smoke:platforms`
+#   stay local: the TypeScript engine cannot apply Rust-core room bytes, so
+#   two-browser preview sync is not a CI claim.
+#   Floating `stable` is forbidden: pin rust-toolchain.toml / rust-version.
 name: CI
 
 on:
@@ -105,3 +105,43 @@ jobs:
 
       - name: Production UI budgets
         run: npm run check:ui-budgets
+
+      - name: Rust multi-peer room collaboration
+        run: cargo test -p marks-server --test room_collab --locked
+
+  service-collab:
+    name: service-mode and multi-peer
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+
+      - name: Setup Node.js v22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build marks-server
+        run: cargo build -p marks-server --locked
+
+      - name: Production service-mode client
+        run: VITE_MARKS_DATA_MODE=service npm run build
+
+      - name: Production UI budgets (service-mode)
+        run: npm run check:ui-budgets
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Live server, service UI, and two-peer room
+        run: bash scripts/run-service-ci.sh --bin target/debug/marks-server --static-dir client/dist

@@ -64,8 +64,12 @@ Every runner accepts `--help`. `scripts/harness/run.mjs` also takes `--driver`, 
 npm run dev
 MARKS_URL=http://127.0.0.1:5173 npm run smoke:platforms
 
-# The deeper two-peer/REST suite is service-only.
+# CI-shaped proof: live binary + service-mode UI + native two-peer room.
 VITE_MARKS_DATA_MODE=service npm run build
+cargo build -p marks-server
+npm run ci:service -- --bin target/debug/marks-server --static-dir client/dist
+
+# The deeper two-browser TypeScript smoke is service-only and still local.
 # Start the Rust Marks server separately on :3000, then:
 MARKS_URL=http://127.0.0.1:3000 npm run smoke
 ```
