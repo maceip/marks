@@ -15,8 +15,6 @@ const environment: CommandEnvironment = {
   selectionLength: 12,
   selectionFrom: 0,
   selectionTo: 12,
-  canUndo: true,
-  canRedo: false,
   voiceSupported: true,
   voiceActive: false,
   theme: 'light',
@@ -31,6 +29,11 @@ const commands = projectCommands(environment, 'agent');
 test('local planner turns one request into ordered registry command steps', () => {
   const plan = planAgentRequest('Make this bold and italic, then show split view', commands);
   assert.deepEqual(plan.steps.map((step) => step.commandId), ['format.bold', 'format.italic', 'view.split']);
+});
+
+test('one request cannot finish by applying two mutually exclusive view modes', () => {
+  const plan = planAgentRequest('Show source and rendering together', commands);
+  assert.deepEqual(plan.steps.map((step) => step.commandId), ['view.split']);
 });
 
 test('image URL extraction produces schema-ready arguments', () => {

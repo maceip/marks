@@ -81,10 +81,6 @@ export function commandAvailability(
     reason = capabilityReason(command.capability);
   } else if (command.requiresSelection && environment.selectionLength === 0) {
     reason = 'Select text first.';
-  } else if (command.id === 'edit.undo' && !environment.canUndo) {
-    reason = 'There is no local edit to undo.';
-  } else if (command.id === 'edit.redo' && !environment.canRedo) {
-    reason = 'There is no local edit to redo.';
   } else if (command.id === 'input.dictate' && !environment.voiceSupported) {
     reason = 'Voice input is not supported by this browser.';
   } else if (command.id === 'view.split' && environment.shell === 'phone') {

@@ -52,8 +52,6 @@ export type EditorOperation =
   | 'indent'
   | 'outdent'
   | 'find'
-  | 'undo'
-  | 'redo'
   | 'insert-image-url'
   | 'insert-image-file'
   | 'insert-shape-rect'
@@ -148,8 +146,6 @@ export interface CommandEnvironment {
   selectionLength: number;
   selectionFrom: number;
   selectionTo: number;
-  canUndo: boolean;
-  canRedo: boolean;
   voiceSupported: boolean;
   voiceActive: boolean;
   theme: 'light' | 'dark';

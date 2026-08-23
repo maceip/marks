@@ -438,7 +438,6 @@ export function QuickAccess({ disabled: _disabled, getView: _getView }: {
           type="button"
           className={`icon-button${command.agentRaised ? ' agent-raised' : ''}`}
           data-command-id={command.id}
-          data-command-id={command.id}
           aria-label={command.label}
           title={command.unavailableReason ?? command.description}
           disabled={!command.enabled}

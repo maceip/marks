@@ -166,7 +166,7 @@ export function App() {
   const documents = useDocuments(route.name !== 'benchmark');
   const docId = route.name === 'document' ? route.id : null;
   const { meta, engine, supported, resolved } = useDocumentMeta(docId);
-  const { session, status, peers, hydrated, capabilities } = useSession(
+  const { session, status, peers, hydrated } = useSession(
     resolved && supported ? docId : null,
     user,
     documentAccess,
@@ -198,23 +198,6 @@ export function App() {
     to: 0,
     context: { kind: 'text' },
   });
-  const [historyState, setHistoryState] = useState({ canUndo: false, canRedo: false });
-
-  useEffect(() => {
-    if (!session) {
-      setHistoryState({ canUndo: false, canRedo: false });
-      return;
-    }
-    const update = () => setHistoryState({ canUndo: session.canUndo(), canRedo: session.canRedo() });
-    update();
-    const offChange = session.onChange(update);
-    const offCapabilities = session.onCapabilitiesChange(update);
-    return () => {
-      offChange();
-      offCapabilities();
-    };
-  }, [session]);
-
   useEffect(() => localStorage.setItem('marks:mode', mode), [mode]);
 
   useEffect(() => {
@@ -732,7 +715,7 @@ export function App() {
   const commandEnvironment = useMemo<CommandEnvironment>(() => ({
     hasDocument: Boolean(docId && session),
     hydrated,
-    capabilities,
+    capabilities: session?.capabilities() ?? null,
     workspaceKind,
     mode,
     shell: posture.shell,
@@ -740,8 +723,6 @@ export function App() {
     selectionLength: cursor.selected,
     selectionFrom: cursor.from,
     selectionTo: cursor.to,
-    canUndo: historyState.canUndo,
-    canRedo: historyState.canRedo,
     voiceSupported: surface.voiceSupported,
     voiceActive: surface.voiceStatus === 'listening',
     theme,
@@ -751,15 +732,12 @@ export function App() {
     reviewOpen: reviewSurface?.type ?? null,
     formatPainterArmed: false,
   }), [
-    capabilities,
     cursor.context.kind,
     cursor.from,
     cursor.selected,
     cursor.to,
     docId,
     hydrated,
-    historyState.canRedo,
-    historyState.canUndo,
     hudOpen,
     ribbonCollapsed,
     mode,
@@ -1001,7 +979,7 @@ export function App() {
 
       {route.name === 'document' && session && !focusMode && (
         <Suspense fallback={null}>
-          <AgentPill documentId={route.id} />
+          <AgentPill />
         </Suspense>
       )}
 
@@ -1016,7 +994,7 @@ export function App() {
             preferences={preferences}
             hasDocument={Boolean(docId && session)}
             dataMode={UI_DATA_MODE}
-            capabilities={capabilities}
+            capabilities={session?.capabilities() ?? null}
             onCloseDialog={() => setDialog(null)}
             onCloseReview={() => setReviewSurface(null)}
             onAction={runAction}

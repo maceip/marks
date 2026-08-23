@@ -17,8 +17,6 @@ function environment(patch: Partial<CommandEnvironment> = {}): CommandEnvironmen
     selectionLength: 0,
     selectionFrom: 0,
     selectionTo: 0,
-    canUndo: false,
-    canRedo: false,
     voiceSupported: true,
     voiceActive: false,
     theme: 'light',
@@ -74,14 +72,14 @@ test('foldables receive a distinct hinge-safe command projection', () => {
   assert.equal(renderedLaptop.some((command) => command.id === 'review.comments'), true);
 });
 
-test('undo and redo reflect the CRDT history rather than CodeMirror history', () => {
-  const emptyHistory = projectCommands(environment(), 'quick-access');
-  assert.equal(emptyHistory.find((command) => command.id === 'edit.undo')?.enabled, false);
-  assert.equal(emptyHistory.find((command) => command.id === 'edit.redo')?.enabled, false);
-
-  const localHistory = projectCommands(environment({ canUndo: true, canRedo: true }), 'quick-access');
-  assert.equal(localHistory.find((command) => command.id === 'edit.undo')?.enabled, true);
-  assert.equal(localHistory.find((command) => command.id === 'edit.redo')?.enabled, true);
+test('phone confirmation appears for service workspaces and not local-only documents', () => {
+  const session = projectCommands(environment({ workspaceKind: 'session' }), 'phone');
+  const local = projectCommands(environment({
+    workspaceKind: 'local',
+    capabilities: { role: 'local', edit: true, comment: true, saveVersion: true, manageShares: true },
+  }), 'phone');
+  assert.equal(session.some((command) => command.id === 'identity.pairing'), true);
+  assert.equal(local.some((command) => command.id === 'identity.pairing'), false);
 });
 
 test('new-user composition is narrower and agent relevance can raise a command', () => {

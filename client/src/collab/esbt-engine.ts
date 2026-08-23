@@ -180,7 +180,6 @@ export class EsbtEngine implements CollabSession {
   private readonly changeListeners = new Set<(change: DocumentChange) => void>();
   private readonly statusListeners = new Set<(status: ConnectionStatus) => void>();
   private readonly peerListeners = new Set<(peers: Peer[]) => void>();
-  private readonly capabilityListeners = new Set<(capabilities: DocumentCapabilities) => void>();
   private readonly hydratedListeners = new Set<() => void>();
   private readonly errorListeners = new Set<(error: EngineErrorNotice) => void>();
   private readonly durabilityWaiters = new Set<{
@@ -284,23 +283,9 @@ export class EsbtEngine implements CollabSession {
     });
   }
 
-  canUndo(): boolean {
-    return Boolean(this.doc?.canUndo && this.capabilities().edit);
-  }
-
-  canRedo(): boolean {
-    return Boolean(this.doc?.canRedo && this.capabilities().edit);
-  }
-
-  undo(): boolean {
-    if (!this.canUndo()) return false;
-    this.doc?.undo({ origin: 'undo' });
-    return true;
-  }
-
-  redo(): boolean {
-    if (!this.canRedo()) return false;
-    this.doc?.redo({ origin: 'redo' });
+  private redo(): boolean {
+    if (!this.doc?.canRedo) return true;
+    this.doc.redo({ origin: 'redo' });
     return true;
   }
 
@@ -512,7 +497,8 @@ export class EsbtEngine implements CollabSession {
           key: 'Mod-z',
           preventDefault: true,
           run: () => {
-            return this.undo();
+            if (this.doc?.canUndo) this.doc.undo({ origin: 'undo' });
+            return true;
           },
         },
         { key: 'Mod-y', preventDefault: true, run: () => this.redo() },
@@ -685,11 +671,9 @@ export class EsbtEngine implements CollabSession {
   private applyPermissionRole(next: DocumentCapabilities['role']): void {
     if (next === this.permissionRole) return;
     this.permissionRole = next;
-    const capabilities = this.capabilities();
-    const editable = setEditorEditable.of(capabilities.edit);
+    const editable = setEditorEditable.of(this.capabilities().edit);
     for (const view of this.editorViews) view.dispatch({ effects: editable });
     if (this.doc) void this.checkpointJournal();
-    for (const listener of this.capabilityListeners) listener(capabilities);
   }
 
   peers(): Peer[] {
@@ -723,11 +707,6 @@ export class EsbtEngine implements CollabSession {
   onPeersChange(listener: (peers: Peer[]) => void): () => void {
     this.peerListeners.add(listener);
     return () => this.peerListeners.delete(listener);
-  }
-
-  onCapabilitiesChange(listener: (capabilities: DocumentCapabilities) => void): () => void {
-    this.capabilityListeners.add(listener);
-    return () => this.capabilityListeners.delete(listener);
   }
 
   onError(listener: (error: EngineErrorNotice) => void): () => void {
@@ -1444,7 +1423,6 @@ export class EsbtEngine implements CollabSession {
     this.changeListeners.clear();
     this.statusListeners.clear();
     this.peerListeners.clear();
-    this.capabilityListeners.clear();
     this.hydratedListeners.clear();
     this.errorListeners.clear();
   }

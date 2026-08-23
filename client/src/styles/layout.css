@@ -609,6 +609,7 @@
 }
 
 .workspace.mode-preview .preview-pane {
+  grid-column: 3;
   border-left: 0;
 }
 

@@ -31,14 +31,6 @@ impl TestServer {
     }
 
     pub async fn spawn_with(db_path: PathBuf, configure: impl FnOnce(&mut Config)) -> TestServer {
-        Self::spawn_with_provider(db_path, configure, None).await
-    }
-
-    pub async fn spawn_with_provider(
-        db_path: PathBuf,
-        configure: impl FnOnce(&mut Config),
-        provider: Option<Arc<dyn marks_server::agent::AgentProvider>>,
-    ) -> TestServer {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind test listener");
@@ -80,10 +72,9 @@ impl TestServer {
             database_heartbeat_ms: 1_000,
             database_heartbeat_stale_ms: 5_000,
             max_frame_bytes: marks_server::engine_profile::get().unwrap().max_frame_bytes,
-            agent: Default::default(),
         };
         configure(&mut config);
-        let app = App::new_with_agent_provider(config, provider).expect("build app");
+        let app = App::new(config).expect("build app");
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let serve_app = app.clone();
         let task = tokio::spawn(async move {

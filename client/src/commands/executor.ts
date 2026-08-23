@@ -58,8 +58,6 @@ async function executeEditorOperation(
   signal: AbortSignal,
   services: CommandServices,
 ): Promise<boolean> {
-  if (operation === 'undo') return services.session?.undo() ?? false;
-  if (operation === 'redo') return services.session?.redo() ?? false;
   if (operation === 'format-painter') return services.onFormatPainter();
   if (operation === 'insert-image-file') return services.onChooseImage(false, signal);
   if (operation === 'replace-image-file') return services.onChooseImage(true, signal);

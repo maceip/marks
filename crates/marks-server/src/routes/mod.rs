@@ -1,4 +1,3 @@
-pub mod agent;
 pub mod assets;
 pub mod auth;
 pub mod documents;

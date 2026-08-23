@@ -15,8 +15,6 @@ function environment(): CommandEnvironment {
     selectionLength: 4,
     selectionFrom: 0,
     selectionTo: 4,
-    canUndo: true,
-    canRedo: false,
     voiceSupported: true,
     voiceActive: false,
     theme: 'light',

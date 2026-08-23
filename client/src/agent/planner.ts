@@ -19,6 +19,8 @@ interface Pattern {
   reason: string;
 }
 
+const VIEW_MODE_COMMANDS = new Set(['view.editor', 'view.split', 'view.preview']);
+
 const PATTERNS: Pattern[] = [
   { commandId: 'view.preview', expressions: [/\b(?:rendered?|preview|reading)\s+(?:view|mode)\b/i, /\bshow (?:me )?(?:the )?(?:rendered?|preview)\b/i], reason: 'Switch to the compiled rendering.' },
   { commandId: 'view.split', expressions: [/\bsplit\s+(?:view|mode)\b/i, /\bshow (?:source|markdown).*(?:and|with).*(?:preview|render)/i], reason: 'Show source and rendering together.' },
@@ -72,10 +74,15 @@ export function planAgentRequest(request: string, commands: readonly ProjectedCo
   }
   candidates.sort((a, b) => a.index - b.index);
   const seen = new Set<string>();
+  let viewModeChosen = false;
   const steps = candidates.flatMap(({ pattern }) => {
     if (seen.has(pattern.commandId)) return [];
     const command = available.get(pattern.commandId);
     if (!command) return [];
+    if (VIEW_MODE_COMMANDS.has(pattern.commandId)) {
+      if (viewModeChosen) return [];
+      viewModeChosen = true;
+    }
     seen.add(pattern.commandId);
     const input: Record<string, unknown> = {};
     if (pattern.commandId === 'insert.picture-url') {

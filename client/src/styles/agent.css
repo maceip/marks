@@ -60,6 +60,8 @@
 .agent-submit:disabled { opacity: .28; cursor: default; }
 
 .agent-provider {
+  display: inline-flex;
+  align-items: center;
   max-width: 84px;
   padding: 3px 7px;
   border: 1px solid var(--glass-border);
@@ -70,8 +72,6 @@
   font: 650 9px/1.2 var(--font-mono);
   text-transform: uppercase;
 }
-.agent-provider:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent); }
-.agent-provider:disabled { opacity: .6; }
 
 .agent-running-dot {
   position: absolute;
@@ -111,16 +111,6 @@
 .agent-privacy { margin: 0; color: var(--text-faint); font-size: 10px; }
 .agent-plan { display: grid; gap: 8px; }
 .agent-plan > p { margin: 0; color: var(--text-muted); font-size: 11px; }
-.agent-assistant-text {
-  max-height: 82px;
-  padding: 7px 8px;
-  overflow: auto;
-  border-left: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
-  background: color-mix(in srgb, var(--surface-raised) 50%, transparent);
-  white-space: pre-wrap;
-}
-.agent-usage { color: var(--text-faint); font: 600 9px/1.3 var(--font-mono); }
-
 .agent-horizon {
   display: grid;
   gap: 5px;

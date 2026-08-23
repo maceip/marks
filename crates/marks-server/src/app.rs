@@ -1,4 +1,3 @@
-use crate::agent::{AgentHub, AgentProvider};
 use crate::artifact::ArtifactIdentity;
 use crate::assets::AssetStore;
 use crate::config::Config;
@@ -24,20 +23,10 @@ pub struct App {
     pub rate: RateLimiter,
     pub limits: esbt::ResourceLimits,
     pub health: Arc<Health>,
-    pub agents: Arc<AgentHub>,
 }
 
 impl App {
     pub fn new(config: Config) -> Result<Arc<Self>, String> {
-        Self::new_with_agent_provider(config, None)
-    }
-
-    /// Provider injection is used by deterministic integration tests. The
-    /// production constructor always builds the server-configured provider.
-    pub fn new_with_agent_provider(
-        config: Config,
-        provider: Option<Arc<dyn AgentProvider>>,
-    ) -> Result<Arc<Self>, String> {
         let config = Arc::new(config);
         let artifact = ArtifactIdentity::load(config.static_dir.as_deref())?;
         let db =
@@ -75,7 +64,6 @@ impl App {
             .probe_database(&db)
             .map_err(|error| format!("database write probe: {error:?}"))?;
         let bundle_exports = Arc::new(Semaphore::new(config.max_concurrent_bundle_exports));
-        let agents = AgentHub::new(db.clone(), config.agent.clone(), provider)?;
         Ok(Arc::new(Self {
             config,
             artifact,
@@ -86,7 +74,6 @@ impl App {
             rate: RateLimiter::new(),
             limits,
             health,
-            agents,
         }))
     }
 }
@@ -94,12 +81,6 @@ impl App {
 pub fn router(app: Arc<App>) -> Router {
     let asset_upload =
         post(routes::assets::upload).layer(DefaultBodyLimit::max(app.config.max_asset_bytes));
-    let agent_create = post(routes::agent::create_run).layer(DefaultBodyLimit::max(
-        crate::agent::protocol::MAX_AGENT_BODY_BYTES,
-    ));
-    let agent_tool_result = post(routes::agent::tool_result).layer(DefaultBodyLimit::max(
-        crate::agent::protocol::MAX_AGENT_BODY_BYTES,
-    ));
     let api = Router::new()
         // Identity: docs/AUTHN-AUTHZ-PROTOCOL.md §10.
         .route("/v1/auth/scratch", post(routes::auth::scratch_create))
@@ -141,22 +122,6 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/v1/auth/devices/{id}", delete(routes::auth::device_revoke))
         .route("/v1/auth/evt/challenges", post(routes::auth::evt_challenge))
         .route("/v1/auth/evt/redeem", post(routes::auth::evt_redeem))
-        // Session-only in-page agent gateway. Browser requests cannot select
-        // a provider, endpoint, model, or credential.
-        .route(
-            "/v1/agent/capabilities",
-            get(routes::agent::capabilities),
-        )
-        .route("/v1/agent/runs", agent_create)
-        .route(
-            "/v1/agent/runs/{id}/events",
-            get(routes::agent::events),
-        )
-        .route(
-            "/v1/agent/runs/{id}/tool-results",
-            agent_tool_result,
-        )
-        .route("/v1/agent/runs/{id}", delete(routes::agent::cancel))
         // Documents.
         .route(
             "/v1/documents",

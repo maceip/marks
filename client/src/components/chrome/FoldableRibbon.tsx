@@ -12,8 +12,6 @@ interface FoldableRibbonProps {
 type FoldTask = 'compose' | 'inspect';
 
 const COMPOSE_IDS = [
-  'edit.undo',
-  'edit.redo',
   'format.bold',
   'format.italic',
   'format.heading-2',

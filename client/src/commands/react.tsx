@@ -236,7 +236,6 @@ export function CommandProvider({ environment: providedEnvironment, services, on
     ribbon: composeRibbon(environment, { expanded: profile.expanded, agentRaised: activeRaised }),
     commands: (surface) => projectCommands(environment, surface, { agentRaised: activeRaised }),
     quickAccess: projectQuickAccess(environment, profile.pinned),
-    agentTools: toAgentTools(environment),
     invoke,
     start: (id, source = 'human', input = {}) => runtime.start(id, { source, input }),
     propose: (id, input = {}) => runtime.propose(id, input),

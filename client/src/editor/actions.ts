@@ -1,3 +1,4 @@
+import { redo, undo } from '@codemirror/commands';
 import { openSearchPanel } from '@codemirror/search';
 import type { EditorView } from '@codemirror/view';
 import type { CollabSession, StableTextRange } from '../collab/types';
@@ -10,6 +11,14 @@ import {
   shapePath,
   type ShapeKind,
 } from './commands';
+
+export function runUndo(view: EditorView): boolean {
+  return undo(view);
+}
+
+export function runRedo(view: EditorView): boolean {
+  return redo(view);
+}
 
 export function openFind(view: EditorView): boolean {
   return openSearchPanel(view);

@@ -127,8 +127,6 @@ const definitions: CommandDefinition[] = [
   editor('paragraph.indent', 'Indent', 'indent', 'home', 'Paragraph', 'indent', { description: 'Indent selected lines', priority: 55 }),
   editor('paragraph.outdent', 'Outdent', 'outdent', 'home', 'Paragraph', 'outdent', { description: 'Outdent selected lines', priority: 54 }),
   editor('edit.find', 'Find', 'find', 'home', 'Editing', 'find', { description: 'Find text in the Markdown source', keyTip: 'F', shortcut: '⌘F', risk: 'read', priority: 85, capability: undefined }),
-  editor('edit.undo', 'Undo', 'undo', 'home', 'Editing', 'undo', { description: 'Undo the last local edit', shortcut: '⌘Z', priority: 95, surfaces: ['ribbon', 'palette', 'quick-access', 'agent'], pinByDefault: true }),
-  editor('edit.redo', 'Redo', 'redo', 'home', 'Editing', 'redo', { description: 'Redo the last local edit', shortcut: '⇧⌘Z', priority: 94, surfaces: ['ribbon', 'palette', 'quick-access', 'agent'], pinByDefault: true }),
   define({ id: 'input.dictate', label: 'Dictate', description: 'Toggle browser speech input', category: 'Edit', tab: 'home', group: 'Editing', glyph: 'mic', operation: { kind: 'toggle', target: 'voice' }, surfaces: ['ribbon', 'phone', 'palette'], modes: EDIT, capability: 'edit', requiresDocument: true, risk: 'external', priority: 60, agent: { exposed: false } }),
 
   editor('insert.picture-url', 'Picture URL', 'insert-image-url', 'insert', 'Illustrations', 'image', { description: 'Insert image Markdown from a URL', keyTip: 'P', priority: 82, agent: { exposed: true, parameters: IMAGE_URL_PARAMETERS } }),
