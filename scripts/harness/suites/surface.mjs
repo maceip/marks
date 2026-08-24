@@ -296,16 +296,22 @@ export async function runSurface(session, { check }) {
     const canvas = document.querySelector('.surface-material-canvas[data-ready="true"]');
     if (!canvas) return { applicable: false, tier: document.documentElement.dataset.surfaceTier };
     canvas.dispatchEvent(new Event('webglcontextlost', { cancelable: true }));
+    const canvases = [...document.querySelectorAll('.surface-material-canvas')];
     return {
       applicable: true,
       tier: document.documentElement.dataset.surfaceTier,
       engine: document.documentElement.dataset.surfaceEngine,
-      canvases: document.querySelectorAll('.surface-material-canvas').length,
+      canvases: canvases.length,
+      visibleCanvases: canvases.filter((node) => getComputedStyle(node).display !== 'none').length,
     };
   });
   check(
     'WebGL context loss removes canvases',
-    !contextLoss.applicable || (contextLoss.tier === 'foundation' && contextLoss.engine === 'css' && contextLoss.canvases === 0),
+    !contextLoss.applicable || (
+      contextLoss.tier === 'foundation' &&
+      contextLoss.engine === 'css' &&
+      (contextLoss.visibleCanvases === 0 || contextLoss.canvases === 0)
+    ),
     JSON.stringify(contextLoss),
   );
 
@@ -485,7 +491,7 @@ export async function runSurface(session, { check }) {
     const rect = root.getBoundingClientRect();
     const y = rect.top + Math.min(120, Math.max(40, rect.height / 2));
     const fire = (type, id, x) => {
-      const init = {
+      root.dispatchEvent(new PointerEvent(type, {
         bubbles: true,
         cancelable: true,
         composed: true,
@@ -495,25 +501,27 @@ export async function runSurface(session, { check }) {
         clientX: x,
         clientY: y,
         buttons: type === 'pointerup' || type === 'pointercancel' ? 0 : 1,
-      };
-      root.dispatchEvent(new PointerEvent(type, init));
+      }));
     };
     const x1 = rect.left + rect.width * 0.62;
     const x2 = rect.left + rect.width * 0.78;
     fire('pointerdown', 1, x1);
     fire('pointerdown', 2, x2);
+    const draggingAfterDown = root.classList.contains('phone-ghost-dragging');
     fire('pointermove', 1, x1 - rect.width * 0.5);
     fire('pointermove', 2, x2 - rect.width * 0.5);
     fire('pointerup', 1, x1 - rect.width * 0.5);
     fire('pointerup', 2, x2 - rect.width * 0.5);
     return {
       ok: true,
+      bound: root.dataset.ghostBound ?? '',
       shift: root.dataset.ghostShift ?? '',
       translate: root.style.getPropertyValue('--phone-ghost-shift'),
+      draggingAfterDown,
     };
   });
   check('phone two-finger pan snaps the ghost to the other page half',
-    ghostPan.ok && ghostPan.shift === 'end' && ghostPan.translate === '0%',
+    ghostPan.ok && ghostPan.bound === 'true' && ghostPan.draggingAfterDown && ghostPan.shift === 'end' && ghostPan.translate === '0%',
     JSON.stringify(ghostPan));
   await session.evaluate(() => {
     const preview = [...document.querySelectorAll('.phone-nav > button')]

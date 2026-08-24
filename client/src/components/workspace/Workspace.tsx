@@ -2,7 +2,7 @@ import '../../styles/foundation-tokens.css';
 import '../../styles/browser.css';
 import '../../styles/document-tokens.css';
 import type { EditorView } from '@codemirror/view';
-import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { CollabSession } from '../../collab/types';
 import type { Posture } from '../../lib/posture';
 import {
@@ -122,7 +122,7 @@ function WorkspaceView({
     };
   }, [onModeChange, posture.shell]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!phoneGhost) return;
     const root = rootRef.current;
     if (!root) return;
@@ -130,7 +130,8 @@ function WorkspaceView({
     ghostShiftRef.current = 'start';
     root.style.setProperty('--phone-ghost-shift', formatGhostPercent(GHOST_SHIFT_START_PERCENT));
     root.dataset.ghostShift = 'start';
-    return bindPhoneGhostControls(root, {
+    root.dataset.ghostBound = 'true';
+    const unbind = bindPhoneGhostControls(root, {
       getPercent: () => ghostPercentRef.current,
       setPercent: (percent) => {
         ghostPercentRef.current = percent;
@@ -143,6 +144,10 @@ function WorkspaceView({
         suppressSwipeRef.current = suppress;
       },
     });
+    return () => {
+      delete root.dataset.ghostBound;
+      unbind();
+    };
   }, [phoneGhost]);
 
   const handleView = useCallback(

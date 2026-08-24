@@ -230,6 +230,9 @@ export function bindPhoneGhostControls(root: HTMLElement, bindings: PhoneGhostBi
   };
 
   const onPointerUp = (event: PointerEvent) => {
+    // The editor-cancel we synthesize to drop a one-finger selection is an
+    // untrusted pointercancel. It must not end the two-finger ghost session.
+    if (event.type === 'pointercancel' && !event.isTrusted) return;
     const result = gesture.up(event.pointerId);
     if (result.type === 'snap') {
       bindings.setDragging(false);
@@ -257,6 +260,9 @@ export function bindPhoneGhostControls(root: HTMLElement, bindings: PhoneGhostBi
   };
 
   root.addEventListener('pointerdown', onPointerDown, { capture: true });
+  root.addEventListener('pointermove', onPointerMove, { capture: true });
+  root.addEventListener('pointerup', onPointerUp, { capture: true });
+  root.addEventListener('pointercancel', onPointerUp, { capture: true });
   window.addEventListener('pointermove', onPointerMove, { passive: false });
   window.addEventListener('pointerup', onPointerUp);
   window.addEventListener('pointercancel', onPointerUp);
@@ -266,6 +272,9 @@ export function bindPhoneGhostControls(root: HTMLElement, bindings: PhoneGhostBi
     gesture.reset();
     root.classList.remove('phone-ghost-dragging');
     root.removeEventListener('pointerdown', onPointerDown, { capture: true });
+    root.removeEventListener('pointermove', onPointerMove, { capture: true });
+    root.removeEventListener('pointerup', onPointerUp, { capture: true });
+    root.removeEventListener('pointercancel', onPointerUp, { capture: true });
     window.removeEventListener('pointermove', onPointerMove);
     window.removeEventListener('pointerup', onPointerUp);
     window.removeEventListener('pointercancel', onPointerUp);
