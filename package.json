@@ -35,7 +35,14 @@
     "smoke:platforms": "node scripts/harness/run.mjs --driver=all",
     "measure": "node scripts/measure.mjs",
     "check:ui-budgets": "node scripts/check-ui-budgets.mjs",
-    "ci:service": "bash scripts/run-service-ci.sh"
+    "test:tokens": "node --test scripts/token-contract.test.mjs",
+    "ci:service": "bash scripts/run-service-ci.sh",
+    "test:components": "node --experimental-strip-types --test client/src/components/ui/*.test.ts",
+    "test:materials": "node --experimental-strip-types --test client/src/surface/*.test.ts",
+    "check:motion": "node scripts/check-motion-tokens.mjs",
+    "visual:ribbon": "node scripts/visual/ribbon.mjs",
+    "inventory:design-system": "node scripts/inventory-design-system.mjs",
+    "test:design-system": "npm run build && node scripts/check-design-system.mjs"
   },
   "devDependencies": {
     "agent-browser": "^0.34.0",

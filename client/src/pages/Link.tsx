@@ -17,7 +17,7 @@ export function LinkPage({ pairing, onNotify, onKeep }: LinkPageProps) {
   return (
     <div className="home-surface pairing-landing">
       <section className="home-hero surface-material-host">
-        <SurfaceMaterial variant="hero" intensity={0.92} />
+        <SurfaceMaterial variant="hero" />
         <div className="home-hero-copy">
           <span className="home-kicker"><MarksMark size={16} /> Phone confirmation</span>
           <h2>Keep a workspace from this phone.</h2>

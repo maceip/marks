@@ -33,6 +33,31 @@ export async function runSurface(session, { check }) {
 
   check('opening shell does not stay up', (await session.count('.opening-shell')) === 0);
 
+  const materialState = await session.evaluate(() => ({
+    tier: document.documentElement.dataset.surfaceTier,
+    engine: document.documentElement.dataset.surfaceEngine,
+    documentCanvases: document.querySelectorAll('.editor-pane .surface-material-canvas, .preview-pane .surface-material-canvas').length,
+  }));
+  check('surface tier is explicit', ['opaque', 'foundation', 'balanced', 'cinematic'].includes(materialState.tier), JSON.stringify(materialState));
+  check('scrolling document bodies stay opaque', materialState.documentCanvases === 0, JSON.stringify(materialState));
+
+  const preferenceState = await session.evaluate(() => {
+    const root = document.documentElement;
+    root.dataset.motion = 'reduced';
+    root.dataset.glass = 'reduced';
+    const canvasesHidden = [...document.querySelectorAll('.surface-material-canvas')]
+      .every((canvas) => getComputedStyle(canvas).display === 'none');
+    const opaque = [...document.querySelectorAll('.surface-material-host')]
+      .every((host) => getComputedStyle(host).backdropFilter === 'none');
+    const motionStopped = [...document.querySelectorAll('.surface-material-canvas')]
+      .every((canvas) => getComputedStyle(canvas).transitionDuration === '0s');
+    root.dataset.motion = 'full';
+    root.dataset.glass = 'full';
+    return { canvasesHidden, opaque, motionStopped };
+  });
+  check('reduced glass removes shader and blur', preferenceState.canvasesHidden && preferenceState.opaque, JSON.stringify(preferenceState));
+  check('reduced motion stops material transitions', preferenceState.motionStopped, JSON.stringify(preferenceState));
+
   await session.click('.cm-content');
   await session.insertText(FIXTURE);
   await session.waitForSelector('.marks-preview .marks-block', { timeout: 20_000 });
@@ -87,14 +112,36 @@ export async function runSurface(session, { check }) {
     String(status),
   );
   await session.setOffline(false);
+
+  const contextLoss = await session.evaluate(() => {
+    const canvas = document.querySelector('.surface-material-canvas[data-ready="true"]');
+    if (!canvas) return { applicable: false, tier: document.documentElement.dataset.surfaceTier };
+    canvas.dispatchEvent(new Event('webglcontextlost', { cancelable: true }));
+    return {
+      applicable: true,
+      tier: document.documentElement.dataset.surfaceTier,
+      engine: document.documentElement.dataset.surfaceEngine,
+      canvases: document.querySelectorAll('.surface-material-canvas').length,
+    };
+  });
+  check(
+    'WebGL context loss removes canvases',
+    !contextLoss.applicable || (contextLoss.tier === 'foundation' && contextLoss.engine === 'css' && contextLoss.canvases === 0),
+    JSON.stringify(contextLoss),
+  );
 }
 
 export const SURFACE_CHECK_NAMES = [
   'opening shell does not stay up',
+  'surface tier is explicit',
+  'scrolling document bodies stay opaque',
+  'reduced glass removes shader and blur',
+  'reduced motion stops material transitions',
   'document renders blocks',
   'voice input is honest',
   'select-all in the preview stays inside the document',
   'preview right-click opens the marks menu',
   'theme toggles',
   'connectivity state is honest',
+  'WebGL context loss removes canvases',
 ];

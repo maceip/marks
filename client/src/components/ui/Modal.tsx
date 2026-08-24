@@ -90,7 +90,7 @@ export function Modal({ open, title, description, size = 'medium', children, onC
         aria-describedby={description ? 'marks-modal-description' : undefined}
         ref={panelRef}
       >
-        <SurfaceMaterial variant="floating" intensity={1.02} />
+        <SurfaceMaterial variant="floating" />
         <header className="modal-head">
           <div>
             <h2 id="marks-modal-title">{title}</h2>

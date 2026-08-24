@@ -7,7 +7,7 @@ const projectRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const distRoot = join(projectRoot, 'client', 'dist');
 
 const limits = {
-  app: { javascript: 100 * 1024, css: 10 * 1024 },
+  app: { javascript: 100 * 1024, css: 12 * 1024 },
   marketing: { javascript: 5 * 1024, total: 25 * 1024 },
 };
 

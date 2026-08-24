@@ -1,3 +1,4 @@
+import '../../styles/components/ribbon.css';
 import { useEffect, useRef, useState } from 'react';
 import type { EditorView } from '@codemirror/view';
 import type { StateCommand } from '@codemirror/state';
@@ -49,7 +50,7 @@ import { inspectEditorContext, type EditorContextKind } from '../../editor/conte
 import type { UiActionId } from '../../lib/ui-actions';
 import type { ViewMode } from '../shell/TopBar';
 import { Glyph, type GlyphName } from '../glyphs/Glyph';
-import { RibbonCommand, RibbonGroup } from './RibbonCommand';
+import { RibbonCommand, RibbonDeck, RibbonGroup, RibbonTabButton, RibbonTabList } from './RibbonCommand';
 
 export type RibbonTab =
   | 'file'
@@ -63,7 +64,7 @@ export type RibbonTab =
   | 'table'
   | 'shape';
 
-interface DesktopRibbonProps {
+export interface DesktopRibbonProps {
   documentId: string;
   session: CollabSession | null;
   documentReady: boolean;
@@ -115,10 +116,27 @@ const SHAPES: Array<{ id: ShapeKind; label: string; glyph: GlyphName }> = [
 
 export function DesktopRibbon(props: DesktopRibbonProps) {
   const [tab, setTab] = useState<RibbonTab>('home');
+  const [displayedTab, setDisplayedTab] = useState<RibbonTab>('home');
+  const [deckPhase, setDeckPhase] = useState<'idle' | 'exit' | 'enter'>('idle');
   const [contextKind, setContextKind] = useState<EditorContextKind>('text');
   const lastCommand = useRef<StateCommand | null>(null);
   const [painterArmed, setPainterArmed] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const selectTab = (nextTab: RibbonTab) => {
+    if (nextTab === tab) return;
+    setTab(nextTab);
+    setDeckPhase('exit');
+  };
+
+  const finishDeckPhase = () => {
+    if (deckPhase === 'exit') {
+      setDisplayedTab(tab);
+      setDeckPhase('enter');
+    } else if (deckPhase === 'enter') {
+      setDeckPhase('idle');
+    }
+  };
 
   useEffect(() => {
     const view = props.getView();
@@ -136,9 +154,11 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
   }, [props.documentReady, props.getView]);
 
   useEffect(() => {
-    if (contextKind === 'image') setTab('picture');
-    if (contextKind === 'table') setTab('table');
-    if (contextKind === 'shape') setTab('shape');
+    if (contextKind === 'image') selectTab('picture');
+    if (contextKind === 'table') selectTab('table');
+    if (contextKind === 'shape') selectTab('shape');
+    // selectTab is intentionally driven only when the editor context changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contextKind]);
 
   const run = (command: StateCommand) => {
@@ -161,34 +181,36 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
 
   return (
     <div className="ribbon-body">
-      <nav className="ribbon-tabs" aria-label="Command ribbon">
+      <RibbonTabList role="tablist">
         {CORE_TABS.map((item) => (
-          <button
+          <RibbonTabButton
             key={item.id}
-            type="button"
-            className={`ribbon-tab${tab === item.id ? ' active' : ''}`}
-            aria-pressed={tab === item.id}
-            onClick={() => setTab(item.id)}
+            selected={tab === item.id}
+            onClick={() => selectTab(item.id)}
           >
             {item.label}
-          </button>
+          </RibbonTabButton>
         ))}
         {CONTEXT_TABS.filter((item) => item.kind === contextKind).map((item) => (
-          <button
+          <RibbonTabButton
             key={item.id}
-            type="button"
-            className={`ribbon-tab contextual${tab === item.id ? ' active' : ''}`}
-            aria-pressed={tab === item.id}
-            onClick={() => setTab(item.id)}
+            selected={tab === item.id}
+            contextual
+            onClick={() => selectTab(item.id)}
           >
             {item.label}
-          </button>
+          </RibbonTabButton>
         ))}
-      </nav>
+      </RibbonTabList>
 
-      <div className="ribbon-deck">
-        {tab === 'file' && (
-          <div className="ribbon-toolbar ribbon-deck-enter" role="toolbar" aria-label="File commands">
+      <RibbonDeck
+        className={deckPhase === 'exit' ? 'ribbon-deck-exit' : deckPhase === 'enter' ? 'ribbon-deck-enter' : ''}
+        onAnimationEnd={(event) => {
+          if (event.target === event.currentTarget) finishDeckPhase();
+        }}
+      >
+        {displayedTab === 'file' && (
+          <div className="ribbon-toolbar" role="toolbar" aria-label="File commands">
             <RibbonGroup label="Create">
               <RibbonCommand glyph="plus" label="New" onClick={() => props.onAction('new')} />
               <RibbonCommand glyph="template" label="Template" onClick={() => props.onAction('templates')} />
@@ -208,8 +230,8 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
           </div>
         )}
 
-        {tab === 'home' && (
-          <div className="ribbon-toolbar ribbon-deck-enter" role="toolbar" aria-label="Home commands">
+        {displayedTab === 'home' && (
+          <div className="ribbon-toolbar" role="toolbar" aria-label="Home commands">
             <RibbonGroup label="Clipboard">
               <RibbonCommand
                 glyph="paste"
@@ -325,8 +347,8 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
           </div>
         )}
 
-        {tab === 'insert' && (
-          <div className="ribbon-toolbar ribbon-deck-enter" role="toolbar" aria-label="Insert commands">
+        {displayedTab === 'insert' && (
+          <div className="ribbon-toolbar" role="toolbar" aria-label="Insert commands">
             <RibbonGroup label="Illustrations" onLaunch={() => fileRef.current?.click()} launchLabel="Insert image file">
               <RibbonCommand glyph="image" label="Picture" disabled={!props.documentReady} onClick={() => run(insertImage)} />
               <RibbonCommand glyph="image" label="From file" disabled={!props.documentReady} onClick={() => fileRef.current?.click()} />
@@ -353,8 +375,8 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
           </div>
         )}
 
-        {tab === 'draw' && (
-          <div className="ribbon-toolbar ribbon-deck-enter" role="toolbar" aria-label="Draw commands">
+        {displayedTab === 'draw' && (
+          <div className="ribbon-toolbar" role="toolbar" aria-label="Draw commands">
             <RibbonGroup label="Shapes">
               {SHAPES.map((shape) => (
                 <RibbonCommand
@@ -374,8 +396,8 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
           </div>
         )}
 
-        {tab === 'tools' && (
-          <div className="ribbon-toolbar ribbon-deck-enter" role="toolbar" aria-label="Local draft tools">
+        {displayedTab === 'tools' && (
+          <div className="ribbon-toolbar" role="toolbar" aria-label="Local draft tools">
             <RibbonGroup label="Deterministic transforms">
               <RibbonCommand glyph="compose" label="Skeleton" large disabled={!props.documentReady} onClick={props.onOpenDraftTools} />
               <RibbonCommand glyph="rewrite" label="Clean up" disabled={!props.documentReady} onClick={props.onOpenDraftTools} />
@@ -387,8 +409,8 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
           </div>
         )}
 
-        {tab === 'review' && (
-          <div className="ribbon-toolbar ribbon-deck-enter" role="toolbar" aria-label="Review commands">
+        {displayedTab === 'review' && (
+          <div className="ribbon-toolbar" role="toolbar" aria-label="Review commands">
             <RibbonGroup label="Review">
               <RibbonCommand glyph="comment" label="Comments" pressed={props.reviewOpen === 'comments'} onClick={() => props.onAction('comments')} />
               <RibbonCommand glyph="history" label="History" pressed={props.reviewOpen === 'history'} onClick={() => props.onAction('history')} />
@@ -400,8 +422,8 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
           </div>
         )}
 
-        {tab === 'view' && (
-          <div className="ribbon-toolbar ribbon-deck-enter" role="toolbar" aria-label="View commands">
+        {displayedTab === 'view' && (
+          <div className="ribbon-toolbar" role="toolbar" aria-label="View commands">
             <RibbonGroup label="Layout">
               {visibleModes.map((mode) => (
                 <RibbonCommand
@@ -427,8 +449,8 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
           </div>
         )}
 
-        {tab === 'picture' && (
-          <div className="ribbon-toolbar ribbon-deck-enter" role="toolbar" aria-label="Picture tools">
+        {displayedTab === 'picture' && (
+          <div className="ribbon-toolbar" role="toolbar" aria-label="Picture tools">
             <RibbonGroup label="Size">
               <RibbonCommand glyph="shrink" label="Small" disabled={!props.documentReady} onClick={() => { const view = props.getView(); if (view) updateImageAtCursor(view, { width: 240 }); }} />
               <RibbonCommand glyph="image" label="Medium" disabled={!props.documentReady} onClick={() => { const view = props.getView(); if (view) updateImageAtCursor(view, { width: 480 }); }} />
@@ -446,8 +468,8 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
           </div>
         )}
 
-        {tab === 'table' && (
-          <div className="ribbon-toolbar ribbon-deck-enter" role="toolbar" aria-label="Table tools">
+        {displayedTab === 'table' && (
+          <div className="ribbon-toolbar" role="toolbar" aria-label="Table tools">
             <RibbonGroup label="Rows and columns">
               <RibbonCommand glyph="row" label="Add row" disabled={!props.documentReady} onClick={() => run(addTableRow())} />
               <RibbonCommand glyph="column" label="Add column" disabled={!props.documentReady} onClick={() => run(addTableColumn())} />
@@ -456,8 +478,8 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
           </div>
         )}
 
-        {tab === 'shape' && (
-          <div className="ribbon-toolbar ribbon-deck-enter" role="toolbar" aria-label="Shape tools">
+        {displayedTab === 'shape' && (
+          <div className="ribbon-toolbar" role="toolbar" aria-label="Shape tools">
             <RibbonGroup label="Change shape">
               {SHAPES.map((shape) => (
                 <RibbonCommand
@@ -471,7 +493,7 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
             </RibbonGroup>
           </div>
         )}
-      </div>
+      </RibbonDeck>
 
       <input
         ref={fileRef}

@@ -1,10 +1,11 @@
+import { MATERIAL_RECIPES, type MaterialModifier, type MaterialRecipeName } from '../design-system/materials';
 import { surfaceRuntime, type SurfaceFrame } from './runtime';
 
-export type SurfaceMaterialVariant = 'chrome' | 'floating' | 'panel' | 'hero';
+export type SurfaceMaterialVariant = Exclude<MaterialRecipeName, 'opaqueDocument'>;
 
 export interface SurfaceMaterialOptions {
   variant?: SurfaceMaterialVariant;
-  intensity?: number;
+  modifier?: MaterialModifier;
 }
 
 const VERTEX_SHADER = `#version 300 es
@@ -158,7 +159,7 @@ function setUniform(gl: WebGL2RenderingContext, location: WebGLUniformLocation |
 export function attachSurfaceMaterial(
   canvas: HTMLCanvasElement,
   host: HTMLElement,
-  { variant = 'panel', intensity = 1 }: SurfaceMaterialOptions = {},
+  { variant = 'panel', modifier = 'standard' }: SurfaceMaterialOptions = {},
 ): () => void {
     if (!surfaceRuntime.supportsShader) return () => undefined;
 
@@ -290,7 +291,8 @@ export function attachSurfaceMaterial(
         uniforms.theme,
         document.documentElement.dataset.theme === 'dark' ? 1 : 0,
       );
-      setUniform(gl, uniforms.intensity, intensity);
+      const modifierScale = modifier === 'subtle' ? .86 : modifier === 'emphasized' ? 1.12 : 1;
+      setUniform(gl, uniforms.intensity, MATERIAL_RECIPES[variant].shaderIntensity * modifierScale);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
 
       if (firstFrame) {
@@ -317,10 +319,12 @@ export function attachSurfaceMaterial(
       pulse = 1;
       surfaceRuntime.activate(1_600);
     };
-    const contextLost = () => {
+    const contextLost = (event: Event) => {
+      event.preventDefault();
       enabled = false;
       canvas.removeAttribute('data-ready');
       surfaceRuntime.disableShader();
+      canvas.remove();
     };
 
     const resizeObserver = new ResizeObserver(() => {

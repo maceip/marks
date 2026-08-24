@@ -45,6 +45,9 @@ import type { Heading } from './markdown/types';
 const Benchmark = lazy(() =>
   import('./pages/Benchmark').then((module) => ({ default: module.Benchmark })),
 );
+const DesignSystem = lazy(() =>
+  import('./design-system/DesignSystem').then((module) => ({ default: module.DesignSystem })),
+);
 const Workspace = lazy(() =>
   import('./components/workspace/Workspace').then((module) => ({ default: module.Workspace })),
 );
@@ -157,7 +160,7 @@ export function App() {
     history.replaceState(null, '', `${location.pathname}${location.search}`);
   }, []);
 
-  const documents = useDocuments(route.name !== 'benchmark');
+  const documents = useDocuments(route.name !== 'benchmark' && route.name !== 'design-system');
   const docId = route.name === 'document' ? route.id : null;
   const { meta, engine, supported, resolved } = useDocumentMeta(docId);
   const { session, status, peers, hydrated } = useSession(
@@ -685,6 +688,8 @@ export function App() {
     document.title =
       route.name === 'benchmark'
         ? 'Benchmark · marks'
+        : route.name === 'design-system'
+          ? 'Design system · marks'
         : route.name === 'link'
           ? 'Phone confirmation · marks'
           : route.name === 'document'
@@ -699,6 +704,14 @@ export function App() {
     setOutlineOpen(false);
     setDraftToolsOpen(false);
   }, [route.name]);
+
+  if (route.name === 'design-system') {
+    return (
+      <Suspense fallback={<div className="empty-state">Loading design system…</div>}>
+        <DesignSystem onBack={() => navigate({ name: 'home' })} />
+      </Suspense>
+    );
+  }
 
   return (
     <div className={`app route-${route.name}${sidebarOpen && !focusMode && !posture.foldable ? ' with-sidebar' : ''}${focusMode ? ' focus-mode' : ''}${ribbonCollapsed ? ' ribbon-collapsed' : ''}`} data-shell={posture.shell} data-doc={docId ?? undefined}>

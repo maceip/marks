@@ -16,7 +16,7 @@
   border-radius: inherit;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 420ms var(--ease-out);
+  transition: opacity var(--motion-surface) var(--ease-out);
   contain: strict;
 }
 
@@ -48,6 +48,10 @@
   --glass-saturation: 168%;
 }
 
+:root[data-surface-tier='balanced'] .surface-material-canvas[data-ready='true'] {
+  opacity: calc(var(--material-shader-opacity, 0.86) * 0.72);
+}
+
 :root[data-surface-tier='foundation'] {
   --glass-blur-chrome: 12px;
   --glass-blur-panel: 16px;
@@ -59,6 +63,8 @@
 :root[data-glass='reduced'] .surface-material-canvas {
   display: none;
 }
+
+:root[data-motion='reduced'] .surface-material-canvas { transition: none; }
 
 @media (pointer: coarse) {
   .surface-material-canvas[data-ready='true'] {
@@ -73,3 +79,24 @@
 @media (prefers-reduced-motion: reduce) {
   .surface-material-canvas { transition: none; }
 }
+
+/* Geometry belongs to the host component; tiers only exchange paint cost. */
+.surface-material-host {
+  border-color: var(--material-border, var(--glass-border));
+  box-shadow: var(--material-shadow, var(--glass-shadow));
+}
+
+:root[data-surface-tier='foundation'] .surface-material-host {
+  background: var(--material-tint, var(--glass));
+  -webkit-backdrop-filter: blur(var(--material-blur, 16px)) saturate(var(--material-saturation, 146%));
+  backdrop-filter: blur(var(--material-blur, 16px)) saturate(var(--material-saturation, 146%));
+}
+
+:root[data-surface-tier='opaque'] .surface-material-host,
+:root[data-glass='reduced'] .surface-material-host {
+  background: var(--material-fallback-background, var(--surface-raised));
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+:root[data-surface-tier='opaque'] .surface-material-canvas { display: none; }

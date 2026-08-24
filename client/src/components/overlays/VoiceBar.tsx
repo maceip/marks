@@ -1,4 +1,6 @@
+import '../../styles/components.css';
 import type { VoiceStatus } from '../../browser';
+import { Button } from '../ui/Button';
 
 interface VoiceBarProps {
   status: VoiceStatus;
@@ -23,9 +25,7 @@ export function VoiceBar({ status, interim, onStop }: VoiceBarProps) {
       <span>{LABEL[status]}</span>
       {interim && <span className="voice-interim">{interim}</span>}
       {status === 'listening' && (
-        <button type="button" className="link-button" onClick={onStop}>
-          Stop
-        </button>
+        <Button variant="link" onClick={onStop}>Stop</Button>
       )}
     </div>
   );

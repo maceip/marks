@@ -1,0 +1,75 @@
+/* Shared motion recipes. Entrances are compositor-only: transform and opacity. */
+@keyframes motion-fade-in { from { opacity: 0; } }
+@keyframes motion-fade-out { to { opacity: 0; } }
+@keyframes motion-fade-rise-in {
+  from { opacity: 0; transform: translateY(var(--motion-translate-sm)) scale(var(--motion-scale-subtle)); }
+}
+@keyframes motion-popover-in {
+  from { opacity: 0; transform: translateY(calc(-1 * var(--motion-translate-sm))) scale(var(--motion-scale-popover)); }
+}
+@keyframes motion-popover-out {
+  to { opacity: 0; transform: translateY(calc(-1 * var(--motion-translate-sm))) scale(var(--motion-scale-popover)); }
+}
+@keyframes motion-drawer-in {
+  from { opacity: 0; transform: translateX(calc(-1 * var(--motion-translate-lg))); }
+}
+@keyframes motion-drawer-out {
+  to { opacity: 0; transform: translateX(calc(-1 * var(--motion-translate-lg))); }
+}
+@keyframes motion-scrim-in { from { opacity: 0; } }
+@keyframes motion-scrim-out { to { opacity: 0; } }
+@keyframes motion-toast-in {
+  from { opacity: 0; transform: translateX(var(--motion-translate-md)) scale(var(--motion-scale-popover)); }
+}
+@keyframes motion-toast-out {
+  to { opacity: 0; transform: translateX(var(--motion-translate-md)) scale(var(--motion-scale-popover)); }
+}
+@keyframes motion-pill-expand { from { opacity: 0; transform: scaleX(var(--motion-scale-subtle)); } }
+@keyframes motion-pill-collapse { to { opacity: 0; transform: scaleX(var(--motion-scale-subtle)); } }
+@keyframes motion-ribbon-replace {
+  from { opacity: 0; transform: translateY(var(--motion-translate-sm)); }
+}
+@keyframes motion-status-pulse { 50% { opacity: 0.45; transform: scale(0.92); } }
+
+.motion-fade-in { animation: motion-fade-in var(--motion-fast) var(--ease-standard) both; }
+.motion-fade-out { animation: motion-fade-out var(--motion-fast) var(--ease-accelerate) both; }
+.motion-fade-rise-in { animation: motion-fade-rise-in var(--motion-medium) var(--ease-decelerate) both; }
+.motion-popover-in { animation: motion-popover-in var(--motion-fast) var(--ease-spring) both; }
+.motion-popover-out { animation: motion-popover-out var(--motion-fast) var(--ease-accelerate) both; }
+.motion-drawer-in { animation: motion-drawer-in var(--motion-medium) var(--ease-decelerate) both; }
+.motion-drawer-out { animation: motion-drawer-out var(--motion-medium) var(--ease-accelerate) both; }
+.motion-scrim-in { animation: motion-scrim-in var(--motion-medium) var(--ease-standard) both; }
+.motion-scrim-out { animation: motion-scrim-out var(--motion-fast) var(--ease-accelerate) both; }
+.motion-toast-in { animation: motion-toast-in var(--motion-medium) var(--ease-spring) both; }
+.motion-toast-out { animation: motion-toast-out var(--motion-fast) var(--ease-accelerate) both; }
+.motion-ribbon-replace { animation: motion-ribbon-replace var(--motion-fast) var(--ease-decelerate) both; }
+.motion-status-pulse { animation: motion-status-pulse var(--motion-deliberate) var(--ease-standard) infinite; }
+
+/* The pill is the sole dimension-motion exception: containment and clipping bound reflow. */
+.motion-pill {
+  contain: layout paint;
+  overflow: clip;
+  transition: inline-size var(--motion-medium) var(--ease-emphasized),
+    opacity var(--motion-fast) var(--ease-standard), transform var(--motion-medium) var(--ease-emphasized);
+}
+.motion-pill-expand { animation: motion-pill-expand var(--motion-medium) var(--ease-emphasized) both; }
+.motion-pill-collapse { animation: motion-pill-collapse var(--motion-fast) var(--ease-accelerate) both; }
+
+/* One accessibility contract covers OS preference and the in-product setting. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: var(--motion-instant) !important;
+    animation-delay: var(--motion-instant) !important;
+    transition-duration: var(--motion-instant) !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+:root[data-motion='reduced'] *,
+:root[data-motion='reduced'] *::before,
+:root[data-motion='reduced'] *::after {
+  animation-duration: var(--motion-instant) !important;
+  animation-delay: var(--motion-instant) !important;
+  transition-duration: var(--motion-instant) !important;
+  scroll-behavior: auto !important;
+}

@@ -41,7 +41,7 @@ export function Home({
   return (
     <div className="home-surface">
       <section className="home-hero surface-material-host">
-        <SurfaceMaterial variant="hero" intensity={0.92} />
+        <SurfaceMaterial variant="hero" />
         <div className="home-hero-copy">
           <span className="home-kicker"><MarksMark size={16} /> {temporary ? 'Temporary workspace' : local ? 'Local workspace' : 'Your workspace'}</span>
           <h2>Pick up the thought.<br />The page is ready.</h2>
@@ -64,7 +64,7 @@ export function Home({
           </div>
         </div>
         <div className="home-receipt surface-material-host" aria-label="Performance promise">
-          <SurfaceMaterial variant="floating" intensity={1.08} />
+          <SurfaceMaterial variant="floating" />
           <div className="receipt-orbit"><Icon path={icons.sparkles} size={19} /></div>
           <span>Critical app shell</span>
           <strong>{UI_PERFORMANCE_RECEIPT.appCriticalKb}<small> KB</small></strong>
