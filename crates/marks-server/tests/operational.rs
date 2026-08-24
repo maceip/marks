@@ -250,6 +250,76 @@ async fn artifact_identity_static_mime_and_security_headers_are_process_owned() 
         "public, max-age=31536000, immutable"
     );
 
+    // A missing hashed asset — an old release's chunk after a deployment —
+    // must be an uncacheable 404, never the SPA shell: immutable HTML under
+    // a JavaScript URL would poison the browser cache beyond rollback.
+    let missing_asset = http
+        .get(format!("{}/assets/app-gone.js", server.base))
+        .header("accept", "*/*")
+        .header("sec-fetch-mode", "cors")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing_asset.status(), 404);
+    assert_eq!(missing_asset.headers()["cache-control"], "no-store");
+
+    // Even an address-bar navigation to a missing asset path stays a 404.
+    let asset_navigation = http
+        .get(format!("{}/assets/app-gone.js", server.base))
+        .header("accept", "text/html,application/xhtml+xml")
+        .header("sec-fetch-mode", "navigate")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(asset_navigation.status(), 404);
+
+    // Deep-link navigations still receive the app shell.
+    let deep_link = http
+        .get(format!("{}/documents/2f9d1c", server.base))
+        .header("accept", "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8")
+        .header("sec-fetch-mode", "navigate")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(deep_link.status(), 200);
+    assert!(
+        deep_link.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/html")
+    );
+    assert_eq!(
+        deep_link.headers()["cache-control"],
+        "no-cache, must-revalidate"
+    );
+
+    // Browsers without fetch metadata still navigate through Accept.
+    let legacy_navigation = http
+        .get(format!("{}/documents/2f9d1c", server.base))
+        .header("accept", "text/html,application/xhtml+xml")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(legacy_navigation.status(), 200);
+    assert!(
+        legacy_navigation.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/html")
+    );
+
+    // Non-navigation lookups of unknown runtime paths are honest 404s, so a
+    // stale service worker or loader can detect a missing artifact instead
+    // of parsing shell HTML as WebAssembly or JavaScript.
+    let missing_runtime = http
+        .get(format!("{}/esbt.core9.wasm", server.base))
+        .header("accept", "*/*")
+        .header("sec-fetch-mode", "cors")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing_runtime.status(), 404);
+
     server.stop().await;
     let _ = std::fs::remove_dir_all(static_dir);
 }

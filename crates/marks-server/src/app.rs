@@ -7,12 +7,19 @@ use crate::health::Health;
 use crate::rate::RateLimiter;
 use crate::room::Rooms;
 use crate::routes;
+use axum::body::Body;
+use axum::extract::Request;
+use axum::http::{Method, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Router, extract::DefaultBodyLimit, middleware};
 use rusqlite::params;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
+use tower::util::ServiceExt;
+use tower_http::services::{ServeDir, ServeFile};
 
 pub struct App {
     pub config: Arc<Config>,
@@ -264,13 +271,64 @@ pub fn router(app: Arc<App>) -> Router {
 
     let router = match &app.config.static_dir {
         Some(directory) => {
-            let index = directory.join("index.html");
-            api.fallback_service(
-                tower_http::services::ServeDir::new(directory)
-                    .fallback(tower_http::services::ServeFile::new(index)),
-            )
+            let directory = directory.clone();
+            api.fallback(move |request: Request| serve_static(directory.clone(), request))
         }
         None => api,
     };
     router.layer(middleware::from_fn_with_state(app, crate::headers::harden))
+}
+
+/// Static files are served exactly as they exist on disk; the SPA shell
+/// answers only top-level navigations. A missing hashed asset or runtime
+/// artifact must be a 404, never shell HTML: after a deployment, an old tab
+/// requesting a chunk from the previous release would otherwise cache HTML
+/// under an immutable JavaScript URL for a year, and rollback cannot repair
+/// an already poisoned browser cache.
+async fn serve_static(directory: PathBuf, request: Request) -> Response {
+    let navigation = is_navigation(&request);
+    let method = request.method().clone();
+    let response = match ServeDir::new(&directory).oneshot(request).await {
+        Ok(response) => response.map(Body::new),
+        Err(error) => {
+            tracing::error!(target: "marks_server::static", %error, "static file service failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    if response.status() != StatusCode::NOT_FOUND || !navigation {
+        return response;
+    }
+    let shell = Request::builder()
+        .method(method)
+        .uri("/")
+        .body(Body::empty())
+        .expect("static shell request");
+    match ServeFile::new(directory.join("index.html"))
+        .oneshot(shell)
+        .await
+    {
+        Ok(response) => response.map(Body::new),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// A navigation is a top-level document request: GET or HEAD, outside the
+/// hashed-asset namespace, that a browser marks `Sec-Fetch-Mode: navigate`
+/// or that prefers HTML. Module imports, fetch(), workers, and asset
+/// lookups never qualify, so they receive honest 404s.
+fn is_navigation(request: &Request) -> bool {
+    if request.method() != Method::GET && request.method() != Method::HEAD {
+        return false;
+    }
+    if request.uri().path().starts_with("/assets/") {
+        return false;
+    }
+    if let Some(mode) = request.headers().get("sec-fetch-mode") {
+        return mode.as_bytes() == b"navigate";
+    }
+    request
+        .headers()
+        .get(header::ACCEPT)
+        .and_then(|accept| accept.to_str().ok())
+        .is_some_and(|accept| accept.contains("text/html"))
 }
