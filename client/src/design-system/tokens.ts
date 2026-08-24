@@ -27,6 +27,46 @@ export const canvasTokenNames = {
 
 export type CanvasTokenName = (typeof canvasTokenNames)[keyof typeof canvasTokenNames];
 
+export const intentTokenNames = [
+  '--color-primary',
+  '--color-secondary',
+  '--color-tertiary',
+  '--color-destructive',
+  '--color-success',
+  '--color-warning',
+  '--color-info',
+] as const;
+
+export const elevationTokenNames = [
+  '--elevation-none',
+  '--elevation-xs',
+  '--elevation-sm',
+  '--elevation-md',
+  '--elevation-lg',
+  '--elevation-xl',
+  '--elevation-overlay',
+] as const;
+
+export const radiusTokenNames = [
+  '--radius-none',
+  '--radius-tight',
+  '--radius-control',
+  '--radius-card',
+  '--radius-panel',
+  '--radius-sheet',
+  '--radius-pill',
+  '--radius-round',
+] as const;
+
+export const interactivityTokenNames = [
+  '--interact-press-translate',
+  '--interact-hover-lift',
+  '--interact-press-scale',
+  '--interact-icon-tilt',
+  '--interact-focus-offset',
+  '--color-focus-ring',
+] as const;
+
 export function readCssToken(
   styles: Pick<CSSStyleDeclaration, 'getPropertyValue'>,
   token: CanvasTokenName | CollaboratorTokenName,

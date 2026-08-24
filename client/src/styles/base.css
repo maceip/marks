@@ -88,8 +88,71 @@ a {
   background-clip: content-box;
 }
 
-.icon {
+.icon,
+.marks-icon {
   flex: none;
+}
+
+.marks-icon {
+  --icon-tilt-x: 0;
+  --icon-tilt-y: 0;
+  --icon-press: 0;
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+}
+
+.marks-icon > svg {
+  grid-area: 1 / 1;
+  overflow: visible;
+}
+
+.marks-icon-shadow {
+  fill: rgb(12 28 72 / 22%);
+}
+
+.marks-icon-live .marks-icon-body {
+  transform:
+    perspective(120px)
+    rotateX(calc(var(--icon-tilt-y) * -8deg + var(--icon-press) * 6deg))
+    rotateY(calc(var(--icon-tilt-x) * var(--interact-icon-tilt)))
+    translateY(calc(var(--icon-press) * var(--interact-press-translate)))
+    scale(calc(1 - var(--icon-press) * 0.05));
+  transform-style: preserve-3d;
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.marks-icon-face { fill: var(--color-brand-primary); stroke: color-mix(in srgb, var(--color-primary) 55%, white); stroke-width: 0.6; }
+.marks-icon-top { fill: color-mix(in srgb, var(--color-brand-primary) 72%, white); }
+.marks-icon-side { fill: color-mix(in srgb, var(--color-brand-primary) 70%, black); }
+.marks-icon-navy .marks-icon-face { fill: var(--color-brand-primary); }
+.marks-icon-navy .marks-icon-top { fill: color-mix(in srgb, var(--color-brand-primary) 68%, white); }
+.marks-icon-navy .marks-icon-side { fill: color-mix(in srgb, var(--color-brand-primary) 72%, black); }
+.marks-icon-blue .marks-icon-face { fill: var(--color-primary); stroke: color-mix(in srgb, white 70%, var(--color-primary)); }
+.marks-icon-blue .marks-icon-top { fill: color-mix(in srgb, var(--color-primary) 62%, white); }
+.marks-icon-blue .marks-icon-side { fill: color-mix(in srgb, var(--color-primary) 72%, black); }
+.marks-icon-green .marks-icon-face { fill: var(--color-success); stroke: color-mix(in srgb, var(--color-success) 40%, white); }
+.marks-icon-green .marks-icon-top { fill: color-mix(in srgb, var(--color-success) 55%, white); }
+.marks-icon-green .marks-icon-side { fill: color-mix(in srgb, var(--color-success) 65%, black); }
+.marks-icon-teal .marks-icon-face { fill: var(--color-brand-teal); stroke: color-mix(in srgb, var(--color-brand-teal) 40%, white); }
+.marks-icon-teal .marks-icon-top { fill: color-mix(in srgb, var(--color-brand-teal) 55%, white); }
+.marks-icon-teal .marks-icon-side { fill: color-mix(in srgb, var(--color-brand-teal) 65%, black); }
+.marks-icon-amber .marks-icon-face { fill: var(--color-brand-warm); stroke: color-mix(in srgb, var(--color-warning) 45%, white); }
+.marks-icon-amber .marks-icon-top { fill: color-mix(in srgb, var(--color-brand-warm) 50%, white); }
+.marks-icon-amber .marks-icon-side { fill: color-mix(in srgb, var(--color-brand-warm) 65%, black); }
+.marks-icon-rose .marks-icon-face { fill: var(--color-destructive); stroke: color-mix(in srgb, var(--color-destructive) 40%, white); }
+.marks-icon-rose .marks-icon-top { fill: color-mix(in srgb, var(--color-destructive) 55%, white); }
+.marks-icon-rose .marks-icon-side { fill: color-mix(in srgb, var(--color-destructive) 65%, black); }
+.marks-icon-slate .marks-icon-face { fill: var(--color-fg-muted); stroke: color-mix(in srgb, var(--color-fg-subtle) 40%, white); }
+.marks-icon-slate .marks-icon-top { fill: color-mix(in srgb, var(--color-fg-muted) 58%, white); }
+.marks-icon-slate .marks-icon-side { fill: color-mix(in srgb, var(--color-fg-muted) 70%, black); }
+.marks-icon-gloss { fill: none; stroke: rgb(255 255 255 / 58%); stroke-width: 1.1; stroke-linecap: round; transform: translateX(calc(var(--icon-tilt-x) * 1.6px)); }
+.marks-icon-mark { fill: none; stroke: rgb(255 255 255 / 94%); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+:root[data-motion='reduced'] .marks-icon-live .marks-icon-body,
+:root[data-surface-tier='foundation'] .marks-icon-live .marks-icon-body {
+  transform: none;
+  transition: none;
 }
 
 .marks-mark { display: block; flex: none; overflow: visible; }
@@ -101,14 +164,16 @@ a {
 .marks-mark-history { fill: none; stroke: var(--color-brand-positive); stroke-width: 1.2; stroke-linecap: round; stroke-linejoin: round; }
 
 .button {
+  position: relative;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   padding: 6px 12px;
   border: var(--border-width-hairline) solid var(--color-border-default);
   border-radius: var(--radius-control);
-  background: var(--color-bg-surface);
-  color: var(--color-fg-default);
+  background: var(--color-secondary);
+  color: var(--color-on-secondary);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
@@ -117,35 +182,70 @@ a {
 }
 
 .button:hover {
-  background: var(--color-bg-sunken);
+  background: var(--color-secondary-hover);
   border-color: var(--color-border-strong);
 }
 
-.button:active {
-  transform: translateY(1px);
+.button:active:not(:disabled, [data-loading='true']) {
+  transform: translateY(var(--interact-press-translate));
 }
 
-.button.primary {
-  background: var(--color-action);
-  border-color: var(--color-action);
-  color: var(--color-fg-on-action);
+.button.primary,
+.button-primary {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-on-primary);
 }
 
-.button.primary:hover {
-  background: var(--color-action-hover);
-  border-color: var(--color-action-hover);
+.button.primary:hover,
+.button-primary:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+  border-color: var(--color-primary-hover);
 }
 
 .button.subtle {
-  background: transparent;
+  background: var(--color-tertiary);
+  color: var(--color-on-tertiary);
 }
 
-.button:disabled {
+.button:disabled:not([data-loading='true']) {
   opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
 
+.button[data-loading='true'] {
+  cursor: wait;
+}
+
+.button[data-loading='true'] > :not(.button-spinner) {
+  visibility: hidden;
+}
+
+.button-spinner {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.ui-spinner {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  flex: none;
+  border: var(--border-width-strong) solid currentColor;
+  border-right-color: transparent;
+  border-radius: var(--radius-round);
+  animation: ui-spin var(--motion-deliberate) linear infinite;
+}
+
+@keyframes ui-spin {
+  to { transform: rotate(1turn); }
+}
+
 .icon-button {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -158,6 +258,14 @@ a {
   color: var(--color-fg-muted);
   cursor: pointer;
   transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+
+.icon-button-face {
+  display: inline-flex;
+}
+
+.icon-button[data-loading='true'] .icon-button-face {
+  visibility: hidden;
 }
 
 .icon-button:hover {

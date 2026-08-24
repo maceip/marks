@@ -29,71 +29,9 @@
   pointer-events: auto;
 }
 
-.glyph-shadow,
-.glyph-body {
-  grid-area: 1 / 1;
-  overflow: visible;
-}
-
-.glyph-shadow {
-  fill: rgb(12 28 72 / 22%);
-  transform: translate3d(0, 2px, -8px) scale(0.92);
-  filter: blur(1.2px);
-}
-
-.glyph-live .glyph-body {
-  transform:
-    perspective(140px)
-    rotateX(calc(var(--tilt-y) * -11deg))
-    rotateY(calc(var(--tilt-x) * 13deg))
-    translateZ(4px);
-  transform-style: preserve-3d;
-  transition: transform var(--duration-fast) var(--ease-out);
-}
-
-.glyph-slab {
-  fill: url(#none);
-  stroke-width: 1;
-}
-
-.glyph-navy .glyph-slab { fill: #1c2c63; stroke: color-mix(in srgb, #7294ff 55%, white); }
-.glyph-blue .glyph-slab { fill: #2c54d8; stroke: color-mix(in srgb, white 70%, #315eea); }
-.glyph-green .glyph-slab { fill: #0f8f5b; stroke: color-mix(in srgb, #9ff3c8 70%, white); }
-.glyph-teal .glyph-slab { fill: #1f6d74; stroke: color-mix(in srgb, #9ee8ef 60%, white); }
-.glyph-amber .glyph-slab { fill: #8d6410; stroke: color-mix(in srgb, #f5d27a 70%, white); }
-
-.glyph-lip {
-  fill: none;
-  stroke: rgb(255 255 255 / 42%);
-  stroke-width: 1.2;
-  stroke-linecap: round;
-}
-
-.glyph-fold {
-  fill: #11bd72;
-  stroke: color-mix(in srgb, #0b6a42 40%, white);
-  stroke-width: 0.8;
-}
-
-.glyph-mark {
-  fill: none;
-  stroke: rgb(255 255 255 / 92%);
-  stroke-width: 1.55;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.glyph-spec {
-  fill: none;
-  stroke: rgb(255 255 255 / 58%);
-  stroke-width: 1.15;
-  stroke-linecap: round;
-  transform: translateX(calc(var(--tilt-x) * 2px));
-}
-
-.ribbon-command:active .glyph-live .glyph-body,
-.phone-nav button:active .glyph-live .glyph-body {
-  transform: perspective(140px) rotateX(8deg) translateZ(0) scale(0.96);
+.ribbon-command:active .glyph.marks-icon-live .marks-icon-body,
+.phone-nav button:active .glyph.marks-icon-live .marks-icon-body {
+  --icon-press: 1;
 }
 
 .ribbon-body {
@@ -1167,11 +1105,11 @@
   backdrop-filter: none;
 }
 
-:root[data-motion='reduced'] .glyph-live .glyph-body,
-:root[data-surface-tier='foundation'] .glyph-live .glyph-body {
+:root[data-motion='reduced'] .glyph.marks-icon-live .marks-icon-body,
+:root[data-surface-tier='foundation'] .glyph.marks-icon-live .marks-icon-body {
   transform: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .glyph-live .glyph-body { transform: none; }
+  .glyph.marks-icon-live .marks-icon-body { transform: none; }
 }

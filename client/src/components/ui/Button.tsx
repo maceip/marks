@@ -29,9 +29,10 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       data-tone={resolvedTone}
       className={`ui-control button button-${variant} button-${size} ${variant}${className ? ` ${className}` : ''}`}
     >
-      {loading ? <span className="ui-spinner" aria-hidden="true" /> : leadingIcon && <span className="button-icon" aria-hidden="true">{leadingIcon}</span>}
+      {leadingIcon && <span className="button-icon" aria-hidden="true">{leadingIcon}</span>}
       <span className="button-label">{children}</span>
-      {!loading && trailingIcon && <span className="button-icon" aria-hidden="true">{trailingIcon}</span>}
+      {trailingIcon && <span className="button-icon" aria-hidden="true">{trailingIcon}</span>}
+      {loading && <span className="button-spinner" aria-hidden="true"><span className="ui-spinner" /></span>}
     </button>
   );
 });

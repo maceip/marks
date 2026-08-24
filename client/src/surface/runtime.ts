@@ -1,10 +1,20 @@
-import { selectInitialTier, type SurfaceTier } from './runtime-policy';
+import {
+  nextLowerTier,
+  prefersGpuEngine,
+  selectInitialTier,
+  shaderMixForQuality,
+  TIER_SCORE,
+  type SurfaceTier,
+} from './runtime-policy';
+import { canUseWebGpu } from './detect';
+
 export type { SurfaceTier } from './runtime-policy';
 
 export interface SurfaceFrame {
   now: number;
   elapsed: number;
   quality: number;
+  mix: number;
   motion: boolean;
   active: boolean;
 }
@@ -17,12 +27,6 @@ interface NavigatorHints extends Navigator {
 }
 
 const SESSION_TIER_KEY = 'marks:surface-tier:v1';
-const TIER_SCORE: Record<SurfaceTier, number> = {
-  opaque: 0,
-  foundation: 0,
-  balanced: 1,
-  cinematic: 2,
-};
 
 function media(query: string): boolean {
   return typeof matchMedia === 'function' && matchMedia(query).matches;
@@ -61,6 +65,7 @@ function detectTier(): SurfaceTier {
     reducedTransparency: media('(prefers-reduced-transparency: reduce)'),
     reducedGlass: document.documentElement.dataset.glass === 'reduced',
     webgl2: typeof WebGL2RenderingContext !== 'undefined',
+    webgpu: canUseWebGpu(),
     backdropFilter,
   });
   const remembered = storedTier();
@@ -75,15 +80,15 @@ function motionAllowed(): boolean {
 }
 
 /**
- * One clock drives every material canvas. It deliberately adapts cost rather
- * than appearance: a downgrade lowers cadence, backing resolution and shader
- * octaves while the CSS glass recipe remains unchanged.
+ * One clock drives every material canvas. Cost adapts by interpolating quality
+ * and shader mix; CSS frost stays painted so a stressed device never pops from
+ * liquid glass to a flat fill in a single frame.
  */
 class SurfaceRuntime {
   private currentTier: SurfaceTier;
-
   private listeners = new Set<SurfaceFrameListener>();
   private shaderAvailable: boolean;
+  private webgpuPreferred: boolean;
   private frameHandle: number | null = null;
   private timerHandle: number | null = null;
   private startedAt = performance.now();
@@ -94,16 +99,15 @@ class SurfaceRuntime {
   private qualityTarget: number;
   private slowPressure = 0;
   private lastAdaptedAt = this.startedAt;
+  private failures = 0;
 
   constructor() {
     this.currentTier = detectTier();
+    this.webgpuPreferred = this.currentTier === 'cinematic' && canUseWebGpu();
     this.shaderAvailable = this.currentTier === 'balanced' || this.currentTier === 'cinematic';
     this.quality = TIER_SCORE[this.currentTier];
     this.qualityTarget = this.quality;
-
-    const root = document.documentElement;
-    root.dataset.surfaceTier = this.currentTier;
-    root.dataset.surfaceEngine = this.supportsShader ? 'webgl2' : 'css';
+    this.publishRoot();
     rememberTier(this.currentTier);
 
     document.addEventListener('visibilitychange', () => {
@@ -117,7 +121,8 @@ class SurfaceRuntime {
   }
 
   get label(): string {
-    if (!this.shaderAvailable) return 'Efficient frosted';
+    if (!this.shaderAvailable || this.qualityTarget < 0.2) return 'Efficient frosted';
+    if (this.currentTier === 'cinematic' && this.webgpuPreferred) return 'Cinematic WebGPU';
     if (this.currentTier === 'cinematic') return 'Cinematic GPU';
     if (this.currentTier === 'balanced') return 'Adaptive GPU';
     return 'Efficient frosted';
@@ -127,16 +132,40 @@ class SurfaceRuntime {
     return this.shaderAvailable;
   }
 
+  get prefersWebGpu(): boolean {
+    return this.webgpuPreferred;
+  }
+
+  /** Keep canvases mounted. Mix fades with quality so CSS gaussian frost remains. */
   disableShader() {
-    this.shaderAvailable = false;
-    this.currentTier = 'foundation';
-    this.qualityTarget = 0;
-    this.cancel();
-    const root = document.documentElement;
-    root.dataset.surfaceTier = 'foundation';
-    root.dataset.surfaceEngine = 'css';
-    rememberTier('foundation');
-    document.querySelectorAll('.surface-material-canvas').forEach((canvas) => canvas.remove());
+    this.soften('preference');
+  }
+
+  noteEngineFailure() {
+    this.failures += 1;
+    if (this.webgpuPreferred) {
+      this.webgpuPreferred = false;
+      this.publishRoot();
+      return;
+    }
+    this.soften('context-lost');
+  }
+
+  soften(reason: 'pressure' | 'context-lost' | 'preference' = 'pressure') {
+    const next = reason === 'preference' && this.currentTier !== 'opaque'
+      ? 'foundation'
+      : nextLowerTier(this.currentTier);
+    if (next === this.currentTier && this.qualityTarget === TIER_SCORE[next]) return;
+    this.currentTier = next;
+    this.qualityTarget = TIER_SCORE[next];
+    this.slowPressure = 0;
+    this.lastAdaptedAt = performance.now();
+    if (next === 'opaque') this.qualityTarget = 0;
+    if (next === 'foundation' || next === 'opaque') this.webgpuPreferred = false;
+    document.documentElement.dataset.surfaceLoad = reason === 'pressure' ? 'tempered' : reason;
+    this.publishRoot();
+    rememberTier(next);
+    this.invalidate();
   }
 
   subscribe(listener: SurfaceFrameListener): () => void {
@@ -161,6 +190,17 @@ class SurfaceRuntime {
       this.timerHandle = null;
     }
     this.frameHandle = requestAnimationFrame(this.tick);
+  }
+
+  private publishRoot() {
+    const root = document.documentElement;
+    root.dataset.surfaceTier = this.currentTier;
+    const engine = this.qualityTarget < 0.2
+      ? 'css'
+      : prefersGpuEngine(this.currentTier, this.webgpuPreferred);
+    root.dataset.surfaceEngine = engine;
+    root.style.setProperty('--surface-quality', this.quality.toFixed(3));
+    root.style.setProperty('--material-shader-mix', shaderMixForQuality(this.quality).toFixed(3));
   }
 
   private cancel() {
@@ -189,6 +229,7 @@ class SurfaceRuntime {
 
     const active = now < this.activeUntil;
     const motion = motionAllowed();
+    const mix = shaderMixForQuality(this.quality);
     const targetFps = motion
       ? active
         ? this.qualityTarget > 1.45
@@ -211,40 +252,39 @@ class SurfaceRuntime {
     this.lastPresentedAt = now;
     const blend = Math.min(1, tickDelta / 720);
     this.quality += (this.qualityTarget - this.quality) * blend;
+    this.publishRoot();
 
     const frame: SurfaceFrame = {
       now,
       elapsed: (now - this.startedAt) / 1_000,
       quality: this.quality,
+      mix,
       motion,
       active,
     };
     for (const listener of this.listeners) listener(frame);
 
-    // Hysteresis makes adaptation intentionally slow and one-way within a
-    // session. The visible material stays constant; only GPU work tapers.
+    if (mix <= 0.02 && this.qualityTarget <= 0.02) {
+      this.shaderAvailable = false;
+      document.documentElement.dataset.surfaceEngine = 'css';
+      return;
+    }
+
     if (motion && active && sincePresented < 90) {
       if (sincePresented > 25) this.slowPressure += 1;
       else if (sincePresented < 20) this.slowPressure = Math.max(0, this.slowPressure - 0.35);
 
       if (
         this.slowPressure > 48 &&
-        this.qualityTarget > 0.72 &&
+        this.qualityTarget > 0 &&
         now - this.lastAdaptedAt > 12_000
       ) {
-        this.currentTier = this.currentTier === 'cinematic' ? 'balanced' : 'foundation';
-        this.qualityTarget = TIER_SCORE[this.currentTier];
-        this.slowPressure = 0;
-        this.lastAdaptedAt = now;
-        document.documentElement.dataset.surfaceLoad = 'tempered';
-        document.documentElement.dataset.surfaceTier = this.currentTier;
-        rememberTier(this.currentTier);
-        if (this.currentTier === 'foundation') this.disableShader();
+        this.soften('pressure');
       }
     }
 
     if (!motion) return;
-    this.schedule(active ? 0 : 1_000 / targetFps);
+    this.schedule(active ? 0 : 1_000 / Math.max(8, targetFps));
   };
 }
 

@@ -36,7 +36,7 @@
     "check:ui-budgets": "node scripts/check-ui-budgets.mjs",
     "test:tokens": "node --test scripts/token-contract.test.mjs",
     "ci:service": "bash scripts/run-service-ci.sh",
-    "test:components": "node --experimental-strip-types --test client/src/components/ui/*.test.ts",
+    "test:components": "node --experimental-strip-types --test client/src/components/ui/*.test.ts client/src/components/icons/*.test.ts",
     "test:materials": "node --experimental-strip-types --test client/src/surface/*.test.ts",
     "check:motion": "node scripts/check-motion-tokens.mjs",
     "visual:ribbon": "node scripts/visual/ribbon.mjs",

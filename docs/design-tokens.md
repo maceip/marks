@@ -8,9 +8,11 @@ they must never depend directly on `--primitive-*` values.
 ## Global token or local property?
 
 Add a **global token** when a value expresses a reusable design decision. This
-includes color roles, type, spacing, shared control or icon dimensions, shape,
-borders, opacity, elevation, layering, motion, and material treatment. Repeated
-values are a strong signal that the decision belongs in `tokens.css`.
+includes color roles (primary, secondary, tertiary, destructive, success,
+warning, info), type, spacing, shared control or icon dimensions, shape,
+borders, opacity, elevation, layering, motion, interactivity, and material
+treatment. Repeated values are a strong signal that the decision belongs in
+`tokens.css`.
 
 A **local custom property** is acceptable when it names component-owned
 geometry or runtime state, such as a responsive split position, foldable hinge

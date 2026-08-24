@@ -23,7 +23,7 @@ Reviewers from browser-surface ownership approve token or primitive changes. Pro
 - **Components:** React components use PascalCase; props describe intent rather than appearance (`danger`, not `red`).
 - **CSS:** production classes name the component or pattern. Catalog-only classes use the `ds-` prefix.
 - **States:** native attributes (`disabled`, `aria-selected`, `aria-pressed`) are authoritative. `state-*` classes exist only to make transient states deterministic in the catalog.
-- **Materials:** `cinematic`, `balanced`, `foundation`, and `opaque`, from richest to least composited.
+- **Materials:** `cinematic`, `balanced`, `foundation`, and `opaque`, from richest to least composited. Cinematic prefers a WebGPU liquid-glass pass, then WebGL2; both fade `--material-shader-mix` under load so CSS gaussian frost never pops off in a single frame.
 
 ## Accessibility requirements
 
@@ -37,14 +37,14 @@ Tokens are a public interface within the client. Before changing one, inventory 
 
 ## Catalog map
 
-- [Foundations: palette, semantic roles, typography, spacing, sizes, radii, borders, shadows, icons](/design-system#foundations)
-- [Component matrices](/design-system#components)
-- [Ribbon anatomy and states](/design-system#ribbon)
-- [Agent-chat pill states](/design-system#agent)
+- [Foundations: intent roles, elevation, radius, isometric icons](/design-system#foundations)
+- [Controls: buttons, icon buttons, pills, tabs, size-stable loading](/design-system#controls)
+- [Ribbon and agent-chat chrome](/design-system#chrome)
+- [Presence and comments](/design-system#collaboration)
+- [Menus, popovers, and dialogs](/design-system#overlays)
 - [Material recipes and rendering tiers](/design-system#materials)
 - [Motion and reduced alternatives](/design-system#motion)
-- [Responsive postures](/design-system#responsive)
-- [Accessibility test bench](/design-system#accessibility)
+- [Responsive postures and accessibility](/design-system#responsive)
 
 ## Verification
 

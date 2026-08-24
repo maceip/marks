@@ -42,3 +42,18 @@ test('component CSS honors the semantic token contract', async () => {
   }
   assert.deepEqual(violations, [], violations.join('\n'));
 });
+
+const requiredTokens = [
+  '--color-primary', '--color-secondary', '--color-tertiary', '--color-destructive',
+  '--color-success', '--color-warning', '--color-info', '--color-focus-ring',
+  '--elevation-xs', '--elevation-xl', '--elevation-overlay',
+  '--radius-tight', '--radius-sheet',
+  '--interact-press-translate', '--interact-icon-tilt',
+  '--surface-quality', '--material-shader-mix', '--glass-blur-chrome',
+];
+
+test('tokens.css publishes the August 2026 intent, elevation, radius, and material set', async () => {
+  const source = await readFile(new URL('../client/src/styles/tokens.css', import.meta.url), 'utf8');
+  const missing = requiredTokens.filter((token) => !source.includes(`${token}:`));
+  assert.deepEqual(missing, [], `missing tokens: ${missing.join(', ')}`);
+});

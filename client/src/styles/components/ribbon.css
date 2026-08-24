@@ -89,9 +89,9 @@
 @media (prefers-reduced-motion: reduce) {
   .ribbon-deck-enter, .ribbon-deck-exit, .ribbon-tab.contextual { animation-duration: .01ms; transform: none; }
   .ribbon-command:active:not(:disabled) { transform: none; }
-  .ribbon-command .glyph-live .glyph-body { transform: none; }
+  .ribbon-command .marks-icon-live .marks-icon-body { transform: none; }
 }
 :root[data-motion='reduced'] .ribbon-deck-enter, :root[data-motion='reduced'] .ribbon-deck-exit { animation-name: ribbon-deck-reduced; }
-:root[data-motion='reduced'] .ribbon-command .glyph-live .glyph-body,
-:root[data-surface-tier='foundation'] .ribbon-command .glyph-live .glyph-body { transform: none; }
+:root[data-motion='reduced'] .ribbon-command .marks-icon-live .marks-icon-body,
+:root[data-surface-tier='foundation'] .ribbon-command .marks-icon-live .marks-icon-body { transform: none; }
 @keyframes ribbon-deck-reduced { from { opacity: 1; } to { opacity: 1; } }

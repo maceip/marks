@@ -11,7 +11,17 @@ test('buttons retain native semantics, accessible state, refs, and disabled load
   assert.match(button, /ButtonHTMLAttributes<HTMLButtonElement>/);
   assert.match(button, /disabled=\{disabled \|\| loading\}/);
   assert.match(button, /aria-busy=\{loading \|\| undefined\}/);
+  assert.match(button, /button-spinner/);
+  assert.match(button, /leadingIcon &&/);
   assert.match(source('IconButton'), /aria-label=\{label\}/);
+  assert.match(source('IconButton'), /icon-button-face/);
+});
+
+test('loading keeps control geometry and overlays a spinner', () => {
+  assert.match(css, /data-loading='true'] > :not\(\.button-spinner\)/);
+  assert.match(css, /visibility: hidden/);
+  assert.match(css, /\.button-spinner/);
+  assert.match(css, /ui-control\[data-loading='true'\] \{ cursor: wait/);
 });
 
 test('tabs expose tab semantics and implement keyboard activation/navigation', () => {

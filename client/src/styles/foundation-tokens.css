@@ -1,4 +1,4 @@
-/* Extended foundation scale loaded by component-rich routes. */
+/* Extended foundation scale. Core type, radius, and elevation now live in tokens.css. */
 :root {
   --font-weight-regular: 400;
   --font-weight-medium: 500;

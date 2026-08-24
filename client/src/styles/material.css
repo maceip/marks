@@ -1,7 +1,7 @@
 /*
- * The CSS layer is the invariant material. WebGL contributes only light,
+ * The CSS layer is the invariant material. WebGPU/WebGL contribute light,
  * caustics and pointer response, so every tier keeps the same silhouette,
- * tint and legibility even when shader work is unavailable.
+ * tint and legibility even when shader work is faded under load.
  */
 .surface-material-host {
   isolation: isolate;
@@ -21,7 +21,7 @@
 }
 
 .surface-material-canvas[data-ready='true'] {
-  opacity: var(--material-shader-opacity, 0.86);
+  opacity: calc(var(--material-shader-opacity, 0.86) * var(--material-shader-mix, 1));
 }
 
 .surface-material-host > :not(.surface-material-canvas) {
@@ -34,31 +34,6 @@
 .surface-material-panel { --material-shader-opacity: 0.82; }
 .surface-material-hero { --material-shader-opacity: 0.76; }
 
-:root[data-surface-tier='cinematic'] {
-  --glass-blur-chrome: 26px;
-  --glass-blur-panel: 30px;
-  --glass-blur-floating: 36px;
-  --glass-saturation: 190%;
-}
-
-:root[data-surface-tier='balanced'] {
-  --glass-blur-chrome: 19px;
-  --glass-blur-panel: 23px;
-  --glass-blur-floating: 27px;
-  --glass-saturation: 168%;
-}
-
-:root[data-surface-tier='balanced'] .surface-material-canvas[data-ready='true'] {
-  opacity: calc(var(--material-shader-opacity, 0.86) * 0.72);
-}
-
-:root[data-surface-tier='foundation'] {
-  --glass-blur-chrome: 12px;
-  --glass-blur-panel: 16px;
-  --glass-blur-floating: 19px;
-  --glass-saturation: 146%;
-}
-
 :root[data-surface-engine='css'] .surface-material-canvas,
 :root[data-glass='reduced'] .surface-material-canvas {
   display: none;
@@ -68,7 +43,7 @@
 
 @media (pointer: coarse) {
   .surface-material-canvas[data-ready='true'] {
-    opacity: calc(var(--material-shader-opacity, 0.86) * 0.82);
+    opacity: calc(var(--material-shader-opacity, 0.86) * var(--material-shader-mix, 1) * 0.82);
   }
 }
 
@@ -80,7 +55,6 @@
   .surface-material-canvas { transition: none; }
 }
 
-/* Geometry belongs to the host component; tiers only exchange paint cost. */
 .surface-material-host {
   border-color: var(--material-border);
   box-shadow: var(--material-shadow, var(--material-elevation));
@@ -88,8 +62,8 @@
 
 :root[data-surface-tier='foundation'] .surface-material-host {
   background: var(--material-tint);
-  -webkit-backdrop-filter: blur(var(--material-blur, 16px)) saturate(var(--material-saturation, 146%));
-  backdrop-filter: blur(var(--material-blur, 16px)) saturate(var(--material-saturation, 146%));
+  -webkit-backdrop-filter: blur(var(--material-blur, var(--glass-blur-panel))) saturate(var(--material-saturation, var(--glass-saturation)));
+  backdrop-filter: blur(var(--material-blur, var(--glass-blur-panel))) saturate(var(--material-saturation, var(--glass-saturation)));
 }
 
 :root[data-surface-tier='opaque'] .surface-material-host,

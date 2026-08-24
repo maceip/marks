@@ -60,6 +60,18 @@ Reduced motion is selected either by `prefers-reduced-motion: reduce` or `data-m
 |---|---|---|---|---|---|---|---|---|
 | Active ribbon tab/deck is replaced | opacity, transform | 0; small Y | 1; rest | fast | decelerate | optional standard stagger for groups | A new selection replaces the target and continues from computed state; no queue | Replace deck instantly |
 
+### Async control
+
+| Trigger | Property | Start | End | Duration | Easing | Delay/stagger | Interruption | Reduced-motion replacement |
+|---|---|---|---|---|---|---|---|---|
+| Button or icon-button `loading` | overlay spinner opacity | 0 | 1; control size unchanged (`visibility: hidden` on label/icon) | fast | standard | none | A second press is ignored while `aria-busy`; spinner stays until loading ends | Keep the overlay spinner; do not resize the control |
+
+### Isometric icon
+
+| Trigger | Property | Start | End | Duration | Easing | Delay/stagger | Interruption | Reduced-motion replacement |
+|---|---|---|---|---|---|---|---|---|
+| Pointer hover/press on a Marks icon | transform via `--icon-tilt-*` / `--icon-press` | rest | tilt toward pointer; press translates down | fast | out | none | Leave and pointer-up reverse from computed variables; no queue | Resting tile, no tilt |
+
 ### Status pulse
 
 | Trigger | Property | Start | End | Duration | Easing | Delay/stagger | Interruption | Reduced-motion replacement |

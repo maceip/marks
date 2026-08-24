@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { Icon, icons } from './Icon';
+import { Icon } from './Icon';
 import { SurfaceMaterial } from './SurfaceMaterial';
 
 interface ModalProps {
@@ -97,7 +97,7 @@ export function Modal({ open, title, description, size = 'medium', children, onC
             {description && <p id="marks-modal-description">{description}</p>}
           </div>
           <button type="button" className="icon-button" aria-label="Close" onClick={onClose}>
-            <Icon path={icons.close} />
+            <Icon name="close" />
           </button>
         </header>
         <div className="modal-content">{children}</div>
