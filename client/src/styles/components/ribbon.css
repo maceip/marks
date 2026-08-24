@@ -39,6 +39,7 @@
 .ribbon-command-group + .ribbon-command-group { border-left: 1px solid var(--material-border); }
 .ribbon-command-row { display: flex; align-items: center; gap: var(--ribbon-group-gap); }
 .ribbon-command {
+  position: relative;
   display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
   min-width: 50px; height: var(--ribbon-command-height); padding: 2px 5px;
   border: 1px solid color-mix(in srgb, var(--color-brand-primary) 8%, transparent); border-radius: 15px;
@@ -52,9 +53,8 @@
 .ribbon-command.active, .ribbon-command[aria-pressed='true'], .ribbon-command[aria-selected='true'] { border-color: color-mix(in srgb, var(--color-action) 28%, transparent); background: color-mix(in srgb, var(--color-action-soft) 90%, transparent); color: var(--color-action); box-shadow: inset 0 1px color-mix(in srgb, white 55%, transparent), 0 8px 18px -14px var(--color-action); }
 .ribbon-command:disabled, .ribbon-command[aria-disabled='true'] { opacity: .38; cursor: not-allowed; }
 .ribbon-command.danger-command, .ribbon-command[data-danger='true'] { color: var(--color-feedback-danger); }
-.ribbon-command[data-loading='true'] { cursor: progress; }
-.ribbon-command[data-loading='true'] .glyph { animation: ribbon-loading 850ms linear infinite; }
-@keyframes ribbon-loading { to { transform: rotate(1turn); } }
+.ribbon-command[data-loading='true'] { cursor: wait; }
+.ribbon-command[data-loading='true'] > :not(.button-spinner) { visibility: hidden; }
 .ribbon-command .glyph { width: var(--ribbon-icon-size); height: var(--ribbon-icon-size); }
 .ribbon-command-label { max-width: 68px; overflow: hidden; font-size: var(--ribbon-label-size); font-weight: var(--ribbon-label-weight); line-height: 1; white-space: nowrap; text-overflow: ellipsis; }
 .ribbon-group-label { display: inline-flex; align-items: center; justify-content: center; gap: 4px; align-self: end; color: var(--color-fg-subtle); font: 650 8px/11px var(--font-family-mono); text-align: center; text-transform: uppercase; letter-spacing: .08em; }

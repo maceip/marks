@@ -65,7 +65,7 @@ export function Icon({
   name,
   path,
   label,
-  size = 16,
+  size = 18,
   interactive = true,
   kind = 'chrome',
   className = '',

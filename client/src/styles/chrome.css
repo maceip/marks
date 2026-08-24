@@ -166,6 +166,8 @@
 }
 .ribbon-command:disabled { opacity: 0.38; cursor: not-allowed; }
 .ribbon-command.danger-command { color: var(--color-feedback-danger); }
+.ribbon-command[data-loading='true'] { cursor: wait; }
+.ribbon-command[data-loading='true'] > :not(.button-spinner) { visibility: hidden; }
 .ribbon-command-label {
   max-width: 68px;
   overflow: hidden;

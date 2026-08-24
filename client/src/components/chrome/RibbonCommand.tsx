@@ -61,6 +61,7 @@ export function RibbonCommand({
       <Glyph name={glyph} size={large ? 28 : 22} />
       <span className="ribbon-command-label">{label}</span>
       {children}
+      {loading && <span className="button-spinner" aria-hidden="true"><span className="ui-spinner" /></span>}
     </button>
   );
 }
