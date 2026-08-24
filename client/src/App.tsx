@@ -34,11 +34,13 @@ import { useTheme } from './hooks/useTheme';
 import { useUiPreferences } from './hooks/useUiPreferences';
 import { EMPTY_SNAPSHOT, type HudSnapshot } from './lib/hud';
 import { LatencyTracker } from './lib/latency';
-import { UI_DATA_MODE, UI_MEDIA } from './lib/product';
+import { RIBBON_WILD_ENABLED, UI_DATA_MODE, UI_MEDIA } from './lib/product';
 import { ScrollSync } from './lib/scroll-sync';
 import type { UiActionId } from './lib/ui-actions';
 import { practicalCapabilityForAction } from './lib/practical.ts';
 import type { PracticalCapability } from './intelligence/types.ts';
+import { wildCapabilityForAction } from './lib/wild.ts';
+import type { WildCapability } from './wild/types.ts';
 import type { PreviewStats } from './markdown/preview';
 import type { Heading } from './markdown/types';
 
@@ -78,6 +80,12 @@ const PerfHud = lazy(() =>
 const PracticalInspector = lazy(() =>
   import('./components/practical/PracticalInspector').then((module) => ({ default: module.PracticalInspector })),
 );
+const WildStudio = RIBBON_WILD_ENABLED
+  ? lazy(() => import('./components/wild/WildStudio').then((module) => ({ default: module.WildStudio })))
+  : null;
+const WildTelemetry = RIBBON_WILD_ENABLED
+  ? lazy(() => import('./components/wild/WildTelemetry').then((module) => ({ default: module.WildTelemetry })))
+  : null;
 
 /** How often the HUD and word counts refresh. Editing never waits on this. */
 const SAMPLE_INTERVAL_MS = 400;
@@ -159,6 +167,7 @@ export function App() {
   const [dialog, setDialog] = useState<AppDialog | null>(null);
   const [draftToolsOpen, setDraftToolsOpen] = useState(false);
   const [practicalSurface, setPracticalSurface] = useState<PracticalCapability | null>(null);
+  const [wildSurface, setWildSurface] = useState<WildCapability | null>(null);
   const [reviewSurface, setReviewSurface] = useState<ReviewSurface | null>(null);
   const [overlaysMounted, setOverlaysMounted] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -464,6 +473,8 @@ export function App() {
   const toggleSidebar = useCallback(() => setSidebarOpen((open) => !open), []);
   const openBenchmark = useCallback(() => {
     setReviewSurface(null);
+    setPracticalSurface(null);
+    setWildSurface(null);
     if (overlayNavigation) setSidebarOpen(false);
     navigate({ name: 'benchmark' });
   }, [navigate, overlayNavigation]);
@@ -493,6 +504,16 @@ export function App() {
       if (practical) {
         if (!docId || !session) return;
         setPracticalSurface(practical);
+        setWildSurface(null);
+        setReviewSurface(null);
+        setDraftToolsOpen(false);
+        return;
+      }
+      const wild = RIBBON_WILD_ENABLED ? wildCapabilityForAction(action) : null;
+      if (wild) {
+        if (!docId || !session) return;
+        setWildSurface(wild);
+        setPracticalSurface(null);
         setReviewSurface(null);
         setDraftToolsOpen(false);
         return;
@@ -560,6 +581,8 @@ export function App() {
             break;
           }
           setOverlaysMounted(true);
+          setPracticalSurface(null);
+          setWildSurface(null);
           setReviewSurface((current) =>
             current?.type === action ? null : { type: action, documentId: docId, title },
           );
@@ -579,6 +602,7 @@ export function App() {
               setOutlineOpen(false);
               setReviewSurface(null);
               setPracticalSurface(null);
+              setWildSurface(null);
             } else {
               const restore = focusRestoreRef.current;
               setSidebarOpen(restore?.sidebarOpen ?? !overlayNavigation);
@@ -630,7 +654,11 @@ export function App() {
           break;
         }
         case 'draft-tools':
-          if (session?.capabilities().edit) setDraftToolsOpen(true);
+          if (session?.capabilities().edit) {
+            setPracticalSurface(null);
+            setWildSurface(null);
+            setDraftToolsOpen(true);
+          }
           else notify('Draft tools are read-only', 'Your current role cannot change this document.', 'neutral');
           break;
       }
@@ -730,7 +758,15 @@ export function App() {
     setOutlineOpen(false);
     setDraftToolsOpen(false);
     setPracticalSurface(null);
+    setWildSurface(null);
   }, [route.name]);
+
+  useEffect(() => {
+    setReviewSurface(null);
+    setDraftToolsOpen(false);
+    setPracticalSurface(null);
+    setWildSurface(null);
+  }, [docId]);
 
   const commandEnvironment = useMemo<CommandEnvironment>(() => ({
     hasDocument: Boolean(docId && session),
@@ -792,7 +828,7 @@ export function App() {
   }
 
   const appSurface = (
-    <div className={`app route-${route.name}${sidebarOpen && !focusMode && !posture.foldable ? ' with-sidebar' : ''}${focusMode ? ' focus-mode' : ''}${ribbonCollapsed ? ' ribbon-collapsed' : ''}${practicalSurface ? ' practical-open' : ''}`} data-shell={posture.shell} data-doc={docId ?? undefined}>
+    <div className={`app route-${route.name}${sidebarOpen && !focusMode && !posture.foldable ? ' with-sidebar' : ''}${focusMode ? ' focus-mode' : ''}${ribbonCollapsed ? ' ribbon-collapsed' : ''}${practicalSurface ? ' practical-open' : ''}${wildSurface ? ' wild-open' : ''}`} data-shell={posture.shell} data-doc={docId ?? undefined}>
       {sidebarOpen && !focusMode && !posture.foldable && (
         <Sidebar
           documents={documents.documents}
@@ -1033,9 +1069,48 @@ export function App() {
         </Suspense>
       )}
 
+      {RIBBON_WILD_ENABLED && WildStudio && wildSurface && route.name === 'document' && session && (
+        <Suspense fallback={null}>
+          <WildStudio
+            capability={wildSurface}
+            documentId={route.id}
+            documentTitle={title}
+            session={session}
+            userName={user.name}
+            shell={posture.shell}
+            mode={mode}
+            selection={{ from: cursor.from, to: cursor.to }}
+            getView={getView}
+            onModeChange={setMode}
+            onSelect={setWildSurface}
+            onOpenDocument={(id) => {
+              setWildSurface(null);
+              openDocument(id);
+            }}
+            onClose={() => setWildSurface(null)}
+            onNotify={notify}
+          />
+        </Suspense>
+      )}
+
+      {RIBBON_WILD_ENABLED && WildTelemetry && route.name === 'document' && session && (
+        <Suspense fallback={null}>
+          <WildTelemetry
+            documentId={route.id}
+            session={session}
+            onOpenCausal={() => {
+              setPracticalSurface(null);
+              setReviewSurface(null);
+              setDraftToolsOpen(false);
+              setWildSurface('causal');
+            }}
+          />
+        </Suspense>
+      )}
+
       {route.name === 'document' && session && !focusMode && (
         <Suspense fallback={null}>
-          <AgentPill documentId={route.id} linkedSurface={practicalSurface} />
+          <AgentPill documentId={route.id} linkedSurface={practicalSurface ?? wildSurface} />
         </Suspense>
       )}
 
@@ -1096,7 +1171,7 @@ export function App() {
   if (route.name !== 'document') return appSurface;
   return (
     <Suspense fallback={<div className="app route-document"><OpeningShell cached={Boolean(meta)} offline={surface.network === 'offline'} /></div>}>
-      <CommandProvider environment={commandEnvironment} services={commandServices} onNotify={notify}>
+      <CommandProvider key={route.id} documentId={route.id} environment={commandEnvironment} services={commandServices} onNotify={notify}>
         {appSurface}
       </CommandProvider>
     </Suspense>

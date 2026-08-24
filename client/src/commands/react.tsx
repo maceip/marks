@@ -18,6 +18,7 @@ import {
 } from './profile.ts';
 import { getCommand } from './registry.ts';
 import { CommandRuntime } from './runtime.ts';
+import { RIBBON_WILD_ENABLED } from '../lib/product.ts';
 import type {
   CommandEnvironment,
   CommandId,
@@ -26,14 +27,19 @@ import type {
 } from './types.ts';
 import { CommandCenter, type CommandCenterValue } from './context.tsx';
 
+const wildObservations = RIBBON_WILD_ENABLED
+  ? import('../wild/observations.ts')
+  : null;
+
 export interface CommandProviderProps {
+  documentId: string;
   environment: CommandEnvironment;
   services: Omit<CommandServices, 'onChooseImage' | 'onFormatPainter'>;
   onNotify?: (title: string, detail?: string, tone?: 'neutral' | 'success' | 'danger') => void;
   children: ReactNode;
 }
 
-export function CommandProvider({ environment: providedEnvironment, services, onNotify, children }: CommandProviderProps) {
+export function CommandProvider({ documentId, environment: providedEnvironment, services, onNotify, children }: CommandProviderProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const pickerRef = useRef<{
     replace: boolean;
@@ -59,6 +65,8 @@ export function CommandProvider({ environment: providedEnvironment, services, on
   environmentRef.current = environment;
   const servicesRef = useRef(services);
   servicesRef.current = services;
+  const documentIdRef = useRef(documentId);
+  documentIdRef.current = documentId;
   const notifyRef = useRef(onNotify);
   notifyRef.current = onNotify;
 
@@ -115,7 +123,78 @@ export function CommandProvider({ environment: providedEnvironment, services, on
   if (!runtimeRef.current) {
     runtimeRef.current = new CommandRuntime({
       environment: () => environmentRef.current,
-      execute: (command, input, signal) => executeCommand(command, input, signal, executorServicesRef.current!),
+      execute: async (command, input, signal, run) => {
+        if (!wildObservations) {
+          return executeCommand(command, input, signal, executorServicesRef.current!);
+        }
+        const { emitCommandEffect } = await wildObservations;
+        const activeDocumentId = documentIdRef.current;
+        const activeServices = executorServicesRef.current!;
+        const beforeText = activeServices.session?.getText() ?? '';
+        const beforeEnvironment = environmentRef.current;
+        const startedAt = run.startedAt ?? Date.now();
+        emitCommandEffect({
+          phase: 'started',
+          runId: run.id,
+          documentId: activeDocumentId,
+          commandId: command.id,
+          commandLabel: command.label,
+          source: run.source,
+          risk: command.risk,
+          proposedAt: run.proposedAt,
+          startedAt,
+          beforeText,
+          selectionFrom: beforeEnvironment.selectionFrom,
+          selectionTo: beforeEnvironment.selectionTo,
+          modeBefore: beforeEnvironment.mode,
+        });
+        try {
+          const result = await executeCommand(command, input, signal, activeServices);
+          const afterText = activeServices.session?.getText() ?? beforeText;
+          emitCommandEffect({
+            phase: 'finished',
+            runId: run.id,
+            documentId: activeDocumentId,
+            commandId: command.id,
+            commandLabel: command.label,
+            source: run.source,
+            risk: command.risk,
+            proposedAt: run.proposedAt,
+            startedAt,
+            finishedAt: Date.now(),
+            status: signal.aborted ? 'cancelled' : result.ok ? 'succeeded' : 'failed',
+            message: result.message,
+            error: result.ok ? undefined : result.message,
+            beforeText,
+            afterText,
+            selectionFrom: beforeEnvironment.selectionFrom,
+            selectionTo: beforeEnvironment.selectionTo,
+            modeBefore: beforeEnvironment.mode,
+          });
+          return result;
+        } catch (error) {
+          emitCommandEffect({
+            phase: 'finished',
+            runId: run.id,
+            documentId: activeDocumentId,
+            commandId: command.id,
+            commandLabel: command.label,
+            source: run.source,
+            risk: command.risk,
+            proposedAt: run.proposedAt,
+            startedAt,
+            finishedAt: Date.now(),
+            status: signal.aborted ? 'cancelled' : 'failed',
+            error: error instanceof Error ? error.message : 'Command failed.',
+            beforeText,
+            afterText: activeServices.session?.getText() ?? beforeText,
+            selectionFrom: beforeEnvironment.selectionFrom,
+            selectionTo: beforeEnvironment.selectionTo,
+            modeBefore: beforeEnvironment.mode,
+          });
+          throw error;
+        }
+      },
     });
   }
   const runtime = runtimeRef.current;

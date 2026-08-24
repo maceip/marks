@@ -67,6 +67,11 @@ const PATTERNS: Pattern[] = [
   { commandId: 'tools.paste-intent', expressions: [/\b(?:paste|clipboard).*(?:intent|provenance|as plain|as quote|as code)\b/i], reason: 'Open paste intent and provenance.' },
   { commandId: 'insert.cross-document-block', expressions: [/\b(?:insert|add|create).*(?:cross[- ]document|linked document|document block|transclusion)\b/i], reason: 'Open cross-document block insertion.' },
   { commandId: 'review.quality-contract', expressions: [/\b(?:check|set|open|inspect).*(?:audience|quality contract|reading level|readability)\b/i], reason: 'Open the audience and quality contract.' },
+  { commandId: 'wild.intent-horizon', expressions: [/\b(?:open|show|infer|declare).*(?:intent horizon|next moves?|what should (?:i|we) do next)\b/i], reason: 'Open the inspectable intent horizon.' },
+  { commandId: 'wild.causal-lightpath', expressions: [/\b(?:open|show|trace|inspect).*(?:causal lightpath|command path|causal receipts?|what (?:did|changed))\b/i], reason: 'Open real command-effect receipts.' },
+  { commandId: 'wild.consequence-lanes', expressions: [/\b(?:open|show|predict|stage|inspect).*(?:consequence lanes?|command consequences?|what will .* affect)\b/i], reason: 'Stage commands against the consequence lanes.' },
+  { commandId: 'wild.context-half-life', expressions: [/\b(?:open|show|check|review).*(?:context half[- ]life|stale claims?|aging context|freshness)\b/i], reason: 'Open context half-life review.' },
+  { commandId: 'wild.counterfactual-shelf', expressions: [/\b(?:open|show|save|branch|compare).*(?:counterfactual|alternative|possibilit(?:y|ies)|reversal)\b/i], reason: 'Open the counterfactual shelf.' },
   { commandId: 'view.outline', expressions: [/\b(?:open|show|toggle) (?:the )?outline\b/i], reason: 'Toggle the document outline.' },
   { commandId: 'view.focus', expressions: [/\b(?:enter|toggle|use) focus(?: mode)?\b/i], reason: 'Toggle focus mode.' },
   { commandId: 'document.export-bundle', expressions: [/\b(?:download|export).*(?:bundle|zip|assets?)\b/i], reason: 'Export Markdown with referenced assets.' },
@@ -117,7 +122,9 @@ export function planAgentRequest(request: string, commands: readonly ProjectedCo
     }];
   });
 
-  if (steps.length === 0) {
+  // An exact pattern that resolves to a gated or unavailable command must not
+  // fall through to fuzzy matching and execute an unrelated visible command.
+  if (steps.length === 0 && candidates.length === 0) {
     const fuzzy = fuzzyCommand(request, commands);
     if (fuzzy) {
       steps.push({ id: `${fuzzy.id}:1`, commandId: fuzzy.id, input: {}, reason: fuzzy.description });
