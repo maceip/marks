@@ -4,3 +4,5 @@
 .ds-intent-row,.ds-collab,.ds-avatars{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:12px 0}
 .ds-overlay-demo{position:relative;min-height:160px}
 .ds-overlay-demo .ui-menu,.ds-overlay-demo .ui-popover{position:relative;inset:auto}
+.ds-dock-preview{position:relative;min-height:88px;margin:16px 0}
+.ds-dock-preview .liquid-dock{position:absolute;left:50%;bottom:8px;transform:translateX(-50%)}

@@ -40,3 +40,21 @@ test('shared states include focus-visible, selected, disabled, loading and coars
   assert.match(css, /data-loading='true'/);
   assert.match(css, /@media \(pointer: coarse\)[\s\S]*min-height: var\(--control-height-touch\)/);
 });
+
+test('modal traps focus, restores it, and uses the isometric close icon', () => {
+  const modal = source('Modal');
+  assert.match(modal, /role="dialog"/);
+  assert.match(modal, /aria-modal="true"/);
+  assert.match(modal, /Escape/);
+  assert.match(modal, /inert/);
+  assert.match(modal, /Icon name="close"/);
+  assert.match(modal, /SurfaceMaterial/);
+});
+
+test('menus and popovers are production overlay primitives with materials', () => {
+  assert.match(source('Menu'), /role="menu"/);
+  assert.match(source('Menu'), /role="menuitem"/);
+  assert.match(source('Menu'), /SurfaceMaterial/);
+  assert.match(source('Popover'), /Icon name="close"/);
+  assert.match(source('Popover'), /SurfaceMaterial/);
+});

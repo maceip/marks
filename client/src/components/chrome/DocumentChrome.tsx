@@ -7,6 +7,7 @@ import { DesktopRibbon } from './DesktopRibbon';
 import { FoldableRibbon } from './FoldableRibbon';
 import { MiniToolbar } from './MiniToolbar';
 import { PhoneComposer } from './PhoneComposer';
+import { LiquidDock } from '../shell/LiquidDock';
 import '../../styles/chrome.css';
 
 export interface DocumentChromeProps {
@@ -98,6 +99,14 @@ export function DocumentChrome(props: DocumentChromeProps) {
         onNotify={props.onNotify}
       />
       <MiniToolbar selected={props.selected} disabled={!props.documentReady} getView={props.getView} />
+      <LiquidDock
+        onCommands={() => props.onAction('command-palette')}
+        onComments={() => props.onAction('comments')}
+        onHistory={() => props.onAction('history')}
+        onVoice={props.onVoice}
+        voiceActive={props.voiceActive}
+        voiceSupported={props.voiceSupported}
+      />
     </>
   );
 }

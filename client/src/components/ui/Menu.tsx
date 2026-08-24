@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from 'react';
+import { SurfaceMaterial } from './SurfaceMaterial';
 
 export interface MenuItem {
   id: string;
@@ -58,11 +59,12 @@ export function Menu({
     <div
       ref={ref}
       id={uid}
-      className={`ui-menu motion-popover-in${className ? ` ${className}` : ''}`}
+      className={`ui-menu motion-popover-in surface-material-host${className ? ` ${className}` : ''}`}
       role="menu"
       aria-label={label}
       onKeyDown={onKeyDown}
     >
+      <SurfaceMaterial variant="panel" />
       {items.map((item) => (
         <button
           key={item.id}

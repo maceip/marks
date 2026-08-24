@@ -8,6 +8,7 @@ interface LiquidDockProps {
   onVoice?: () => void;
   voiceActive?: boolean;
   voiceSupported?: boolean;
+  className?: string;
 }
 
 export function LiquidDock({
@@ -17,9 +18,10 @@ export function LiquidDock({
   onVoice,
   voiceActive,
   voiceSupported,
+  className = '',
 }: LiquidDockProps) {
   return (
-    <div className="liquid-dock surface-material-host" role="toolbar" aria-label="Quick document actions">
+    <div className={`liquid-dock surface-material-host${className ? ` ${className}` : ''}`} role="toolbar" aria-label="Quick document actions">
       <SurfaceMaterial variant="floating" />
       <button type="button" className="liquid-dock-primary" onClick={onCommands}>
         <span><Icon path={icons.sparkles} size={16} /></span>

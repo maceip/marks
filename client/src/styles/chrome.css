@@ -1113,3 +1113,97 @@
 @media (prefers-reduced-motion: reduce) {
   .glyph.marks-icon-live .marks-icon-body { transform: none; }
 }
+
+.liquid-dock {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--layout-statusbar-height) + 14px);
+  z-index: 48;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 56px;
+  padding: 6px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--material-highlight) 72%, var(--material-border));
+  border-radius: var(--radius-pill);
+  background: var(--material-refraction), var(--material-tint-liquid);
+  box-shadow: 0 18px 54px -25px rgb(0 53 148 / 40%), inset 0 3px 9px var(--material-highlight), inset 0 -2px 8px rgb(0 53 148 / 7%);
+  -webkit-backdrop-filter: blur(var(--material-blur-floating)) saturate(var(--material-saturation));
+  backdrop-filter: blur(var(--material-blur-floating)) saturate(var(--material-saturation));
+  transform: translateX(-50%);
+  animation: liquid-dock-in var(--motion-slow) var(--ease-spring) both;
+}
+.with-sidebar .liquid-dock { left: calc(50% + var(--layout-sidebar-width) / 2); }
+.liquid-dock::before {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 20%, var(--material-highlight) 47%, transparent 72%);
+  content: '';
+  pointer-events: none;
+  transform: translateX(-125%);
+}
+.liquid-dock:hover::before,
+.liquid-dock:focus-within::before {
+  transform: translateX(125%);
+  transition: transform var(--motion-deliberate) var(--ease-out);
+}
+.liquid-dock button {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+  transition: color var(--duration-fast), background var(--duration-fast), border-color var(--duration-fast), transform var(--duration-fast) var(--ease-out);
+}
+.liquid-dock button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-action) 18%, transparent);
+  background: color-mix(in srgb, var(--color-bg-raised) 66%, transparent);
+  color: var(--color-action);
+  transform: translateY(-1px);
+}
+.liquid-dock button:disabled { opacity: .38; cursor: default; }
+.liquid-dock button.active { background: var(--color-action-soft); color: var(--color-action); }
+.liquid-dock .liquid-dock-primary {
+  grid-template-columns: auto auto auto;
+  gap: 8px;
+  width: auto;
+  min-width: 154px;
+  padding: 0 12px 0 5px;
+  background: color-mix(in srgb, var(--color-bg-raised) 54%, transparent);
+  color: var(--color-fg-default);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+.liquid-dock-primary > span {
+  display: grid;
+  place-items: center;
+  width: 31px;
+  height: 31px;
+  border-radius: var(--radius-round);
+  background: color-mix(in srgb, var(--color-action) 88%, var(--color-brand-teal));
+  color: var(--color-fg-on-action);
+  box-shadow: inset 0 1px var(--material-highlight);
+}
+.liquid-dock kbd { color: var(--color-fg-subtle); font: 9px var(--font-family-mono); }
+@keyframes liquid-dock-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(12px) scale(.96); }
+}
+:root[data-glass='reduced'] .liquid-dock {
+  background: var(--color-bg-raised);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+@media (max-width: 720px), (max-height: 560px) and (pointer: coarse) {
+  .liquid-dock { display: none; }
+}
+@media print {
+  .liquid-dock { display: none !important; }
+}

@@ -1,4 +1,6 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react';
+import { Icon } from './Icon';
+import { SurfaceMaterial } from './SurfaceMaterial';
 
 export function Popover({
   open,
@@ -42,9 +44,12 @@ export function Popover({
       aria-modal="false"
       aria-labelledby={`${uid}-title`}
     >
+      <SurfaceMaterial variant="floating" />
       <header className="ui-popover-head">
         <strong id={`${uid}-title`}>{title}</strong>
-        <button type="button" className="ui-control icon-button icon-button-small" aria-label="Close" onClick={onClose}>×</button>
+        <button type="button" className="ui-control icon-button icon-button-small" aria-label="Close" onClick={onClose}>
+          <Icon name="close" size={14} />
+        </button>
       </header>
       <div className="ui-popover-body">{children}</div>
     </div>

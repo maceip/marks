@@ -1,6 +1,7 @@
 import '../styles/foundation-tokens.css';
 import '../styles/components.css';
 import '../styles/overlays.css';
+import '../styles/chrome.css';
 import { useEffect, useState, type ReactNode } from 'react';
 import { RibbonCommand } from '../components/chrome/RibbonCommand';
 import { AgentChatPill } from '../components/agent/AgentChatPill';
@@ -11,9 +12,11 @@ import { IconButton } from '../components/ui/IconButton';
 import { Spinner } from '../components/ui/Spinner';
 import { Tabs } from '../components/ui/Tabs';
 import { Menu } from '../components/ui/Menu';
+import { Modal } from '../components/ui/Modal';
 import { Popover } from '../components/ui/Popover';
 import { CommentCard, CommentCompose, Avatar } from '../components/ui/Comment';
 import { PresenceBar } from '../components/shell/PresenceBar';
+import { LiquidDock } from '../components/shell/LiquidDock';
 import { SurfaceMaterial } from '../components/ui/SurfaceMaterial';
 import { catalogPeers, catalogStates, catalogThread, palette, sectionLinks } from './fixtures';
 import type { Peer } from '../collab/types';
@@ -70,6 +73,7 @@ export function DesignSystem({ onBack }: { onBack: () => void }) {
   const [popoverOpen, setPopoverOpen] = useState(true);
   const [comment, setComment] = useState('Keep the intro under two sentences.');
   const [busy, setBusy] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -147,6 +151,14 @@ export function DesignSystem({ onBack }: { onBack: () => void }) {
             <div className="ds-ribbon-commands">{catalogStates.slice(0, 8).map((s, i) => <RibbonCommand key={s.id} glyph={i % 2 ? 'italic' : 'bold'} label={s.label} disabled={s.id === 'disabled'} pressed={s.id === 'selected'} danger={s.id === 'danger'} onClick={() => undefined} />)}</div>
           </div>
           <label>Pattern state<select aria-label="Agent-chat pattern state" value={agentState} onChange={(event) => setAgentState(event.target.value as AgentChatState)}>{['collapsed', 'focused', 'submitting', 'working', 'result', 'error', 'expanded'].map((state) => <option key={state}>{state}</option>)}</select></label>
+          <div className="ds-dock-preview">
+            <LiquidDock
+              onCommands={() => undefined}
+              onComments={() => undefined}
+              onHistory={() => undefined}
+              voiceSupported
+            />
+          </div>
           <div className="ds-agent-live">
             <AgentChatPill
               state={agentState}
@@ -195,10 +207,19 @@ export function DesignSystem({ onBack }: { onBack: () => void }) {
                 <p>Applies to the current block without leaving the ribbon.</p>
               </Popover>
             </div>
-            <div role="dialog" aria-label="Example dialog">
-              <b>Publish changes?</b>
-              <p>Everyone with access will see this version.</p>
-              <button type="button">Cancel</button> <button type="button" className="button primary">Publish</button>
+            <div className="ds-overlay-demo">
+              <Button variant="primary" onClick={() => setModalOpen(true)}>Open dialog</Button>
+              <Modal
+                open={modalOpen}
+                title="Publish changes?"
+                description="Everyone with access will see this version."
+                onClose={() => setModalOpen(false)}
+              >
+                <div className="ds-intent-row">
+                  <Button onClick={() => setModalOpen(false)}>Cancel</Button>
+                  <Button variant="primary" onClick={() => setModalOpen(false)}>Publish</Button>
+                </div>
+              </Modal>
             </div>
             <output role="status">✓ Changes saved locally</output>
           </div>
