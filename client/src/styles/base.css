@@ -90,70 +90,22 @@ a {
 
 .icon,
 .marks-icon {
-  flex: none;
-}
-
-.marks-icon {
   --icon-tilt-x: 0;
   --icon-tilt-y: 0;
   --icon-press: 0;
   position: relative;
   display: inline-grid;
   place-items: center;
+  flex: none;
 }
-
-.marks-icon > svg {
-  grid-area: 1 / 1;
-  overflow: visible;
-}
-
-.marks-icon-shadow {
-  fill: rgb(12 28 72 / 22%);
-}
-
+.marks-icon > svg { grid-area: 1 / 1; overflow: visible; }
 .marks-icon-live .marks-icon-body {
-  transform:
-    perspective(120px)
-    rotateX(calc(var(--icon-tilt-y) * -8deg + var(--icon-press) * 6deg))
-    rotateY(calc(var(--icon-tilt-x) * var(--interact-icon-tilt)))
-    translateY(calc(var(--icon-press) * var(--interact-press-translate)))
-    scale(calc(1 - var(--icon-press) * 0.05));
+  transform: perspective(120px) rotateX(calc(var(--icon-tilt-y) * -8deg + var(--icon-press) * 6deg)) rotateY(calc(var(--icon-tilt-x) * var(--interact-icon-tilt))) translateY(calc(var(--icon-press) * var(--interact-press-translate))) scale(calc(1 - var(--icon-press) * .05));
   transform-style: preserve-3d;
   transition: transform var(--duration-fast) var(--ease-out);
 }
-
-.marks-icon-face { fill: var(--color-brand-primary); stroke: color-mix(in srgb, var(--color-primary) 55%, white); stroke-width: 0.6; }
-.marks-icon-top { fill: color-mix(in srgb, var(--color-brand-primary) 72%, white); }
-.marks-icon-side { fill: color-mix(in srgb, var(--color-brand-primary) 70%, black); }
-.marks-icon-navy .marks-icon-face { fill: var(--color-brand-primary); }
-.marks-icon-navy .marks-icon-top { fill: color-mix(in srgb, var(--color-brand-primary) 68%, white); }
-.marks-icon-navy .marks-icon-side { fill: color-mix(in srgb, var(--color-brand-primary) 72%, black); }
-.marks-icon-blue .marks-icon-face { fill: var(--color-primary); stroke: color-mix(in srgb, white 70%, var(--color-primary)); }
-.marks-icon-blue .marks-icon-top { fill: color-mix(in srgb, var(--color-primary) 62%, white); }
-.marks-icon-blue .marks-icon-side { fill: color-mix(in srgb, var(--color-primary) 72%, black); }
-.marks-icon-green .marks-icon-face { fill: var(--color-success); stroke: color-mix(in srgb, var(--color-success) 40%, white); }
-.marks-icon-green .marks-icon-top { fill: color-mix(in srgb, var(--color-success) 55%, white); }
-.marks-icon-green .marks-icon-side { fill: color-mix(in srgb, var(--color-success) 65%, black); }
-.marks-icon-teal .marks-icon-face { fill: var(--color-brand-teal); stroke: color-mix(in srgb, var(--color-brand-teal) 40%, white); }
-.marks-icon-teal .marks-icon-top { fill: color-mix(in srgb, var(--color-brand-teal) 55%, white); }
-.marks-icon-teal .marks-icon-side { fill: color-mix(in srgb, var(--color-brand-teal) 65%, black); }
-.marks-icon-amber .marks-icon-face { fill: var(--color-brand-warm); stroke: color-mix(in srgb, var(--color-warning) 45%, white); }
-.marks-icon-amber .marks-icon-top { fill: color-mix(in srgb, var(--color-brand-warm) 50%, white); }
-.marks-icon-amber .marks-icon-side { fill: color-mix(in srgb, var(--color-brand-warm) 65%, black); }
-.marks-icon-rose .marks-icon-face { fill: var(--color-destructive); stroke: color-mix(in srgb, var(--color-destructive) 40%, white); }
-.marks-icon-rose .marks-icon-top { fill: color-mix(in srgb, var(--color-destructive) 55%, white); }
-.marks-icon-rose .marks-icon-side { fill: color-mix(in srgb, var(--color-destructive) 65%, black); }
-.marks-icon-slate .marks-icon-face { fill: var(--color-fg-muted); stroke: color-mix(in srgb, var(--color-fg-subtle) 40%, white); }
-.marks-icon-slate .marks-icon-top { fill: color-mix(in srgb, var(--color-fg-muted) 58%, white); }
-.marks-icon-slate .marks-icon-side { fill: color-mix(in srgb, var(--color-fg-muted) 70%, black); }
-.marks-icon-gloss { fill: none; stroke: rgb(255 255 255 / 58%); stroke-width: 1.1; stroke-linecap: round; transform: translateX(calc(var(--icon-tilt-x) * 1.6px)); }
-.marks-icon-mark { fill: none; stroke: rgb(255 255 255 / 94%); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-
 :root[data-motion='reduced'] .marks-icon-live .marks-icon-body,
-:root[data-surface-tier='foundation'] .marks-icon-live .marks-icon-body {
-  transform: none;
-  transition: none;
-}
+:root[data-surface-tier='foundation'] .marks-icon-live .marks-icon-body { transform: none; transition: none; }
 
 .marks-mark { display: block; flex: none; overflow: visible; }
 .marks-mark-frame { fill: var(--color-brand-primary); stroke: color-mix(in srgb, var(--color-brand-accent) 78%, white); stroke-width: 1; }

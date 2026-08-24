@@ -1,18 +1,84 @@
-/* Extended foundation scale. Core type, radius, and elevation now live in tokens.css. */
+/* Extended foundation scale loaded by workspace and catalog routes. */
 :root {
+  --color-primary-pressed: var(--primitive-blue-700);
+  --color-secondary-pressed: var(--primitive-neutral-200);
+  --color-secondary-soft: var(--color-bg-sunken);
+  --color-tertiary-hover: var(--color-action-soft);
+  --color-tertiary-pressed: var(--primitive-blue-100);
+  --color-tertiary-soft: var(--color-action-soft);
+  --color-destructive-hover: var(--primitive-red-700);
+  --color-destructive-pressed: var(--primitive-red-700);
+  --color-destructive-soft: var(--color-feedback-danger-soft);
+  --color-on-destructive: var(--primitive-neutral-0);
+  --color-success-soft: var(--color-feedback-success-soft);
+  --color-on-success: var(--primitive-neutral-0);
+  --color-warning: var(--color-feedback-warning);
+  --color-warning-soft: var(--color-feedback-warning-soft);
+  --color-on-warning: var(--primitive-neutral-900);
+  --color-info: var(--color-feedback-info);
+  --color-info-soft: var(--color-feedback-info-soft);
+  --color-on-info: var(--primitive-neutral-0);
+  --color-focus-ring: var(--color-primary);
+  --color-overlay-hover: rgb(17 26 53 / 6%);
+  --color-overlay-pressed: rgb(17 26 53 / 10%);
+  --color-overlay-selected: var(--color-primary-soft);
   --font-weight-regular: 400;
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
   --font-weight-bold: 700;
   --font-size-xs: 10px;
   --font-size-sm: 12px;
-  --font-size-md: 14px;
   --font-size-lg: 16px;
+  --font-size-xl: 22px;
+  --font-size-display: 36px;
   --font-size-editor: 14.5px;
   --line-height-tight: 1.2;
-  --line-height-default: 1.55;
   --line-height-relaxed: 1.7;
   --letter-spacing-tight: -0.02em;
   --letter-spacing-default: 0;
   --letter-spacing-caps: 0.075em;
+  --radius-none: 0;
+  --radius-tight: 4px;
+  --radius-sheet: 20px;
+  --elevation-none: none;
+  --elevation-xs: 0 1px 1px rgb(20 22 26 / 4%);
+  --elevation-xl: 0 28px 64px -20px rgb(20 22 26 / 32%);
+  --elevation-overlay: 0 24px 80px -24px rgb(17 26 53 / 40%);
+  --layer-popover: 50;
+  --layer-presence: 70;
+  --interact-hover-lift: -0.5px;
+  --interact-press-scale: 0.98;
+  --interact-focus-offset: 2px;
+  --posture-gutter: var(--space-4);
+  --posture-chrome-inset: env(safe-area-inset-bottom, 0px);
+}
+
+[data-theme='dark'] {
+  --color-primary-pressed: #4d6fd6;
+  --color-secondary-pressed: #0c1426;
+  --color-tertiary-pressed: #1c2b55;
+  --color-destructive-hover: #f48a88;
+  --color-destructive-pressed: #c45b59;
+  --color-on-warning: #09101f;
+  --color-overlay-hover: rgb(238 243 255 / 6%);
+  --color-overlay-pressed: rgb(238 243 255 / 10%);
+  --elevation-xs: 0 1px 1px rgb(0 0 0 / 28%);
+  --elevation-xl: 0 32px 72px -22px rgb(0 0 0 / 86%);
+  --elevation-overlay: 0 28px 88px -28px rgb(0 0 0 / 78%);
+}
+
+:root[data-density='compact'] {
+  --control-height-sm: 24px;
+  --control-height-md: 32px;
+  --control-height-lg: 40px;
+}
+
+:root[data-shell='phone'] {
+  --posture-gutter: var(--space-3);
+  --control-height-md: var(--control-height-touch);
+}
+
+:root[data-shell='fold-book'],
+:root[data-shell='fold-laptop'] {
+  --posture-gutter: var(--space-5);
 }

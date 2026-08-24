@@ -53,7 +53,9 @@ const requiredTokens = [
 ];
 
 test('tokens.css publishes the August 2026 intent, elevation, radius, and material set', async () => {
-  const source = await readFile(new URL('../client/src/styles/tokens.css', import.meta.url), 'utf8');
+  const tokens = await readFile(new URL('../client/src/styles/tokens.css', import.meta.url), 'utf8');
+  const foundation = await readFile(new URL('../client/src/styles/foundation-tokens.css', import.meta.url), 'utf8');
+  const source = `${tokens}\n${foundation}`;
   const missing = requiredTokens.filter((token) => !source.includes(`${token}:`));
   assert.deepEqual(missing, [], `missing tokens: ${missing.join(', ')}`);
 });

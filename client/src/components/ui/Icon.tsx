@@ -21,6 +21,16 @@ export interface IconProps {
   className?: string;
 }
 
+const FACE: Record<IconTone, string> = {
+  navy: 'var(--color-brand-primary)',
+  blue: 'var(--color-primary)',
+  green: 'var(--color-success)',
+  teal: 'var(--color-brand-teal)',
+  amber: 'var(--color-brand-warm)',
+  rose: 'var(--color-destructive)',
+  slate: 'var(--color-fg-muted)',
+};
+
 function resolve(name?: string, path?: string): { name: IconName; mark: string; tone: IconTone } {
   const key = name && isIconName(name) ? name : path && isIconName(path) ? path : undefined;
   if (key) return { name: key, mark: ICON_MARKS[key], tone: ICON_TONE[key] };
@@ -61,6 +71,7 @@ export function Icon({
   className = '',
 }: IconProps) {
   const resolved = resolve(name, path);
+  const face = FACE[resolved.tone];
   const onMove = useCallback((event: ReactPointerEvent<HTMLElement>) => {
     if (!interactive) return;
     setTilt(event.currentTarget, event);
@@ -81,14 +92,14 @@ export function Icon({
       onPointerLeave={(event) => clearTilt(event.currentTarget)}
     >
       <svg className="marks-icon-shadow" viewBox="0 0 32 32" width={size} height={size} aria-hidden="true">
-        <ellipse cx="16.4" cy="28.1" rx="9.4" ry="2.15" />
+        <ellipse cx="16.4" cy="28.1" rx="9.4" ry="2.15" fill="rgb(12 28 72 / 0.22)" />
       </svg>
       <svg className="marks-icon-body" viewBox="0 0 32 32" width={size} height={size} aria-hidden="true">
-        <path className="marks-icon-side" d="M22.1 9.1 26.5 6.4v14.4L22.1 23.6z" />
-        <path className="marks-icon-top" d="M9.7 9.1h12.4l4.4-2.7H14.1z" />
-        <rect className="marks-icon-face" x="9.7" y="9.1" width="12.4" height="14.5" rx="3.1" />
-        <path className="marks-icon-gloss" d="M11.1 10.4c3.4-1.15 8.2-1.05 10.1.9" />
-        <g className="marks-icon-mark" transform="translate(10.35 11.15) scale(0.46)">
+        <path className="marks-icon-side" fill={`color-mix(in srgb, ${face} 68%, black)`} d="M22.1 9.1 26.5 6.4v14.4L22.1 23.6z" />
+        <path className="marks-icon-top" fill={`color-mix(in srgb, ${face} 62%, white)`} d="M9.7 9.1h12.4l4.4-2.7H14.1z" />
+        <rect className="marks-icon-face" x="9.7" y="9.1" width="12.4" height="14.5" rx="3.1" fill={face} stroke={`color-mix(in srgb, ${face} 45%, white)`} strokeWidth="0.6" />
+        <path className="marks-icon-gloss" d="M11.1 10.4c3.4-1.15 8.2-1.05 10.1.9" fill="none" stroke="rgb(255 255 255 / 0.58)" strokeWidth="1.1" strokeLinecap="round" />
+        <g className="marks-icon-mark" transform="translate(10.35 11.15) scale(0.46)" fill="none" stroke="rgb(255 255 255 / 0.94)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
           <path d={resolved.mark} />
         </g>
       </svg>
