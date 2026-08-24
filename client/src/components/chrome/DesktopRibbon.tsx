@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { EditorView } from '@codemirror/view';
+import {
+  getPresenceDisplay,
+  PRESENCE_DISPLAY_EVENT,
+  setPresenceDisplay,
+  type DocumentPresenceDisplay,
+} from '../../collab/presence-display';
 import type { CollabSession } from '../../collab/types';
 import { assignKeyTips } from '../../commands/keytips.ts';
 import { solveRibbonLayout, type RibbonLayout } from '../../commands/layout.ts';
@@ -69,6 +75,8 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const lastLayout = useRef<RibbonLayout | undefined>(undefined);
   const lastManualTabAt = useRef(0);
+  const [presenceDisplay, setPresenceState] = useState<DocumentPresenceDisplay>(() =>
+    getPresenceDisplay(props.mode === 'preview'));
 
   const tabs = center.ribbon;
   const selectedTab = tabs.find((candidate) => candidate.id === tab) ?? tabs[0];
@@ -99,6 +107,13 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    const sync = () => setPresenceState(getPresenceDisplay(props.mode === 'preview'));
+    sync();
+    window.addEventListener(PRESENCE_DISPLAY_EVENT, sync);
+    return () => window.removeEventListener(PRESENCE_DISPLAY_EVENT, sync);
+  }, [props.mode]);
 
   useEffect(() => {
     if (tabs.some((candidate) => candidate.id === tab)) return;
@@ -184,6 +199,11 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
     setGalleryOpen(null);
   };
 
+  const changePresence = (value: DocumentPresenceDisplay) => {
+    setPresenceDisplay(value);
+    setPresenceState(value);
+  };
+
   return (
     <div
       ref={rootRef}
@@ -229,6 +249,19 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
               getView={props.getView}
             />
           ))}
+          {tab === 'view' && (
+            <RibbonGroup label="Presence">
+              {(['exact', 'section', 'off'] as const).map((value) => (
+                <RibbonCommand
+                  key={value}
+                  glyph={value === 'off' ? 'clear' : value === 'exact' ? 'find' : 'outline'}
+                  label={value[0].toUpperCase() + value.slice(1)}
+                  pressed={presenceDisplay === value}
+                  onClick={() => changePresence(value)}
+                />
+              ))}
+            </RibbonGroup>
+          )}
           {collapsedGroups.length > 0 && (
             <div className="ribbon-command-group ribbon-overflow-group">
               <button

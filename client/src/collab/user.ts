@@ -16,6 +16,7 @@ function randomUser(): LocalUser {
   return {
     name: `${pick(ADJECTIVES)} ${pick(ANIMALS)}`,
     colorIndex: 1 + Math.floor(Math.random() * PALETTE_SIZE),
+    id: crypto.randomUUID(),
   };
 }
 
@@ -25,7 +26,9 @@ export function loadUser(): LocalUser {
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<LocalUser>;
       if (typeof parsed.name === 'string' && typeof parsed.colorIndex === 'number') {
-        return { name: parsed.name, colorIndex: parsed.colorIndex };
+        const user = { name: parsed.name, colorIndex: parsed.colorIndex, id: typeof parsed.id === 'string' ? parsed.id : crypto.randomUUID() };
+        if (!parsed.id) saveUser(user);
+        return user;
       }
     }
   } catch {

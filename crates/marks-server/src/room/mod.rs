@@ -26,6 +26,11 @@ pub const MSG_SYNCED: u8 = 0x05;
 pub const MSG_MUTATION: u8 = 0x06;
 /// Server-to-origin durable commit receipt.
 pub const MSG_COMMITTED: u8 = 0x07;
+/// Marks-owned, transient presence messages. These are deliberately distinct
+/// from durable ESBT snapshots and updates.
+pub const MSG_PRESENCE_DELTA: u8 = 0x08;
+pub const MSG_PRESENCE_SNAPSHOT: u8 = 0x09;
+pub const MSG_PRESENCE_REMOVAL: u8 = 0x0a;
 
 /// Close codes. `4404` is the one the browser treats as "document deleted".
 pub const CLOSE_INVALID_PAYLOAD: u16 = 4400;
@@ -76,7 +81,7 @@ pub enum JoinRefusal {
 
 pub enum RoomMsg {
     Join {
-        actor: RoomActor,
+        actor: Box<RoomActor>,
         client_version: Option<esbt::clock::Version>,
         out: mpsc::Sender<OutMsg>,
         resp: oneshot::Sender<Result<u64, JoinRefusal>>,
@@ -111,12 +116,29 @@ pub struct Rooms {
     map: Arc<Mutex<HashMap<String, RoomEntry>>>,
     commit_batches: Arc<AtomicU64>,
     committed_mutations: Arc<AtomicU64>,
+    presence: Arc<PresenceCounters>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CommitStats {
     pub batches: u64,
     pub mutations: u64,
+}
+
+#[derive(Default)]
+pub(crate) struct PresenceCounters {
+    pub received: AtomicU64,
+    pub dropped: AtomicU64,
+    pub coalesced: AtomicU64,
+    pub broadcast: AtomicU64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PresenceStats {
+    pub received: u64,
+    pub dropped: u64,
+    pub coalesced: u64,
+    pub broadcast: u64,
 }
 
 pub struct JoinedRoom {
@@ -133,6 +155,7 @@ impl Rooms {
             map: Arc::new(Mutex::new(HashMap::new())),
             commit_batches: Arc::new(AtomicU64::new(0)),
             committed_mutations: Arc::new(AtomicU64::new(0)),
+            presence: Arc::new(PresenceCounters::default()),
         }
     }
 
@@ -171,17 +194,18 @@ impl Rooms {
         let task_limits = self.limits.clone();
         let task_commit_batches = self.commit_batches.clone();
         let task_committed_mutations = self.committed_mutations.clone();
+        let task_presence = self.presence.clone();
         let handle = tokio::spawn(async move {
-            task::run(
-                task_document_id,
-                task_db,
-                task_config,
-                task_limits,
-                task_commit_batches,
-                task_committed_mutations,
-                rx,
-            )
-            .await;
+            let context = task::TaskContext {
+                document_id: task_document_id,
+                db: task_db,
+                config: task_config,
+                limits: task_limits,
+                commit_batches: task_commit_batches,
+                committed_mutations: task_committed_mutations,
+                presence: task_presence,
+            };
+            task::run(context, rx).await;
             let mut map = cleanup_map.lock().await;
             if map
                 .get(&room_id)
@@ -213,6 +237,16 @@ impl Rooms {
         }
     }
 
+    /// Payload-free process counters for the intentionally lossy presence lane.
+    pub fn presence_stats(&self) -> PresenceStats {
+        PresenceStats {
+            received: self.presence.received.load(Ordering::Relaxed),
+            dropped: self.presence.dropped.load(Ordering::Relaxed),
+            coalesced: self.presence.coalesced.load(Ordering::Relaxed),
+            broadcast: self.presence.broadcast.load(Ordering::Relaxed),
+        }
+    }
+
     pub async fn join(
         &self,
         document_id: &DocumentId,
@@ -223,7 +257,7 @@ impl Rooms {
         let tx = self.entry_tx(document_id).await?;
         let (resp, rx) = oneshot::channel();
         tx.send(RoomMsg::Join {
-            actor,
+            actor: Box::new(actor),
             client_version,
             out,
             resp,

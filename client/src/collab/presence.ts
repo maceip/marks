@@ -19,7 +19,18 @@ import {
   ViewPlugin,
   WidgetType,
 } from '@codemirror/view';
-import type { PresenceStoreApi } from './presence-store';
+import type { PresenceStoreApi } from './presence-store.ts';
+import type { PresenceActivityController } from './presence-activity-controller.ts';
+import {
+  encodeSelectionPresence,
+  type SelectionDirection,
+} from './protocol.ts';
+import {
+  captureSelectionPresence,
+  remoteSelections,
+  type PresenceDocument,
+} from './presence-position.ts';
+import type { EsbtDocument } from './wasm/esbt-document.ts';
 
 export const HEARTBEAT_MS = 15_000;
 
@@ -37,23 +48,35 @@ const presenceField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 });
 
+export const LABEL_VISIBLE_MS = 1_800;
+export interface CaretPresentation { position: number; lastMovedAt: number; visibleUntil: number }
+export function updateCaretPresentation(previous: CaretPresentation | undefined, position: number, now: number): CaretPresentation {
+  return { position, lastMovedAt: !previous || previous.position !== position ? now : previous.lastMovedAt, visibleUntil: !previous || previous.position !== position ? now + LABEL_VISIBLE_MS : previous.visibleUntil };
+}
+export function labelGeometry(x: number, y: number, width: number, bounds: { left: number; right: number; top: number }): { placement: 'above' | 'below'; shiftX: number } {
+  return { placement: y - 24 < bounds.top ? 'below' : 'above', shiftX: Math.min(0, bounds.right - x - width - 2) };
+}
+
 class CaretWidget extends WidgetType {
-  constructor(
-    private readonly name: string,
-    private readonly colorClassName: string,
-  ) {
-    super();
+  private readonly name: string;
+  private readonly colorClassName: string;
+  private readonly direction: SelectionDirection;
+  constructor(name: string, colorClassName: string, direction: SelectionDirection) {
+    super(); this.name = name; this.colorClassName = colorClassName; this.direction = direction;
   }
 
   override eq(other: CaretWidget): boolean {
-    return other.name === this.name && other.colorClassName === this.colorClassName;
+    return other.name === this.name && other.colorClassName === this.colorClassName
+      && other.direction === this.direction;
   }
 
   toDOM(): HTMLElement {
     const caret = document.createElement('span');
     caret.className = `esbt-caret ${this.colorClassName}`;
     caret.dataset.name = this.name;
-    caret.setAttribute('aria-hidden', 'true');
+    caret.dataset.direction = this.direction;
+    caret.setAttribute('role', 'mark');
+    caret.setAttribute('aria-label', `${this.name}'s caret, ${this.direction} selection`);
     return caret;
   }
 
@@ -62,54 +85,14 @@ class CaretWidget extends WidgetType {
   }
 }
 
-interface RemoteSelection {
-  from: number;
-  to: number;
-  name: string;
-  colorClassName: string;
-}
-
-function remoteSelections(
-  states: Record<string, unknown>,
-  selfSiteId: string,
-  docLength: number,
-): RemoteSelection[] {
-  const out: RemoteSelection[] = [];
-  for (const [key, value] of Object.entries(states)) {
-    if (!key.endsWith('-cm-sel') || !value || typeof value !== 'object') continue;
-    const site = key.slice(0, -'-cm-sel'.length);
-    if (site === selfSiteId) continue;
-
-    const sel = value as { from?: unknown; to?: unknown };
-    if (typeof sel.from !== 'number' || typeof sel.to !== 'number') continue;
-
-    const user = states[`${site}-cm-user`] as
-      | { name?: unknown; colorClassName?: unknown }
-      | undefined;
-
-    // The remote replica can be a step ahead of this editor; clamp rather
-    // than let a stale index throw inside the decoration layer.
-    const from = Math.max(0, Math.min(Math.min(sel.from, sel.to), docLength));
-    const to = Math.max(0, Math.min(Math.max(sel.from, sel.to), docLength));
-
-    out.push({
-      from,
-      to,
-      name: typeof user?.name === 'string' ? user.name : 'Anonymous',
-      colorClassName:
-        typeof user?.colorClassName === 'string' ? user.colorClassName : 'marks-user1',
-    });
-  }
-  return out;
-}
-
 function buildDecorations(
   states: Record<string, unknown>,
   selfSiteId: string,
-  docLength: number,
+  document: PresenceDocument | null,
+  lastSequences: Map<string, number>,
 ): DecorationSet {
   const ranges = [];
-  for (const peer of remoteSelections(states, selfSiteId, docLength)) {
+  for (const peer of remoteSelections(states, selfSiteId, document, lastSequences)) {
     if (peer.to > peer.from) {
       ranges.push(
         Decoration.mark({ class: `esbt-selection ${peer.colorClassName}` }).range(
@@ -120,9 +103,9 @@ function buildDecorations(
     }
     ranges.push(
       Decoration.widget({
-        widget: new CaretWidget(peer.name, peer.colorClassName),
-        side: -1,
-      }).range(peer.to),
+        widget: new CaretWidget(peer.name, peer.colorClassName, peer.direction),
+        side: peer.direction === 'forward' ? -1 : 1,
+      }).range(peer.direction === 'forward' ? peer.to : peer.from),
     );
   }
   return Decoration.set(ranges, true);
@@ -136,18 +119,30 @@ function buildDecorations(
  */
 export function esbtPresence(
   getSiteId: () => string,
-  getLength: () => number,
+  getDocument: () => EsbtDocument | null,
   presence: PresenceStoreApi,
+  activity: PresenceActivityController,
 ): Extension {
   const selectionKeyFor = () => `${getSiteId()}-cm-sel`;
 
   const plugin = ViewPlugin.define((view) => {
     let destroyed = false;
     let scheduled = false;
+    // Epoch-based start prevents a reloaded sender from looking older than
+    // its final pre-reload heartbeat while remaining a safe JSON integer.
+    let sequence = Date.now() * 1_000;
+    const lastSequences = new Map<string, number>();
 
     const publishSelection = (): void => {
+      if (!activity.active || !view.hasFocus) return;
       const main = view.state.selection.main;
-      presence.set(selectionKeyFor(), { from: main.from, to: main.to });
+      const document = getDocument();
+      if (!document) return;
+      sequence += 1;
+      presence.set(
+        selectionKeyFor(),
+        encodeSelectionPresence(captureSelectionPresence(document, main.anchor, main.head, sequence)),
+      );
     };
 
     const refresh = (): void => {
@@ -155,7 +150,8 @@ export function esbtPresence(
       const decorations = buildDecorations(
         presence.getAllStates(),
         getSiteId(),
-        getLength() || view.state.doc.length,
+        getDocument(),
+        lastSequences,
       );
       view.dispatch({ effects: setPresenceDecorations.of(decorations) });
     };
@@ -173,6 +169,7 @@ export function esbtPresence(
     };
 
     const unsubscribe = presence.subscribe(scheduleRefresh);
+    const unsubscribeReplica = getDocument()?.onReplicaChange(scheduleRefresh) ?? (() => {});
     const heartbeat = window.setInterval(publishSelection, HEARTBEAT_MS);
 
     publishSelection();
@@ -188,6 +185,7 @@ export function esbtPresence(
         destroyed = true;
         clearInterval(heartbeat);
         unsubscribe();
+        unsubscribeReplica();
         presence.delete(selectionKeyFor());
       },
     };
@@ -195,3 +193,5 @@ export function esbtPresence(
 
   return [presenceField, plugin];
 }
+
+export const revealPresence = (id: string): void => { window.dispatchEvent(new CustomEvent('marks-presence-reveal', { detail: id })); };

@@ -48,8 +48,8 @@ pub use acl::{
     redeem_link_grant, resolve_document_role,
 };
 pub use authorization::{
-    Actor, DocumentAction, DocumentRole, RoomActor, ScratchActor, authorize_document_action,
-    authorize_room_action,
+    Actor, DocumentAction, DocumentRole, RoomActor, RoomIdentity, ScratchActor,
+    authorize_document_action, authorize_room_action,
 };
 pub use bearer::{
     BearerError, ESBT_SUBPROTOCOL, PAIRING_FRAGMENT_PREFIX, SCRATCH_AUTHORIZATION_SCHEME,

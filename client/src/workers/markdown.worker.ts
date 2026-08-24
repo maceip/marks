@@ -103,6 +103,9 @@ async function render(seq: number, text: string): Promise<RenderResponse> {
   lastHeadings = collectHeadings(tokens);
 
   const lines = text.split('\n');
+  const lineOffsets: number[] = [];
+  let offset = 0;
+  for (const line of lines) { lineOffsets.push(offset); offset += line.length + 1; }
   const groups = groupTokens(tokens, lines);
 
   const renderStart = performance.now();
@@ -129,7 +132,11 @@ async function render(seq: number, text: string): Promise<RenderResponse> {
     }
     nextCache.set(key, html);
 
-    const patch: BlockPatch = { key, line: Math.max(group.line, 0) };
+    const line = Math.max(group.line, 0);
+    const sourceStart = lineOffsets[line] ?? 0;
+    const sourceEnd = group.source === null ? sourceStart : sourceStart + group.source.length;
+    const exactTextStart = exactMappingStart(group.source, sourceStart);
+    const patch: BlockPatch = { key, line, sourceStart, sourceEnd, ...(exactTextStart === null ? {} : { exactTextStart }) };
     // Generated blocks — the footnote list — keep the same key while their
     // contents change, since the key can only be derived from the token types.
     // They are re-rendered every pass, so they must also be re-sent.
@@ -188,7 +195,8 @@ function renderIncremental(seq: number, text: string, dirtyKeys: string[]): Rend
       dirty += 1;
     }
     nextCache.set(block.key, html);
-    const patch: BlockPatch = { key: block.key, line: block.start };
+    const exactTextStart = exactMappingStart(block.source, block.sourceStart);
+    const patch: BlockPatch = { key: block.key, line: block.start, sourceStart: block.sourceStart, sourceEnd: block.sourceEnd, ...(exactTextStart === null ? {} : { exactTextStart }) };
     if (!present.has(block.key) || dirtySet.has(block.key)) {
       patch.html = html;
       bytes += html.length;
@@ -218,6 +226,16 @@ function renderIncremental(seq: number, text: string, dirtyKeys: string[]): Rend
       words: countWords(text),
     },
   };
+}
+
+/** Only deliberately boring paragraphs/headings have a one-to-one text map. */
+function exactMappingStart(source: string | null, start: number): number | null {
+  if (source === null || source.includes('\n')) return null;
+  const heading = /^ {0,3}#{1,6}[ \t]+/.exec(source);
+  const body = heading ? source.slice(heading[0].length) : source;
+  // Formatting, entities and Markdown constructs make DOM text coordinates ambiguous.
+  if (!body || /[\\`*_~\[\]<>|!$&]/.test(body) || /^\s*(?:[-+]|\d+[.)])\s/.test(body)) return null;
+  return start + (heading?.[0].length ?? 0);
 }
 
 function remapHeadingLines(text: string, headings: Heading[]): Heading[] {
@@ -255,6 +273,8 @@ self.onmessage = async (event: MessageEvent<RenderRequest>) => {
           {
             key: `error-${message.seq}`,
             line: 0,
+            sourceStart: 0,
+            sourceEnd: text.length,
             html: `<div class="marks-callout marks-callout-danger"><p>Preview failed to render.</p></div>`,
           },
         ],

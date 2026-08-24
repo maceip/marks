@@ -1,5 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { EditorView } from '@codemirror/view';
+import {
+  getPresenceDisplay,
+  PRESENCE_DISPLAY_EVENT,
+  setPresenceDisplay,
+  type DocumentPresenceDisplay,
+} from '../../collab/presence-display';
 import type { CollabSession } from '../../collab/types';
 import { useCommandCenter } from '../../commands/context';
 import type { ProjectedCommand } from '../../commands/types.ts';
@@ -96,6 +102,8 @@ const MORE_IDS = [
 export function PhoneComposer(props: PhoneComposerProps) {
   const center = useCommandCenter();
   const [sheet, setSheet] = useState<PhoneSheet>(null);
+  const [presenceDisplay, setPresenceState] = useState<DocumentPresenceDisplay>(() =>
+    getPresenceDisplay(props.mode === 'preview'));
   const available = useMemo(
     () => new Map(center.commands('phone').map((command) => [command.id, command])),
     [center],
@@ -114,6 +122,13 @@ export function PhoneComposer(props: PhoneComposerProps) {
     : sheet === 'review'
       ? 'Document intelligence'
       : 'Page';
+
+  useEffect(() => {
+    const sync = () => setPresenceState(getPresenceDisplay(props.mode === 'preview'));
+    sync();
+    window.addEventListener(PRESENCE_DISPLAY_EVENT, sync);
+    return () => window.removeEventListener(PRESENCE_DISPLAY_EVENT, sync);
+  }, [props.mode]);
 
   const invoke = (command: ProjectedCommand) => {
     if (!command.enabled) return;
@@ -157,6 +172,21 @@ export function PhoneComposer(props: PhoneComposerProps) {
               </button>
             </header>
             <div className="phone-sheet-grid">
+              {sheet === 'more' && (['exact', 'section', 'off'] as const).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={presenceDisplay === value}
+                  onClick={() => {
+                    setPresenceDisplay(value);
+                    setPresenceState(value);
+                    setSheet(null);
+                  }}
+                >
+                  <Glyph name={value === 'off' ? 'clear' : value === 'exact' ? 'find' : 'outline'} size={28} />
+                  <span>Presence: {value}</span>
+                </button>
+              ))}
               {(sheet === 'insert' ? insert : sheet === 'review' ? review : more).map((command) => (
                 <PhoneSheetCommand key={command.id} command={command} onInvoke={invoke} />
               ))}

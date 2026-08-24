@@ -31,10 +31,14 @@ import {
   type ReplicaJournalRecord,
 } from './journal';
 import { HEARTBEAT_MS, esbtPresence } from './presence';
+import { PresenceActivityController } from './presence-activity-controller';
 import { PresenceStore } from './presence-store';
 import { EDITOR_CHUNK_UNITS } from './profile';
 import {
   MSG_EPHEMERAL,
+  MSG_PRESENCE_DELTA,
+  MSG_PRESENCE_REMOVAL,
+  MSG_PRESENCE_SNAPSHOT,
   MSG_COMMITTED,
   MSG_MUTATION,
   MSG_SERVER_VV,
@@ -123,6 +127,7 @@ export class EsbtEngine implements CollabSession {
   private reconnectDelay = RECONNECT_MIN_MS;
   private reconnectTimer: number | null = null;
   private presenceHeartbeat: number | null = null;
+  private readonly activity: PresenceActivityController;
   private snapshotReplyTimer: number | null = null;
   private lastServerVV: Uint8Array | null = null;
   private lastAckedVersion: Uint8Array | null = null;
@@ -207,6 +212,12 @@ export class EsbtEngine implements CollabSession {
       onUpdate: (bytes) => this.importFromTab(bytes, 'update'),
       onSnapshot: (bytes) => this.importFromTab(bytes, 'snapshot'),
     });
+    this.activity = new PresenceActivityController({
+      publishActive: () => this.publishUser(),
+      publishInactive: () => this.clearLocalPresence(),
+      windowTarget: window,
+      documentTarget: document,
+    });
 
     this.extension = [
       this.editable,
@@ -220,7 +231,9 @@ export class EsbtEngine implements CollabSession {
         }
         return [];
       }),
-      esbtPresence(() => this.presenceSiteId(), () => this.doc?.length ?? 0, this.ephemeral),
+
+      esbtPresence(() => this.presenceSiteId(), () => this.doc, this.ephemeral, this.activity),
+
       this.syncExtension(),
       this.undoExtensions(),
     ];
@@ -264,13 +277,13 @@ export class EsbtEngine implements CollabSession {
         void this.persistAndSendMutation(bytes, 'update', true);
       }),
     );
-    this.publishUser();
+    this.activity.start();
     if (this.presenceHeartbeat === null) {
-      this.presenceHeartbeat = window.setInterval(() => this.publishUser(), HEARTBEAT_MS);
+      this.presenceHeartbeat = window.setInterval(() => this.activity.heartbeat(), HEARTBEAT_MS);
     }
     this.unsubscribers.push(
       this.ephemeral.subscribe(() => this.refreshPeers()),
-      this.ephemeral.subscribeLocalUpdates((bytes) => this.send(MSG_EPHEMERAL, bytes)),
+      this.ephemeral.subscribeLocalUpdates((bytes) => this.send(MSG_PRESENCE_DELTA, bytes)),
     );
     this.refreshPeers();
     this.refreshTelemetry();
@@ -278,9 +291,19 @@ export class EsbtEngine implements CollabSession {
 
   private publishUser(): void {
     this.ephemeral.set(userKey(this.presenceSiteId()), {
+      active: true,
+      colorPreference: this.user.colorIndex,
       name: this.user.name,
       colorClassName: `marks-user${this.user.colorIndex}`,
+      participantId: this.user.id || this.presenceSiteId(),
+
     });
+  }
+
+  private clearLocalPresence(): void {
+    const siteId = this.presenceSiteId();
+    this.ephemeral.delete(userKey(siteId));
+    this.ephemeral.delete(`${siteId}-cm-sel`);
   }
 
   private redo(): boolean {
@@ -862,6 +885,9 @@ export class EsbtEngine implements CollabSession {
   }
 
   private openSocket(ticket: RoomTicket): void {
+    // A presence instance is scoped to exactly one WebSocket lifecycle. This
+    // happens before construction so even a failed handshake cannot reuse it.
+    this.ephemeral.beginConnectionLifecycle();
     const url = new URL(ticket.roomUrl);
     try {
       const vv = this.doc?.version() ?? new Uint8Array();
@@ -880,7 +906,7 @@ export class EsbtEngine implements CollabSession {
     socket.addEventListener('message', (event) => this.onMessage(event.data as ArrayBuffer));
     socket.addEventListener('open', () => {
       this.reconnectDelay = RECONNECT_MIN_MS;
-      this.send(MSG_EPHEMERAL, this.ephemeral.encodeAll());
+      this.send(MSG_PRESENCE_DELTA, this.ephemeral.encodeAll());
     });
     socket.addEventListener('close', (event) => this.onDisconnect(socket, event.code));
     socket.addEventListener('error', () => this.onDisconnect(socket));
@@ -933,15 +959,16 @@ export class EsbtEngine implements CollabSession {
   };
 
   private handleVisibility = (): void => {
-    if (document.visibilityState === 'hidden') {
-      this.flushLocalSave();
-      return;
-    }
-    this.tabs.requestSnapshot();
+    if (document.visibilityState === 'hidden') this.flushLocalSave();
+    else this.tabs.requestSnapshot();
   };
 
   private handlePageHide = (): void => {
     this.flushLocalSave();
+    // Emit tombstones while the transport is still available, then close it.
+    this.activity.pagehide();
+    this.socket?.close();
+    this.socket = null;
   };
 
   private importRemote(bytes: Uint8Array): void {
@@ -1010,7 +1037,13 @@ export class EsbtEngine implements CollabSession {
         this.importRemote(payload);
         break;
       case MSG_EPHEMERAL:
+      case MSG_PRESENCE_DELTA:
+      case MSG_PRESENCE_SNAPSHOT:
+      case MSG_PRESENCE_REMOVAL:
         try {
+          // WebSocket messages are processed synchronously in receive order.
+          // Thus every durable frame already received on this socket has been
+          // imported before any presence identity is exposed to renderers.
           this.ephemeral.apply(payload);
         } catch {
           // presence is best-effort
@@ -1363,27 +1396,47 @@ export class EsbtEngine implements CollabSession {
 
     for (const [key, value] of Object.entries(states)) {
       if (!key.endsWith('-cm-user') || !value || typeof value !== 'object') continue;
-      const user = value as { name?: unknown; colorClassName?: unknown };
+
+      const user = value as { participantId?: unknown; connectionId?: unknown; name?: unknown; colorIndex?: unknown };
       const name = typeof user.name === 'string' ? user.name : 'Anonymous';
-      const match = /marks-user(\d)/.exec(String(user.colorClassName ?? ''));
+      const connectionId = typeof user.connectionId === 'string' ? user.connectionId : key.replace(/-cm-user$/, '');
+      const site = key.replace(/-cm-user$/, '');
+      const rawSelection = states[`${site}-cm-sel`] as Record<string, unknown> | undefined;
       peers.push({
-        id: key.replace(/-cm-user$/, ''),
+        id: connectionId,
+        participantId: typeof user.participantId === 'string' ? user.participantId : connectionId,
+        connectionId,
+
         name,
-        colorIndex: match ? Number(match[1]) : 1,
+        colorIndex: typeof user.colorIndex === 'number' && user.colorIndex >= 1 && user.colorIndex <= 8 ? user.colorIndex : 1,
         self: key === selfKey,
+        selection: rawSelection && typeof rawSelection.from === 'number' && typeof rawSelection.to === 'number'
+          ? { from: rawSelection.from, to: rawSelection.to } : undefined,
+        section: 'Document',
+        presence: rawSelection ? {
+          activity: 'active',
+          selection: typeof rawSelection.from === 'number' ? { from: rawSelection.from, to: typeof rawSelection.to === 'number' ? rawSelection.to : rawSelection.from } : null,
+          location: null,
+          lastInteraction: Date.now(),
+          editing: true,
+          selecting: rawSelection.from !== rawSelection.to,
+        } : undefined,
+
       });
     }
 
     if (!peers.some((peer) => peer.self)) {
       peers.unshift({
-        id: this.presenceSiteId(),
+        id: `self-${this.presenceSiteId()}`,
+        participantId: `self-${this.presenceSiteId()}`,
+        connectionId: `self-${this.presenceSiteId()}`,
         name: this.user.name,
         colorIndex: this.user.colorIndex,
         self: true,
       });
     }
 
-    peers.sort((a, b) => Number(b.self) - Number(a.self) || a.name.localeCompare(b.name));
+    peers.sort((a, b) => Number(b.self) - Number(a.self) || a.connectionId.localeCompare(b.connectionId));
     this.cachedPeers = peers;
     for (const listener of this.peerListeners) listener(peers);
   }
@@ -1408,6 +1461,7 @@ export class EsbtEngine implements CollabSession {
     if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
     if (this.snapshotReplyTimer !== null) clearTimeout(this.snapshotReplyTimer);
     if (this.presenceHeartbeat !== null) clearInterval(this.presenceHeartbeat);
+    this.activity.disconnect();
     if (this.markdownTimer !== null) window.clearTimeout(this.markdownTimer);
     for (const unsubscribe of this.unsubscribers) unsubscribe();
     this.tabs.destroy();

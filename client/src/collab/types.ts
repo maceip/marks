@@ -23,15 +23,50 @@ export type ConnectionStatus = 'connecting' | 'saving' | 'connected' | 'offline'
 
 export interface Peer {
   id: string;
+  /** Stable person identity; shared by that person's simultaneous tabs. */
+  participantId: string;
+  /** One admitted socket, used to keep simultaneous cursors distinct. */
+  connectionId: string;
   name: string;
   /** Palette index 1-8, matching the `.marks-user{n}` CSS classes. */
   colorIndex: number;
   self: boolean;
+  avatarUrl?: string;
+  authenticated?: boolean;
+  selection?: { from: number; to: number };
+  section?: string;
+  joinedAt?: number;
+  connectionIds?: string[];
+
+  /** Normalized presence; UI code never needs to inspect PresenceStore JSON. */
+  presence?: RemotePresence;
+}
+
+export interface PresenceLocation {
+  blockStart: number;
+  blockEnd: number;
+  blockKey: string;
+  heading?: string;
+  headingLine?: number;
+}
+
+export interface RemotePresence {
+  activity: 'active' | 'idle';
+  selection: { from: number; to: number } | null;
+  /** Stable ESBT anchors when supplied by a compatible peer. */
+  stableSelection?: { start: string; end: string };
+  location: PresenceLocation | null;
+  lastInteraction: number;
+  editing: boolean;
+  selecting: boolean;
+
 }
 
 export interface LocalUser {
   name: string;
   colorIndex: number;
+  /** Browser identity shared by this person's tabs, never displayed. */
+  id?: string;
 }
 
 export interface RoomTicket {
@@ -43,6 +78,12 @@ export interface RoomTicket {
   /** Validated server role; null only for scratch authority. */
   role: DocumentRole | null;
   authority: 'session' | 'scratch';
+  /** Public identity resolved by the same admission that minted this ticket. */
+  displayIdentity: {
+    participantId: string;
+    displayName: string;
+    avatar?: string | null;
+  };
 }
 
 export interface DocumentAccessProvider {

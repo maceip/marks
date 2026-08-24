@@ -21,6 +21,30 @@ pub enum DocumentAction {
     Delete,
 }
 
+/// Public, server-authoritative identity attached to transient room presence.
+/// It deliberately contains no session, device, email, or bearer material.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoomIdentity {
+    /// Stable account id, or a room-scoped opaque id for scratch authority.
+    pub participant_id: String,
+    pub display_name: String,
+    /// An HTTPS URL or server asset identifier, rendered as data rather than markup.
+    pub avatar: Option<String>,
+    /// A palette preference; the room resolves active-user collisions.
+    pub preferred_color: u8,
+}
+
+impl Default for RoomIdentity {
+    fn default() -> Self {
+        Self {
+            participant_id: String::new(),
+            display_name: String::new(),
+            avatar: None,
+            preferred_color: 1,
+        }
+    }
+}
+
 /// Identity already resolved by Marks before the room admits a socket. ESBT
 /// receives only `esbt_site` plus operation bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,6 +56,7 @@ pub struct Actor {
     pub esbt_site: EsbtSiteId,
     pub role: DocumentRole,
     pub authorization_epoch: u64,
+    pub identity: RoomIdentity,
 }
 
 /// Temporary capability authority for a scratch-owned document. It has no
@@ -42,6 +67,7 @@ pub struct ScratchActor {
     pub document_id: DocumentId,
     pub esbt_site: EsbtSiteId,
     pub authorization_epoch: u64,
+    pub identity: RoomIdentity,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -119,6 +145,7 @@ mod tests {
             document_id: DocumentId::new("document_12345").unwrap(),
             esbt_site: EsbtSiteId::new(2).unwrap(),
             authorization_epoch: 1,
+            identity: RoomIdentity::default(),
         });
         assert!(authorize_room_action(&actor, DocumentAction::EditText));
         assert!(!authorize_room_action(&actor, DocumentAction::Comment));

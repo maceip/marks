@@ -215,6 +215,7 @@ function WorkspaceView({
                 <div hidden={companion !== 'preview'}>
                   <PreviewPane
                     session={session}
+                    renderedOnly={mode === 'preview'}
                     onContainer={handleContainer}
                     onStats={onStats}
                     onHeadings={(items) => {
@@ -243,6 +244,7 @@ function WorkspaceView({
           ) : (
             <PreviewPane
               session={session}
+              renderedOnly={mode === 'preview'}
               onContainer={handleContainer}
               onStats={onStats}
               onHeadings={onHeadings}

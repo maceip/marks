@@ -1,6 +1,10 @@
 import { hashString } from './blocks.ts';
 
 export interface SourceBlock {
+  /** Inclusive UTF-16 source offset. */
+  sourceStart: number;
+  /** Exclusive UTF-16 source offset. */
+  sourceEnd: number;
   start: number;
   end: number;
   source: string;
@@ -31,6 +35,12 @@ export function splitSourceBlocks(text: string): SourceBlock[] {
   const blocks: SourceBlock[] = [];
   let index = 0;
   const seen = new Map<string, number>();
+  const lineOffsets: number[] = [];
+  let sourceOffset = 0;
+  for (const line of lines) {
+    lineOffsets.push(sourceOffset);
+    sourceOffset += line.length + 1;
+  }
 
   const push = (start: number, end: number): void => {
     const source = lines.slice(start, end).join('\n');
@@ -39,6 +49,8 @@ export function splitSourceBlocks(text: string): SourceBlock[] {
     const occurrence = (seen.get(base) ?? 0) + 1;
     seen.set(base, occurrence);
     blocks.push({
+      sourceStart: lineOffsets[start] ?? 0,
+      sourceEnd: end >= lines.length ? text.length : Math.max(lineOffsets[end] - 1, 0),
       start,
       end,
       source,

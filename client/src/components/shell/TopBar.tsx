@@ -163,7 +163,13 @@ export function TopBar(props: TopBarProps) {
               <Icon path={icons.focus} size={14} /> Exit focus
             </button>
           )}
-          {documentRoute && props.documentAvailable && <PresenceBar peers={props.peers} />}
+          {documentRoute && props.documentAvailable && <PresenceBar peers={props.peers} onJump={(peer) => {
+            const view = props.getView();
+            const position = peer.selection?.to;
+            if (!view || position === undefined) return;
+            const box = view.coordsAtPos(Math.min(position, view.state.doc.length));
+            if (box) view.scrollDOM.scrollTo({ top: Math.max(0, view.scrollDOM.scrollTop + box.top - view.scrollDOM.getBoundingClientRect().top - 48), behavior: 'smooth' });
+          }} />}
 
           {documentRoute && props.documentAvailable && (!commandCenter || available('document.share')) && (
             <button

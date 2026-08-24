@@ -148,8 +148,12 @@ the five boundary properties above proven end to end.
 - Minimal authenticated comment threads after the identity/ACL gate: anchored
   thread, reply, resolve/reopen, edit/delete own message. No mentions,
   reactions, notifications, or suggestion mode.
-- Presence is best-effort and ephemeral. Multiple tabs may have separate
-  cursors while the UI groups them under one principal.
+- Presence is best-effort and ephemeral. The delivered baseline has per-site
+  avatars and UTF-16 source selections; principal grouping is **planned**, not
+  delivered. V1 requires the identity, state timers, multi-tab aggregation,
+  anchored V2 frames, preview fallbacks, privacy limits, interoperability, and
+  reader-first rollout in [`PRESENCE.md`](PRESENCE.md). Its degraded path must
+  leave durable collaboration unaffected.
 
 ### 5. Browser and operational floor
 
