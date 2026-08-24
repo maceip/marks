@@ -602,7 +602,7 @@ export function WildStudio(props: WildStudioProps) {
 
   return (
     <aside className="wild-studio surface-material-host" data-shell={props.shell} data-wild-capability={props.capability} aria-label={descriptor.label} aria-busy={analyzing && props.capability === 'intent'}>
-      <SurfaceMaterial variant="panel" intensity={0.98} />
+      <SurfaceMaterial variant="panel" />
       <header className="wild-head">
         <div><span>Possibility layer {analyzing && props.capability === 'intent' ? '· reading signals' : '· browser local'}</span><h2>{descriptor.label}</h2><p>{descriptor.description}</p></div>
         <button ref={closeRef} type="button" className="icon-button" aria-label="Close possibility layer" onClick={props.onClose}><Icon path={icons.close} /></button>

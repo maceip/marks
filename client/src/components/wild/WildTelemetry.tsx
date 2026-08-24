@@ -147,7 +147,7 @@ export function WildTelemetry({ documentId, session, onOpenCausal }: WildTelemet
       aria-label={`Open causal receipt for ${active.observation.commandLabel}`}
       onClick={onOpenCausal}
     >
-      <SurfaceMaterial variant="floating" intensity={1.05} />
+      <SurfaceMaterial variant="floating" />
       <span className="lightpath-origin">{active.observation.source === 'agent' ? 'Agent' : 'Ribbon'}</span>
       <strong>{active.observation.commandLabel}</strong>
       <span className="lightpath-rail" aria-hidden="true">
