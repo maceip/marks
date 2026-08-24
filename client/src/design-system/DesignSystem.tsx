@@ -6,7 +6,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { RibbonCommand } from '../components/chrome/RibbonCommand';
 import { AgentChatPill } from '../components/agent/AgentChatPill';
 import type { AgentChatState } from '../components/agent/agent-chat-model';
-import { ICON_NAMES, Icon } from '../components/ui/Icon';
+import { ICON_NAMES, Icon, iconLabel } from '../components/ui/Icon';
 import { Button } from '../components/ui/Button';
 import { IconButton } from '../components/ui/IconButton';
 import { Spinner } from '../components/ui/Spinner';
@@ -121,7 +121,12 @@ export function DesignSystem({ onBack }: { onBack: () => void }) {
           </div>
           <h3>Isometric icons</h3>
           <p>Custom 2.5D slabs, not a stroke pack. Hover tilts the tile; press depresses it.</p>
-          <div className="ds-icon-grid">{ICON_NAMES.map((name) => <span className="icon-demo" title={name} key={name}><Icon name={name} size={28} /></span>)}</div>
+          <div className="ds-icon-grid">{ICON_NAMES.map((name) => (
+            <span className="icon-demo" title={iconLabel(name)} key={name}>
+              <Icon name={name} size={28} />
+              <small>{iconLabel(name)}</small>
+            </span>
+          ))}</div>
         </Section>
 
         <Section id="controls" title="Controls">

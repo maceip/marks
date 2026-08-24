@@ -9,7 +9,7 @@ import {
 } from '../icons/catalog';
 
 export type { IconName, IconTone, IconKind };
-export { icons, ICON_NAMES, ICON_MARKS, ICON_TONE } from '../icons/catalog';
+export { icons, ICON_NAMES, ICON_MARKS, ICON_TONE, iconLabel } from '../icons/catalog';
 
 export interface IconProps {
   name?: IconName;

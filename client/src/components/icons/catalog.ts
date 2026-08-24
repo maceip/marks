@@ -4,7 +4,7 @@ export type IconKind = 'chrome' | 'command';
 export const ICON_NAMES = [
   'bold', 'italic', 'strike', 'strikethrough', 'underline', 'highlight', 'code', 'heading',
   'clear', 'grow', 'shrink', 'list', 'numbered', 'task', 'quote', 'indent', 'outdent',
-  'link', 'image', 'table', 'hr', 'math', 'mermaid', 'callout', 'footnote', 'toc',
+  'link', 'image', 'table', 'hr', 'math', 'mermaid', 'callout', 'footnote', 'contents',
   'mic', 'comment', 'history', 'gauge', 'outline', 'focus', 'settings', 'sun', 'moon',
   'split', 'pencil', 'eye', 'plus', 'template', 'duplicate', 'download', 'print', 'trash',
   'undo', 'redo', 'cut', 'copy', 'paste', 'painter', 'find', 'sparkles', 'rewrite',
@@ -20,7 +20,7 @@ export const ICON_TONE: Record<IconName, IconTone> = {
   highlight: 'amber', code: 'navy', heading: 'blue', clear: 'slate', grow: 'blue', shrink: 'blue',
   list: 'navy', numbered: 'navy', task: 'green', quote: 'teal', indent: 'navy', outdent: 'navy',
   link: 'teal', image: 'teal', table: 'teal', hr: 'slate', math: 'blue', mermaid: 'teal',
-  callout: 'amber', footnote: 'navy', toc: 'navy', mic: 'green', comment: 'green', history: 'green',
+  callout: 'amber', footnote: 'navy', contents: 'navy', mic: 'green', comment: 'green', history: 'green',
   gauge: 'amber', outline: 'navy', focus: 'blue', settings: 'slate', sun: 'amber', moon: 'navy',
   split: 'blue', pencil: 'blue', eye: 'teal', plus: 'green', template: 'navy', duplicate: 'navy',
   download: 'blue', print: 'navy', trash: 'rose', undo: 'navy', redo: 'navy', cut: 'navy',
@@ -59,7 +59,7 @@ export const ICON_MARKS: Record<IconName, string> = {
   mermaid: 'M4 13c3-6 6-8 8-8s5 2 8 8c-3 6-6 8-8 8s-5-2-8-8zm8-8V3',
   callout: 'M4 5h14v12l-4 4v-4H4z',
   footnote: 'M7 4h4c2.5 0 4 1.5 4 3.5S13.5 11 11 11H7zM7 11v9',
-  toc: 'M4 6h14M4 12h14M4 18h8M20 6v12',
+  contents: 'M4 6h16M7 12h13M10 18h10',
   mic: 'M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3zM6 11a6 6 0 0 0 12 0M12 17v4',
   comment: 'M4 4h16v12H9l-5 4z',
   history: 'M4 5v5h5M5 10a8 8 0 1 1 2 7M12 7v5l3 2',
@@ -114,6 +114,19 @@ export const ICON_MARKS: Record<IconName, string> = {
 };
 
 export const icons = Object.fromEntries(ICON_NAMES.map((name) => [name, name])) as Record<IconName, IconName>;
+
+const ICON_LABELS: Partial<Record<IconName, string>> = {
+  contents: 'Table of contents',
+  hr: 'Divider',
+  mermaid: 'Diagram',
+  numbered: 'Numbered list',
+  strike: 'Strikethrough',
+  strikethrough: 'Strikethrough',
+};
+
+export function iconLabel(name: IconName): string {
+  return ICON_LABELS[name] ?? name.replace(/([A-Z])/g, ' $1').replace(/^./, (letter) => letter.toUpperCase());
+}
 
 export function isIconName(value: string | undefined): value is IconName {
   return Boolean(value && value in ICON_MARKS);

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { ICON_MARKS, ICON_NAMES, isIconName } from './catalog.ts';
+import { ICON_MARKS, ICON_NAMES, iconLabel, isIconName } from './catalog.ts';
 
 test('every named icon has a mark and is addressable without a third-party pack', () => {
   assert.equal(ICON_NAMES.length, Object.keys(ICON_MARKS).length);
@@ -10,6 +10,12 @@ test('every named icon has a mark and is addressable without a third-party pack'
     assert.match(ICON_MARKS[name], /[ML]/);
   }
   assert.equal(isIconName('feather'), false);
+  assert.equal(isIconName('toc'), false);
+});
+
+test('contents is labeled as a table of contents, not an acronym', () => {
+  assert.equal(iconLabel('contents'), 'Table of contents');
+  assert.equal(ICON_NAMES.includes('contents'), true);
 });
 
 test('icon renderer is isometric, pointer-tilted, and pressable without an animation loop', () => {

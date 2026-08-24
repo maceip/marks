@@ -151,7 +151,7 @@ const definitions: CommandDefinition[] = [
   editor('insert.callout-warning', 'Warning callout', 'insert-callout-warning', 'draw', 'Notes', 'callout', { description: 'Insert a warning callout', priority: 65 }),
   editor('insert.callout-danger', 'Danger callout', 'insert-callout-danger', 'draw', 'Notes', 'callout', { description: 'Insert a danger callout', priority: 64 }),
   editor('insert.break', 'Divider', 'insert-horizontal-rule', 'insert', 'Blocks', 'hr', { description: 'Insert a thematic break', priority: 55 }),
-  editor('insert.toc', 'Contents', 'insert-toc', 'insert', 'Blocks', 'toc', { description: 'Insert a generated table-of-contents marker', priority: 54 }),
+  editor('insert.toc', 'Contents', 'insert-toc', 'insert', 'Blocks', 'contents', { description: 'Insert a table of contents', priority: 54 }),
 
   ui('tools.draft', 'Draft tools', 'draft-tools', 'tools', 'Transforms', 'sparkles', { description: 'Open deterministic local Markdown transforms', requiresDocument: true, capability: 'edit', modes: EDIT, risk: 'write', priority: 100, presentation: 'large' }),
 
