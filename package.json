@@ -51,7 +51,7 @@
     "agent-browser": "^0.34.0",
     "playwright": "^1.62.1",
     "puppeteer-core": "^25.8.0",
-    "typescript": "^5.9.3"
+    "typescript": "^7.0.2"
   },
   "allowScripts": {
     "agent-browser@0.34.0": true,
