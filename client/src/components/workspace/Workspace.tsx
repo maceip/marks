@@ -90,22 +90,35 @@ function WorkspaceView({
     if (!root) return;
     let startX = 0;
     let startY = 0;
+    let activeId = -1;
+    let invalidated = false;
     const onDown = (event: PointerEvent) => {
+      if (suppressSwipeRef.current || (activeId !== -1 && event.pointerId !== activeId)) {
+        invalidated = true;
+        return;
+      }
+      activeId = event.pointerId;
       startX = event.clientX;
       startY = event.clientY;
     };
-    const onUp = (event: PointerEvent) => {
-      if (suppressSwipeRef.current) return;
+    const finish = (event: PointerEvent) => {
+      if (event.pointerId !== activeId) return;
+      const blocked = invalidated || suppressSwipeRef.current;
       const dx = event.clientX - startX;
       const dy = event.clientY - startY;
+      activeId = -1;
+      invalidated = false;
+      if (blocked) return;
       if (Math.abs(dx) < 72 || Math.abs(dx) < Math.abs(dy)) return;
       onModeChange(dx < 0 ? 'preview' : 'edit');
     };
     root.addEventListener('pointerdown', onDown);
-    root.addEventListener('pointerup', onUp);
+    root.addEventListener('pointerup', finish);
+    root.addEventListener('pointercancel', finish);
     return () => {
       root.removeEventListener('pointerdown', onDown);
-      root.removeEventListener('pointerup', onUp);
+      root.removeEventListener('pointerup', finish);
+      root.removeEventListener('pointercancel', finish);
     };
   }, [onModeChange, posture.shell]);
 

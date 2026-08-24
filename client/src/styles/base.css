@@ -98,7 +98,7 @@ a {
   place-items: center;
   flex: none;
 }
-.marks-icon > svg { grid-area: 1 / 1; overflow: visible; }
+.marks-icon > svg { grid-area: 1 / 1; overflow: visible; pointer-events: none; }
 .marks-icon-live .marks-icon-body {
   transform: perspective(120px) rotateX(calc(var(--icon-tilt-y) * -8deg + var(--icon-press) * 6deg)) rotateY(calc(var(--icon-tilt-x) * var(--interact-icon-tilt))) translateY(calc(var(--icon-press) * var(--interact-press-translate))) scale(calc(1 - var(--icon-press) * .05));
   transform-style: preserve-3d;

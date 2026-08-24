@@ -88,9 +88,17 @@
 /* Phone Write ghost: full-measure preview, clipped to a right-hand viewfinder. */
 :root[data-shell='phone'] .workspace.mode-edit.phone-ghost {
   position: relative;
-  touch-action: pan-y;
+  isolation: isolate;
+  touch-action: pan-y pinch-zoom;
   overscroll-behavior-x: none;
   --phone-ghost-shift: 50%;
+}
+
+:root[data-shell='phone'] .workspace.mode-edit.phone-ghost .editor-pane {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  min-width: 0;
 }
 
 :root[data-shell='phone'] .workspace.mode-edit.phone-ghost .preview-pane {
@@ -119,4 +127,14 @@
 
 :root[data-shell='phone'] .workspace.mode-edit.phone-ghost:not(.phone-ghost-dragging) .marks-preview {
   transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+:root[data-motion='reduced'][data-shell='phone'] .workspace.mode-edit.phone-ghost .marks-preview {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-shell='phone'] .workspace.mode-edit.phone-ghost .marks-preview {
+    transition: none;
+  }
 }

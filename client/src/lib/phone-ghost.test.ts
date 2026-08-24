@@ -87,4 +87,17 @@ describe('PhoneGhostGesture', () => {
     assert.equal(result.kind, 'undecided');
     assert.deepEqual(gesture.up(1), { type: 'restore', percent: 50 });
   });
+
+  it('waits for both fingers before classifying, then snaps like the surface harness', () => {
+    const gesture = new PhoneGhostGesture();
+    const width = 400;
+    assert.equal(gesture.down(1, 248, 200, 50), 'pass');
+    assert.equal(gesture.down(2, 312, 200, 50), 'capture');
+    assert.deepEqual(gesture.move(1, 48, 200, width), { kind: 'undecided' });
+    const last = gesture.move(2, 112, 200, width);
+    assert.equal(last.kind, 'pan');
+    if (last.kind === 'pan') assert.equal(last.percent, 0);
+    assert.deepEqual(gesture.up(1), { type: 'snap', shift: 'end', percent: 0 });
+    assert.deepEqual(gesture.up(2), { type: 'continue' });
+  });
 });

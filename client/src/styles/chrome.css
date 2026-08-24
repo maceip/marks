@@ -45,6 +45,7 @@
 
 .ribbon-tabs {
   position: relative;
+  z-index: 2;
   display: flex;
   align-items: end;
   gap: 2px;
@@ -82,9 +83,11 @@
 }
 
 .ribbon-deck {
+  position: relative;
+  z-index: 1;
   min-width: 0;
   min-height: 0;
-  overflow: visible;
+  overflow: hidden;
   border-top: 1px solid var(--material-border);
   background: var(--material-refraction), color-mix(in srgb, var(--material-tint) 54%, transparent);
 }
@@ -98,7 +101,8 @@
   height: 100%;
   min-width: 0;
   padding: 3px 8px 2px;
-  overflow: visible;
+  overflow-x: auto;
+  overflow-y: hidden;
   border: 0;
   background: transparent;
   scrollbar-width: none;

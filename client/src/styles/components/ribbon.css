@@ -13,7 +13,7 @@
   min-width: 0;
   min-height: 0;
 }
-.ribbon-tabs { display: flex; align-items: end; gap: 2px; min-width: 0; padding: 0 10px; }
+.ribbon-tabs { position: relative; z-index: 2; display: flex; align-items: end; gap: 2px; min-width: 0; padding: 0 10px; }
 .ribbon-tab {
   align-self: stretch; min-width: 54px; padding: 0 10px; border: 0;
   border-bottom: 2px solid transparent; background: transparent; color: var(--color-fg-muted);

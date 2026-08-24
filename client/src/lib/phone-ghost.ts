@@ -211,6 +211,11 @@ export function bindPhoneGhostControls(root: HTMLElement, bindings: PhoneGhostBi
       bindings.setDragging(true);
       root.classList.add('phone-ghost-dragging');
       cancelEditorPointer(firstPointer.target, firstPointer.id, event);
+      try {
+        root.setPointerCapture(event.pointerId);
+      } catch {
+        // Synthetic harness events cannot capture; window listeners still see bubbles.
+      }
       if (event.cancelable) event.preventDefault();
     }
   };
@@ -236,10 +241,12 @@ export function bindPhoneGhostControls(root: HTMLElement, bindings: PhoneGhostBi
       applyPercent(result.percent);
     }
     if (gesture.pointerCount === 0) {
-      bindings.onSuppressSwipe(false);
       firstPointer.id = -1;
       firstPointer.target = null;
       root.classList.remove('phone-ghost-dragging');
+      queueMicrotask(() => {
+        if (gesture.pointerCount === 0) bindings.onSuppressSwipe(false);
+      });
     }
   };
 
@@ -250,7 +257,7 @@ export function bindPhoneGhostControls(root: HTMLElement, bindings: PhoneGhostBi
   };
 
   root.addEventListener('pointerdown', onPointerDown, { capture: true });
-  window.addEventListener('pointermove', onPointerMove);
+  window.addEventListener('pointermove', onPointerMove, { passive: false });
   window.addEventListener('pointerup', onPointerUp);
   window.addEventListener('pointercancel', onPointerUp);
   root.addEventListener('touchmove', onTouchMove, { passive: false });
