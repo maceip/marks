@@ -1,7 +1,7 @@
 use crate::app::App;
 use axum::body::Body;
 use axum::extract::{Request, State};
-use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, header};
 use axum::middleware::Next;
 use axum::response::Response;
 use std::sync::Arc;
@@ -20,7 +20,6 @@ fn insert_if_absent(headers: &mut HeaderMap, name: HeaderName, value: &'static s
 pub async fn harden(State(app): State<Arc<App>>, request: Request<Body>, next: Next) -> Response {
     let path = request.uri().path().to_owned();
     let mut response = next.run(request).await;
-    let status = response.status();
     let headers = response.headers_mut();
     insert_if_absent(headers, header::X_CONTENT_TYPE_OPTIONS, "nosniff");
     insert_if_absent(headers, header::REFERRER_POLICY, "no-referrer");
@@ -65,15 +64,10 @@ pub async fn harden(State(app): State<Arc<App>>, request: Request<Body>, next: N
     {
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     } else if path.starts_with("/assets/") {
-        // Immutable caching may bind only a hashed asset that actually
-        // exists. An error under /assets/ must never enter a year-long
-        // browser cache: a poisoned entry survives even a rollback.
-        let policy = if status.is_success() || status == StatusCode::NOT_MODIFIED {
-            "public, max-age=31536000, immutable"
-        } else {
-            "no-store"
-        };
-        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(policy));
+        headers.insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=31536000, immutable"),
+        );
     } else if !path.starts_with("/a/") {
         headers.insert(
             header::CACHE_CONTROL,
