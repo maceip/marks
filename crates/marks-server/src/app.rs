@@ -288,6 +288,15 @@ pub fn router(app: Arc<App>) -> Router {
 async fn serve_static(directory: PathBuf, request: Request) -> Response {
     let navigation = is_navigation(&request);
     let method = request.method().clone();
+    tracing::info!(
+        target: "marks_server::static",
+        method = %request.method(),
+        uri = %request.uri(),
+        version = ?request.version(),
+        navigation,
+        headers = ?request.headers(),
+        "static fallback request"
+    );
     let response = match ServeDir::new(&directory).oneshot(request).await {
         Ok(response) => response.map(Body::new),
         Err(error) => {
@@ -295,6 +304,12 @@ async fn serve_static(directory: PathBuf, request: Request) -> Response {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
+    tracing::info!(
+        target: "marks_server::static",
+        status = %response.status(),
+        navigation,
+        "serve_dir result"
+    );
     if response.status() != StatusCode::NOT_FOUND || !navigation {
         return response;
     }
@@ -303,13 +318,20 @@ async fn serve_static(directory: PathBuf, request: Request) -> Response {
         .uri("/")
         .body(Body::empty())
         .expect("static shell request");
-    match ServeFile::new(directory.join("index.html"))
+    let shell_response = match ServeFile::new(directory.join("index.html"))
         .oneshot(shell)
         .await
     {
         Ok(response) => response.map(Body::new),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
-    }
+    };
+    tracing::info!(
+        target: "marks_server::static",
+        status = %shell_response.status(),
+        headers = ?shell_response.headers(),
+        "shell response"
+    );
+    shell_response
 }
 
 /// A navigation is a top-level document request: GET or HEAD, outside the

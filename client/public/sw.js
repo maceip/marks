@@ -137,3 +137,5 @@ async function networkFirst(request, fallback) {
     return (await caches.match(request)) || (await caches.match(fallback)) || Response.error();
   }
 }
+
+// bisect: force the full three-browser profile for this diagnosis branch
