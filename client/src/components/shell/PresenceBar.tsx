@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import type { Peer } from '../../collab/types';
 import { colorVar, initials } from '../../collab/user';
-import { revealPresence } from '../../collab/presence';
 
 export interface ActiveParticipant extends Peer {
   activity: 'editing' | 'active';

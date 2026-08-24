@@ -1,4 +1,3 @@
-
 /** Lossy presence protocol. Ordering is (connection instance, sequence), never wall time. */
 const PRESENCE_TAG = 5;
 const PROTOCOL_VERSION = 2;
@@ -10,7 +9,6 @@ const MAX_PRESENCE_ENTRIES = 256;
 const MAX_KEY_BYTES = 256;
 const MAX_VALUE_BYTES = 16 * 1024;
 const MAX_BOOTSTRAP_AGE_MS = 30_000;
-
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -29,7 +27,6 @@ export interface PresenceStoreApi {
   destroy(): void;
 }
 
-
 interface Entry {
   value: unknown;
   receivedAt: number;
@@ -42,7 +39,6 @@ interface DecodedEntry {
   deleted: boolean;
   age: number;
   value?: unknown;
-
 }
 interface DecodedFrame {
   instance: Uint8Array;
@@ -68,7 +64,6 @@ function instanceKey(value: Uint8Array): string {
 }
 
 class Writer {
-
   private buffer = new Uint8Array(256);
   private length = 0;
   private grow(extra: number): void {
@@ -109,15 +104,12 @@ class Writer {
   string(value: string, maximum: number): void {
     this.bytes(encoder.encode(value), maximum);
   }
-
   done(): Uint8Array {
-    if (this.bytes.length > MAX_PRESENCE_BYTES) throw new RangeError('marks: presence exceeds 1536 bytes');
-    return Uint8Array.from(this.bytes);
+    return this.buffer.slice(0, this.length);
   }
 }
 
 class Reader {
-
   private offset = 0;
   private readonly buffer: Uint8Array;
   constructor(buffer: Uint8Array) {
@@ -148,11 +140,8 @@ class Reader {
       factor *= 128;
       if (!Number.isSafeInteger(factor))
         throw new RangeError("marks: presence integer overflow");
-
     }
-    throw new RangeError('marks: invalid presence integer');
   }
-
   raw(length: number): Uint8Array {
     if (this.offset + length > this.buffer.length)
       throw new TypeError("marks: truncated presence payload");
@@ -172,11 +161,8 @@ class Reader {
   finish(): void {
     if (this.offset !== this.buffer.length)
       throw new TypeError("marks: trailing presence bytes");
-
   }
-  finish() { if (this.at !== this.bytes.length) throw new TypeError('marks: trailing presence bytes'); }
 }
-
 
 function serializableValue(value: unknown): unknown {
   const json = JSON.stringify(value ?? null);
@@ -187,8 +173,7 @@ function serializableValue(value: unknown): unknown {
   return JSON.parse(json) as unknown;
 }
 
-export function decodePresenceFrame(bytes: Uint8Array): DecodedFrame {
-
+function decodeFrame(bytes: Uint8Array): DecodedFrame {
   const reader = new Reader(bytes);
   if (reader.u8() !== PRESENCE_TAG || reader.u8() !== PROTOCOL_VERSION)
     throw new TypeError("marks: unsupported presence payload");
@@ -220,16 +205,18 @@ export function decodePresenceFrame(bytes: Uint8Array): DecodedFrame {
   }
   reader.finish();
   return { instance, instanceKey: instanceKey(instance), sequence, entries };
+}
 
+export function decodePresenceFrame(bytes: Uint8Array): ReadonlyArray<DecodedEntry> {
+  return decodeFrame(bytes).entries;
 }
 
 export class PresenceStore implements PresenceStoreApi {
   private readonly entries = new Map<string, Entry>();
   private readonly greatestSequence = new Map<string, number>();
   private readonly listeners = new Set<() => void>();
-  private readonly updates = new Set<(bytes: Uint8Array) => void>();
+  private readonly updateListeners = new Set<(bytes: Uint8Array) => void>();
   private readonly timer: ReturnType<typeof setInterval>;
-
   private instance = randomInstance();
   private sequence = 0;
   private destroyed = false;
@@ -330,7 +317,6 @@ export class PresenceStore implements PresenceStoreApi {
   delete(key: string): void {
     if (this.destroyed) return;
     const entry = this.entries.get(key);
-
     if (!entry || entry.deleted) return;
     this.entries.set(key, {
       value: undefined,
@@ -340,7 +326,6 @@ export class PresenceStore implements PresenceStoreApi {
       local: true,
     });
     this.emitLocal();
-
     this.notify();
   }
   keys(): string[] {
@@ -366,12 +351,10 @@ export class PresenceStore implements PresenceStoreApi {
   }
   apply(bytes: Uint8Array): void {
     if (this.destroyed) return;
-
-    const frame = decodePresenceFrame(bytes);
+    const frame = decodeFrame(bytes);
     const greatest = this.greatestSequence.get(frame.instanceKey) ?? 0;
     if (frame.sequence <= greatest) return;
     const now = this.now();
-
     let changed = false;
     for (const incoming of frame.entries) {
       const existing = this.entries.get(incoming.key);
@@ -424,5 +407,4 @@ export class PresenceStore implements PresenceStoreApi {
     this.listeners.clear();
     this.updateListeners.clear();
   }
-
 }

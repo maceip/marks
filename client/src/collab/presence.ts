@@ -1,116 +1,89 @@
-/** Remote CodeMirror selections and their transient presentation state. */
+/**
+ * Remote carets and selections, drawn from Marks' transient presence store.
+ *
+ * The store is the transport (`${siteId}-cm-user` for identity,
+ * `${siteId}-cm-sel` for the selection, exactly the keys the integration
+ * contract names). This extension publishes the local side and renders the
+ * remote side as CodeMirror decorations.
+ *
+ * Presence entries expire after 30 s, so everything here is re-published on a
+ * 15 s heartbeat — the y-protocols cadence the contract recommends — rather
+ * than only when the caret moves.
+ */
+
 import { StateEffect, StateField, type Extension } from '@codemirror/state';
-import { Decoration, type DecorationSet, EditorView, ViewPlugin, WidgetType } from '@codemirror/view';
-import type { PresenceStoreApi } from './presence-store';
-
-import type { PresenceActivityController } from './presence-activity-controller';
-
+import {
+  Decoration,
+  type DecorationSet,
+  EditorView,
+  ViewPlugin,
+  WidgetType,
+} from '@codemirror/view';
+import type { PresenceStoreApi } from './presence-store.ts';
+import type { PresenceActivityController } from './presence-activity-controller.ts';
 import {
   encodeSelectionPresence,
   type SelectionDirection,
-} from './protocol';
+} from './protocol.ts';
 import {
   captureSelectionPresence,
   remoteSelections,
   type PresenceDocument,
-} from './presence-position';
-import type { EsbtDocument } from './wasm/esbt-document';
-
-
+} from './presence-position.ts';
+import type { EsbtDocument } from './wasm/esbt-document.ts';
 
 export const HEARTBEAT_MS = 15_000;
-export const LABEL_VISIBLE_MS = 1_800;
-export const PRESENCE_REVEAL_EVENT = 'marks-presence-reveal';
 
 const setPresenceDecorations = StateEffect.define<DecorationSet>();
+
 const presenceField = StateField.define<DecorationSet>({
   create: () => Decoration.none,
   update(value, tr) {
     let next = value.map(tr.changes);
-    for (const effect of tr.effects) if (effect.is(setPresenceDecorations)) next = effect.value;
+    for (const effect of tr.effects) {
+      if (effect.is(setPresenceDecorations)) next = effect.value;
+    }
     return next;
   },
   provide: (field) => EditorView.decorations.from(field),
 });
 
-export interface CaretPresentation {
-  position: number;
-  visibleUntil: number;
-  lastMovedAt: number;
+export const LABEL_VISIBLE_MS = 1_800;
+export interface CaretPresentation { position: number; lastMovedAt: number; visibleUntil: number }
+export function updateCaretPresentation(previous: CaretPresentation | undefined, position: number, now: number): CaretPresentation {
+  return { position, lastMovedAt: !previous || previous.position !== position ? now : previous.lastMovedAt, visibleUntil: !previous || previous.position !== position ? now + LABEL_VISIBLE_MS : previous.visibleUntil };
 }
-
-export function labelGeometry(
-  caretLeft: number,
-  caretTop: number,
-  labelWidth: number,
-  bounds: { left: number; right: number; top: number },
-): { placement: 'above' | 'below'; shiftX: number } {
-  return {
-    placement: caretTop - bounds.top < 28 ? 'below' : 'above',
-    shiftX: Math.min(0, bounds.right - caretLeft - labelWidth - 2),
-  };
-}
-
-/** Pure transition used by the view plugin and its timer regression tests. */
-export function updateCaretPresentation(
-  previous: CaretPresentation | undefined,
-  position: number,
-  now: number,
-): CaretPresentation {
-  const moved = previous === undefined || previous.position !== position;
-  // A one-character stream is typing. It gets one sliding deadline rather than
-  // one timer per update; a larger jump or line/section change follows the same path.
-  const resumed = moved && (!previous || now - previous.lastMovedAt > LABEL_VISIBLE_MS);
-  return {
-    position,
-    lastMovedAt: moved ? now : (previous?.lastMovedAt ?? now),
-    visibleUntil: moved || resumed ? now + LABEL_VISIBLE_MS : (previous?.visibleUntil ?? 0),
-  };
+export function labelGeometry(x: number, y: number, width: number, bounds: { left: number; right: number; top: number }): { placement: 'above' | 'below'; shiftX: number } {
+  return { placement: y - 24 < bounds.top ? 'below' : 'above', shiftX: Math.min(0, bounds.right - x - width - 2) };
 }
 
 class CaretWidget extends WidgetType {
-  readonly site: string;
-  readonly name: string;
-  readonly colorClassName: string;
-  readonly active: boolean;
-  readonly stack: number;
-
-  constructor(
-
-    private readonly name: string,
-    private readonly colorClassName: string,
-    private readonly direction: SelectionDirection,
-
-  ) {
-    super();
-    this.site = site;
-    this.name = name;
-    this.colorClassName = colorClassName;
-    this.active = active;
-    this.stack = stack;
+  private readonly name: string;
+  private readonly colorClassName: string;
+  private readonly direction: SelectionDirection;
+  constructor(name: string, colorClassName: string, direction: SelectionDirection) {
+    super(); this.name = name; this.colorClassName = colorClassName; this.direction = direction;
   }
 
   override eq(other: CaretWidget): boolean {
-
     return other.name === this.name && other.colorClassName === this.colorClassName
       && other.direction === this.direction;
-
   }
 
   toDOM(): HTMLElement {
     const caret = document.createElement('span');
     caret.className = `esbt-caret ${this.colorClassName}`;
     caret.dataset.name = this.name;
-
     caret.dataset.direction = this.direction;
     caret.setAttribute('role', 'mark');
     caret.setAttribute('aria-label', `${this.name}'s caret, ${this.direction} selection`);
-
     return caret;
   }
-  override ignoreEvent(): boolean { return true; }
-}
 
+  override ignoreEvent(): boolean {
+    return true;
+  }
+}
 
 function buildDecorations(
   states: Record<string, unknown>,
@@ -134,11 +107,9 @@ function buildDecorations(
         side: peer.direction === 'forward' ? -1 : 1,
       }).range(peer.direction === 'forward' ? peer.to : peer.from),
     );
-
   }
   return Decoration.set(ranges, true);
 }
-
 
 /**
  * Publishes this editor's selection into the ephemeral store and renders
@@ -152,32 +123,19 @@ export function esbtPresence(
   presence: PresenceStoreApi,
   activity: PresenceActivityController,
 ): Extension {
-
   const selectionKeyFor = () => `${getSiteId()}-cm-sel`;
+
   const plugin = ViewPlugin.define((view) => {
-    let destroyed = false, scheduled = false, expiryTimer: number | null = null, frame: number | null = null;
-    const states = new Map<string, CaretPresentation>();
-    const followed = new Set<string>();
-
-
+    let destroyed = false;
+    let scheduled = false;
     // Epoch-based start prevents a reloaded sender from looking older than
     // its final pre-reload heartbeat while remaining a safe JSON integer.
     let sequence = Date.now() * 1_000;
     const lastSequences = new Map<string, number>();
 
-
     const publishSelection = (): void => {
-
       if (!activity.active || !view.hasFocus) return;
-
-
-      if (publishTimer !== null) clearTimeout(publishTimer);
-      if (publishFrame !== null) cancelAnimationFrame(publishFrame);
-      publishTimer = null;
-      publishFrame = null;
-
       const main = view.state.selection.main;
-
       const document = getDocument();
       if (!document) return;
       sequence += 1;
@@ -185,12 +143,10 @@ export function esbtPresence(
         selectionKeyFor(),
         encodeSelectionPresence(captureSelectionPresence(document, main.anchor, main.head, sequence)),
       );
-
-
     };
-    const refresh = () => {
-      if (destroyed) return;
 
+    const refresh = (): void => {
+      if (destroyed) return;
       const decorations = buildDecorations(
         presence.getAllStates(),
         getSiteId(),
@@ -198,58 +154,44 @@ export function esbtPresence(
         lastSequences,
       );
       view.dispatch({ effects: setPresenceDecorations.of(decorations) });
-
-    };
-    const schedule = () => { if (scheduled || destroyed) return; scheduled = true; queueMicrotask(() => { scheduled = false; refresh(); }); };
-    const reveal = (event: Event) => {
-      const detail = (event as CustomEvent<{ siteId?: string; follow?: boolean }>).detail;
-      if (!detail?.siteId || !states.has(detail.siteId)) return;
-      if (detail.follow) followed.add(detail.siteId);
-      else states.get(detail.siteId)!.visibleUntil = Date.now() + LABEL_VISIBLE_MS;
-      schedule();
     };
 
+    // Store notifications can fire synchronously inside an editor update
+    // (publishing the selection notifies subscribers); CodeMirror forbids
+    // dispatching from there, so redraws are coalesced onto a microtask.
+    const scheduleRefresh = (): void => {
+      if (scheduled || destroyed) return;
+      scheduled = true;
+      queueMicrotask(() => {
+        scheduled = false;
+        refresh();
+      });
+    };
 
     const unsubscribe = presence.subscribe(scheduleRefresh);
     const unsubscribeReplica = getDocument()?.onReplicaChange(scheduleRefresh) ?? (() => {});
     const heartbeat = window.setInterval(publishSelection, HEARTBEAT_MS);
 
-    if (view.hasFocus) {
-      activity.recordActivity();
-      publishSelection();
-    }
+    publishSelection();
     scheduleRefresh();
 
     return {
       update(update) {
         if (update.selectionSet || update.docChanged || update.focusChanged) {
-
-          scheduleSelection(dragging);
-
+          publishSelection();
         }
       },
       destroy() {
         destroyed = true;
         clearInterval(heartbeat);
-        if (publishTimer !== null) clearTimeout(publishTimer);
-        if (publishFrame !== null) cancelAnimationFrame(publishFrame);
-        view.dom.removeEventListener('pointerdown', pointerDown);
-        view.dom.ownerDocument.removeEventListener('pointerup', pointerUp);
         unsubscribe();
         unsubscribeReplica();
         presence.delete(selectionKeyFor());
       },
-
     };
-    document.addEventListener(PRESENCE_REVEAL_EVENT, reveal);
-    view.dom.addEventListener('pointerover', hover);
-    const unsubscribe = presence.subscribe(schedule); const heartbeat = window.setInterval(publish, HEARTBEAT_MS);
-    publish(); schedule();
-    return { update(update) { if (update.selectionSet || update.docChanged || update.focusChanged) publish(); }, destroy() {
-      destroyed = true; clearInterval(heartbeat); if (expiryTimer !== null) clearTimeout(expiryTimer);
-      if (frame !== null) cancelAnimationFrame(frame); document.removeEventListener(PRESENCE_REVEAL_EVENT, reveal);
-      view.dom.removeEventListener('pointerover', hover); unsubscribe(); presence.delete(selectionKeyFor());
-    } };
   });
+
   return [presenceField, plugin];
 }
+
+export const revealPresence = (id: string): void => { window.dispatchEvent(new CustomEvent('marks-presence-reveal', { detail: id })); };

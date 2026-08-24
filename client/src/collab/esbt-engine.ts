@@ -1403,6 +1403,7 @@ export class EsbtEngine implements CollabSession {
       const site = key.replace(/-cm-user$/, '');
       const rawSelection = states[`${site}-cm-sel`] as Record<string, unknown> | undefined;
       peers.push({
+        id: connectionId,
         participantId: typeof user.participantId === 'string' ? user.participantId : connectionId,
         connectionId,
 
@@ -1426,6 +1427,7 @@ export class EsbtEngine implements CollabSession {
 
     if (!peers.some((peer) => peer.self)) {
       peers.unshift({
+        id: `self-${this.presenceSiteId()}`,
         participantId: `self-${this.presenceSiteId()}`,
         connectionId: `self-${this.presenceSiteId()}`,
         name: this.user.name,

@@ -22,6 +22,7 @@ export interface DocumentCapabilities {
 export type ConnectionStatus = 'connecting' | 'saving' | 'connected' | 'offline';
 
 export interface Peer {
+  id: string;
   /** Stable person identity; shared by that person's simultaneous tabs. */
   participantId: string;
   /** One admitted socket, used to keep simultaneous cursors distinct. */
