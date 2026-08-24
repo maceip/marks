@@ -80,10 +80,10 @@ jobs:
       - name: Rust workspace lint
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      - name: Setup Node.js v22
+      - name: Setup Node.js v24
         uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version: '24'
           cache: 'npm'
 
       - name: Install dependencies
@@ -142,10 +142,10 @@ jobs:
         with:
           components: rustfmt
 
-      - name: Setup Node.js v22
+      - name: Setup Node.js v24
         uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version: '24'
           cache: 'npm'
 
       - name: Install dependencies
