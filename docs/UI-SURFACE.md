@@ -214,7 +214,7 @@ not raw artifact size:
 | Welcome bounce JavaScript | <= 5 KB |
 | Welcome bounce HTML + CSS + JS | <= 25 KB |
 | App-shell JavaScript before a document opens | <= 100 KB |
-| App-shell CSS | <= 12 KB |
+| App-shell CSS | <= 10 KB |
 | Work done by the HUD with no live session | 0 intervals |
 
 Additional rules:

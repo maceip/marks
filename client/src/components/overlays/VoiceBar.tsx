@@ -1,4 +1,3 @@
-import '../../styles/components.css';
 import type { VoiceStatus } from '../../browser';
 import { Button } from '../ui/Button';
 

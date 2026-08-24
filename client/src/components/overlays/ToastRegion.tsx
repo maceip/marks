@@ -1,4 +1,3 @@
-import '../../styles/components.css';
 import { Icon, icons } from '../ui/Icon';
 import { MarksMark } from '../ui/MarksMark';
 import { IconButton } from '../ui/IconButton';
