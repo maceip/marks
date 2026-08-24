@@ -9,7 +9,7 @@ StartLimitIntervalSec=0
 Type=simple
 User=devuser
 Group=devuser
-WorkingDirectory=/opt/marks
+WorkingDirectory=/opt/marks/current
 Environment=MARKS_LISTEN=127.0.0.1:5192
 Environment=MARKS_DB=/var/lib/marks/marks.db3
 Environment=MARKS_ASSET_DIR=/var/lib/marks/assets
@@ -17,9 +17,9 @@ Environment=MARKS_MAX_BUNDLE_EXPORTS=4
 Environment=MARKS_BACKUP_DIR=/var/lib/marks/backups
 Environment=MARKS_BACKUP_RETAIN=14
 Environment=MARKS_ORIGIN=https://marks.secure.build
-Environment=MARKS_STATIC_DIR=/opt/marks/static
+Environment=MARKS_STATIC_DIR=/opt/marks/current/static
 Environment=RUST_LOG=info
-ExecStart=/opt/marks/marks-server
+ExecStart=/opt/marks/current/marks-server
 Restart=on-failure
 RestartSec=2s
 RestartSteps=5

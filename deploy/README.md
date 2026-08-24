@@ -6,7 +6,8 @@ runs the one Rust process.
 
 | Piece | Location |
 | --- | --- |
-| Binary + static UI | `/opt/marks` |
+| Active binary + static UI | `/opt/marks/current` → `/opt/marks/releases/<git-sha>` |
+| Previous release | `/opt/marks/previous` → retained release directory |
 | SQLite | `/var/lib/marks/marks.db3` |
 | Content-addressed assets | `/var/lib/marks/assets` |
 | Unit | `/etc/systemd/system/marks.service` |
@@ -15,26 +16,75 @@ runs the one Rust process.
 | Listen | `127.0.0.1:5192` |
 | Origin | `https://marks.secure.build` |
 
-## Build
+## Deploy
 
 ```bash
-cargo build -p marks-server --release --locked
-VITE_MARKS_DATA_MODE=service npm run build
+./scripts/deploy-secure-build.sh deploy
+# or: npm run deploy:secure-build
 ```
 
-## Install (already applied on the host)
+Deployment only accepts a clean commit that exactly matches the freshly
+fetched `origin/main` (override the branch with `MARKS_DEPLOY_BRANCH`). It
+runs the pinned Rust format/test/Clippy gate, all browser/product/Markdown/
+benchmark/Wasm/auth and harness unit suites, the service-mode production
+client build and UI budgets, then a live Chromium workflow with a native
+second ESBT peer. There is no `--skip-tests` or dirty-release option.
+
+The exact commit is sent with `git archive`; ignored files and the local
+working tree are not uploaded. Because the development checkout is macOS
+arm64 and production is Linux x86_64, the host builds both Rust binaries in
+the digest-pinned `rust:1.88.0-bookworm` container. The host uses Node 22 and
+`npm ci` to rebuild the service-mode static UI from the same archive.
+
+Before production changes, the candidate binary and its static directory are
+started on an isolated loopback port with a temporary database. `/readyz` and
+`/v1/artifact` must prove database writes, the exact Git revision, clean Rust
+and Wasm sources, the build-bound static artifact, the engine/profile match,
+and `releaseReady: true`.
+
+Activation stops `marks.service`, atomically replaces the single `current`
+symlink, installs that release's unit, and starts the service. Both the local
+and public readiness/artifact receipts must match throughout the observation
+window, and systemd must not restart. Any failure restores the prior symlink
+and its unit automatically. The first run preserves the existing direct
+`/opt/marks/marks-server` + `static/` installation as a `legacy-*` release, so
+the migration itself has a rollback target.
+
+The host prerequisites currently verified by the script are Linux x86_64,
+Docker, Node/npm 22 or newer, rsync, flock, curl, Python 3, sha256sum,
+`systemd-analyze`, noninteractive sudo, and SSH access as
+`devuser@secure.build`.
+
+## Fast rollback
+
+Rollback never rebuilds and does not rerun the deployment gate. It verifies
+the retained release's checksums, stops the service, switches the local
+symlink and unit, restarts, then checks the public service:
 
 ```bash
-sudo install -d -o devuser -g devuser /opt/marks /opt/marks/static /var/lib/marks
-sudo install -o devuser -g devuser -m 0755 target/release/marks-server /opt/marks/marks-server
-sudo install -o devuser -g devuser -m 0755 target/release/marks-admin /opt/marks/marks-admin
-sudo rsync -a --delete client/dist/ /opt/marks/static/
-sudo install -m 0644 deploy/systemd/marks.service /etc/systemd/system/marks.service
-# append deploy/caddy/marks.Caddyfile to /etc/caddy/Caddyfile if missing
-sudo systemctl daemon-reload
-sudo systemctl enable --now marks.service
-sudo caddy reload --config /etc/caddy/Caddyfile
+./scripts/deploy-secure-build.sh status
+./scripts/deploy-secure-build.sh releases
+./scripts/deploy-secure-build.sh rollback
+
+# Select an older retained release explicitly:
+./scripts/deploy-secure-build.sh rollback <release-id>
+
+# Emergency host-side form (installed by the first successful deployment):
+ssh devuser@secure.build 'bash /opt/marks/deploy/remote-release.sh rollback'
 ```
+
+A successful rollback swaps `current` and `previous`, so running the default
+rollback again undoes it. Releases are not automatically deleted; this keeps
+older known-good binaries available until an operator deliberately prunes
+them.
+
+This is a code-and-static rollback, not a database downgrade. Schema changes
+must remain backward compatible across the rollback window. If an incident
+requires reverting persisted data, stop the service and use the separately
+verified backup/restore procedure below; do not point an older binary at a
+known-incompatible schema.
+
+## Service policy
 
 The unit restarts on failure with systemd backoff (`RestartSec=2s`,
 `RestartSteps=5`, `RestartMaxDelaySec=60s`). Caddy drops scanner paths,
@@ -99,9 +149,13 @@ on the same disk is not disaster recovery.
 Verify or restore with the separately installed admin binary:
 
 ```bash
-/opt/marks/marks-admin verify /var/lib/marks/backups/backup-00000000000000000000
+/opt/marks/current/marks-admin verify \
+  /var/lib/marks/backups/backup-00000000000000000000
 sudo systemctl stop marks.service
-/opt/marks/marks-admin restore /path/to/backup /var/lib/marks-restored/marks.db3 /var/lib/marks-restored/assets
+/opt/marks/current/marks-admin restore \
+  /path/to/backup \
+  /var/lib/marks-restored/marks.db3 \
+  /var/lib/marks-restored/assets
 ```
 
 Restore refuses to overwrite either destination. Point a stopped/test service
@@ -118,8 +172,8 @@ MARKS_BUILD_REVISION=<40-character-git-sha> MARKS_SOURCE_DIRTY=0 \
 npm run verify:esbt
 ```
 
-The process refuses startup unless `/opt/marks/static` contains the exact
-manifest bound into the binary and `esbt.wasm` hashes to that manifest.
+The process refuses startup unless `/opt/marks/current/static` contains the
+exact manifest bound into the binary and `esbt.wasm` hashes to that manifest.
 `GET /v1/artifact` must report `staticArtifactVerified: true`,
 `profileCoherent: true`, and `releaseReady: true`; its response and every server
 response expose matching `X-Marks-Release` and `X-Marks-Engine` values.
