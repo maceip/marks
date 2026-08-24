@@ -7,6 +7,7 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 HOST=marks-deploy@secure.build
+PUBLIC_ORIGIN=https://marks.secure.build
 DEPLOY_BRANCH=${MARKS_DEPLOY_BRANCH:-main}
 IDENTITY_FILE=${MARKS_DEPLOY_IDENTITY_FILE:-}
 STAGED_REVISION=""
@@ -33,6 +34,7 @@ Usage:
   scripts/deploy-secure-build.sh deploy-verified <revision>
   scripts/deploy-secure-build.sh rollback [release-id]
   scripts/deploy-secure-build.sh status
+  scripts/deploy-secure-build.sh verify
   scripts/deploy-secure-build.sh releases
 
 Commands:
@@ -48,6 +50,10 @@ Commands:
                A successful rollback swaps `current` and `previous`, so the
                command can be used again to undo the rollback.
   status       Show the active/previous release and live service receipt.
+  verify       Fail unless the restricted status receipt, the public health
+               and readiness endpoints, and the public artifact receipt all
+               agree on one coherent, release-ready deployment. status is
+               output; verify is the gate.
   releases     List retained versioned releases on the host.
 
 Environment:
@@ -107,9 +113,41 @@ restricted_command() {
   "${SSH[@]}" "$HOST" "$request"
 }
 
+# The probe receipt carries the SHA-256 of every installed boundary program
+# and the root-owned service template. Deployment fails closed unless they
+# equal the checked-in deploy/host sources, so a green repository test can
+# never certify a different installed implementation.
 check_remote_protocol() {
-  echo "==> checking restricted deployment protocol"
-  restricted_command probe
+  require_command node
+  echo "==> checking restricted deployment protocol identity"
+  local probe_receipt
+  probe_receipt=$(restricted_command probe)
+  printf '%s\n' "$probe_receipt"
+  PROBE_RECEIPT="$probe_receipt" MARKS_ROOT_DIR="$ROOT" node -e '
+    const { createHash } = require("node:crypto");
+    const { readFileSync } = require("node:fs");
+    const { join } = require("node:path");
+    const fail = (message) => { console.error(`probe: ${message}`); process.exit(1); };
+    let probe;
+    try { probe = JSON.parse(process.env.PROBE_RECEIPT); } catch { fail("receipt is not JSON"); }
+    if (probe.protocol !== "marks-deploy.v1") fail(`unsupported protocol: ${probe.protocol}`);
+    const digest = (relative) =>
+      createHash("sha256").update(readFileSync(join(process.env.MARKS_ROOT_DIR, relative))).digest("hex");
+    const sources = {
+      dispatcher: "deploy/host/marks-deploy-ssh",
+      uploader: "deploy/host/marks-upload",
+      releaseRoot: "deploy/host/marks-release-root",
+      serviceTemplate: "deploy/host/marks.service.template",
+    };
+    for (const [helper, relative] of Object.entries(sources)) {
+      const installed = probe.helpers ? probe.helpers[helper] : undefined;
+      const declared = digest(relative);
+      if (installed !== declared) {
+        fail(`installed ${helper} ${installed} is not the checked-in ${relative} ${declared}`);
+      }
+    }
+  ' || die "installed deployment boundary differs from the checked-in deploy/host sources"
+  echo "==> installed helpers match the checked-in deployment boundary"
 }
 
 assert_clean_commit() {
@@ -176,13 +214,17 @@ run_local_gate() {
   (cd "$ROOT" && npm run typecheck)
   (cd "$ROOT" && npm run verify:esbt)
 
-  echo "==> browser, product, renderer, Wasm, auth, benchmark, and harness tests"
+  echo "==> browser, product, renderer, Wasm, auth, design-system, benchmark, and harness tests"
   (cd "$ROOT" && npm run test:browser)
   (cd "$ROOT" && npm run test:surface)
   (cd "$ROOT" && npm run test:markdown)
   (cd "$ROOT" && npm run test:bench)
   (cd "$ROOT" && npm run test:component)
   (cd "$ROOT" && npm run test:auth)
+  (cd "$ROOT" && npm run test:components)
+  (cd "$ROOT" && npm run test:materials)
+  (cd "$ROOT" && npm run test:tokens)
+  (cd "$ROOT" && npm run check:motion)
   (cd "$ROOT" && npm run test:harness)
 
   echo "==> production service-mode UI and release-receipt build"
@@ -200,6 +242,10 @@ run_local_gate() {
   else
     (cd "$ROOT" && npx playwright install chromium)
   fi
+
+  echo "==> design-system browser catalog against the production build"
+  (cd "$ROOT" && node scripts/check-design-system.mjs)
+
   (
     cd "$ROOT"
     export MARKS_REQUIRE_RELEASE=1
@@ -271,6 +317,61 @@ deploy_verified() {
   ship_revision "$revision"
 }
 
+# status prints a receipt and succeeds even when production is unhealthy.
+# verify is the gate: it re-reads the restricted status and requires the
+# public origin to serve a healthy, ready, coherent, release-ready build of
+# exactly the active release.
+verify_production() {
+  require_command curl
+  require_command node
+
+  echo "==> restricted status receipt"
+  local status_receipt current
+  status_receipt=$(restricted_command status)
+  printf '%s\n' "$status_receipt"
+  current=$(awk '$1 == "current:" { print $2 }' <<< "$status_receipt")
+  [[ "$current" =~ ^[0-9a-f]{40}$ || "$current" == legacy-* ]] \
+    || die "restricted status did not report the current release"
+
+  echo "==> public health, readiness, and artifact receipt on $PUBLIC_ORIGIN"
+  local health ready artifact
+  health=$(curl -fsS --max-time 15 "$PUBLIC_ORIGIN/healthz") \
+    || die "public health endpoint failed"
+  ready=$(curl -fsS --max-time 15 "$PUBLIC_ORIGIN/readyz") \
+    || die "public readiness endpoint failed"
+  artifact=$(curl -fsS --max-time 15 "$PUBLIC_ORIGIN/v1/artifact") \
+    || die "public artifact receipt failed"
+
+  CURRENT_RELEASE="$current" HEALTH="$health" READY="$ready" ARTIFACT="$artifact" node -e '
+    const fail = (message) => { console.error(`verify: ${message}`); process.exit(1); };
+    const parse = (label, text) => {
+      try { return JSON.parse(text); } catch { fail(`${label} is not JSON`); }
+    };
+    const health = parse("healthz", process.env.HEALTH);
+    if (health.ok !== true) fail("public health is not ok");
+    const ready = parse("readyz", process.env.READY);
+    if (ready.ok !== true) fail("public readiness is not ok");
+    const artifact = parse("artifact", process.env.ARTIFACT);
+    for (const field of [
+      "staticArtifactVerified",
+      "profileCoherent",
+      "engineCoherent",
+      "releaseReady",
+    ]) {
+      if (artifact[field] !== true) fail(`artifact ${field} is ${artifact[field]}`);
+    }
+    if (artifact.serverSourceDirty !== false || artifact.componentSourceDirty !== false) {
+      fail("the live release was built from a dirty tree");
+    }
+    const current = process.env.CURRENT_RELEASE;
+    if (!current.startsWith("legacy-") && artifact.buildRevision !== current) {
+      fail(`public build revision ${artifact.buildRevision} is not the active release ${current}`);
+    }
+  ' || die "public verification failed"
+
+  echo "==> production verified: release $current is live, coherent, and ready"
+}
+
 main() {
   local command=${1:-}
   case "$command" in
@@ -293,6 +394,10 @@ main() {
     status)
       [[ $# -eq 1 ]] || die "status accepts no arguments"
       restricted_command status
+      ;;
+    verify)
+      [[ $# -eq 1 ]] || die "verify accepts no arguments"
+      verify_production
       ;;
     releases)
       [[ $# -eq 1 ]] || die "releases accepts no arguments"

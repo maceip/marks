@@ -22,6 +22,13 @@ on:
 permissions:
   contents: read
 
+# Superseded pull-request runs are cancelled; push and dispatch runs are
+# keyed by the exact revision and never cancel each other. Production
+# serialization stays in production.yml with cancel-in-progress: false.
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -43,12 +50,12 @@ jobs:
       reasons: ${{ steps.classify.outputs.reasons }}
     steps:
       - name: Checkout complete history for impact analysis
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Setup Node.js v24
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
 
@@ -118,7 +125,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Reject retired duplicate implementations
         run: |
@@ -134,7 +141,7 @@ jobs:
 
       - name: Restore successive Rust build state
         if: needs.impact.outputs.run_rust == 'true'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -144,8 +151,9 @@ jobs:
 
       - name: Install pinned Rust toolchain
         if: needs.impact.outputs.run_rust == 'true'
-        uses: dtolnay/rust-toolchain@1.88.0
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # immutable action revision
         with:
+          toolchain: 1.88.0
           components: clippy, rustfmt
           targets: wasm32-unknown-unknown
 
@@ -184,7 +192,7 @@ jobs:
 
       - name: Setup Node.js v24
         if: needs.impact.outputs.run_web == 'true' || needs.impact.outputs.run_harness == 'true'
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
           cache: 'npm'
@@ -197,7 +205,8 @@ jobs:
         if: needs.impact.outputs.run_harness == 'true'
         run: |
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-          bash -n scripts/deploy-secure-build.sh deploy/remote-release.sh scripts/run-service-ci.sh
+          bash -n scripts/deploy-secure-build.sh deploy/remote-release.sh scripts/run-service-ci.sh deploy/host/marks-deploy-ssh
+          python3 -m py_compile deploy/host/marks-upload deploy/host/marks-release-root
 
       - name: Typecheck
         if: needs.impact.outputs.run_web == 'true'
@@ -231,6 +240,22 @@ jobs:
         if: needs.impact.outputs.run_web == 'true'
         run: npm run test:auth
 
+      - name: Component and icon unit tests
+        if: needs.impact.outputs.run_web == 'true'
+        run: npm run test:components
+
+      - name: Surface material unit tests
+        if: needs.impact.outputs.run_web == 'true'
+        run: npm run test:materials
+
+      - name: Design token contract tests
+        if: needs.impact.outputs.run_web == 'true'
+        run: npm run test:tokens
+
+      - name: Motion token contract
+        if: needs.impact.outputs.run_web == 'true'
+        run: npm run check:motion
+
       - name: Harness helper unit tests
         if: needs.impact.outputs.run_harness == 'true'
         run: npm run test:harness
@@ -247,6 +272,17 @@ jobs:
         if: needs.impact.outputs.run_rust == 'true'
         run: cargo test -p marks-server --test room_collab --locked
 
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: aggregate-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            artifacts/
+            /tmp/marks-ci-*
+
   service-collab:
     needs: impact
     if: needs.impact.outputs.run_service == 'true'
@@ -259,10 +295,10 @@ jobs:
         browser: ${{ fromJSON(needs.impact.outputs.browser_matrix) }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Restore successive Rust build state
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -271,12 +307,13 @@ jobs:
           key: ${{ runner.os }}-rust-1.88.0-${{ hashFiles('Cargo.lock') }}-service-current
 
       - name: Install pinned Rust toolchain
-        uses: dtolnay/rust-toolchain@1.88.0
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # immutable action revision
         with:
+          toolchain: 1.88.0
           components: rustfmt
 
       - name: Setup Node.js v24
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
           cache: 'npm'
@@ -296,8 +333,26 @@ jobs:
       - name: Production UI budgets (service-mode)
         run: npm run check:ui-budgets
 
-      - name: Install Playwright browser
-        run: npx playwright install --with-deps ${{ matrix.browser }}
+      # One earlier Firefox install stalled for around ten minutes; bound
+      # each attempt and allow exactly one controlled retry.
+      - name: Install Playwright browser with a bounded retry
+        shell: bash
+        timeout-minutes: 12
+        env:
+          BROWSER: ${{ matrix.browser }}
+        run: |
+          set -euo pipefail
+          attempt() { timeout 300 npx playwright install --with-deps "$BROWSER"; }
+          attempt || {
+            echo "playwright install stalled or failed once; retrying" >&2
+            attempt
+          }
+
+      # The catalog proof is browser-based and reuses the production build
+      # produced above instead of rebuilding through test:design-system.
+      - name: Design-system browser catalog against the production build
+        if: matrix.browser == 'chromium'
+        run: node scripts/check-design-system.mjs
 
       - name: Live service UI and browser-independent native peer proof
         shell: bash
@@ -317,6 +372,17 @@ jobs:
             args+=(--skip-collab)
           fi
           bash scripts/run-service-ci.sh "${args[@]}"
+
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: service-failure-${{ matrix.browser }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            artifacts/
+            /tmp/marks-ci-*
 
   gate:
     name: CI gate

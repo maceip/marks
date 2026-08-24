@@ -1,0 +1,577 @@
+#!/usr/bin/python3
+"""Root-owned, fixed-policy Marks release builder and activator."""
+
+import datetime
+import fcntl
+import hashlib
+import json
+import os
+import pwd
+import re
+import shutil
+import socket
+import stat
+import subprocess
+import sys
+import time
+import urllib.request
+from pathlib import Path
+
+MARKS_ROOT = Path("/opt/marks")
+RELEASES = MARKS_ROOT / "releases"
+CURRENT = MARKS_ROOT / "current"
+PREVIOUS = MARKS_ROOT / "previous"
+LOCK = MARKS_ROOT / ".deploy.lock"
+INCOMING = Path("/var/lib/marks-deploy/incoming")
+CACHE = Path("/var/lib/marks-deploy/cache")
+CANARY = Path("/var/lib/marks-deploy/canary")
+VERIFIED_GIT = Path("/var/cache/marks-deploy/git")
+DISPATCHER = Path("/usr/local/libexec/marks-deploy-ssh")
+UPLOADER = Path("/usr/local/libexec/marks-upload")
+RELEASE_ROOT = Path("/usr/local/sbin/marks-release-root")
+TEMPLATE = Path("/etc/marks/marks.service.template")
+UNIT = Path("/etc/systemd/system/marks.service")
+SERVICE = "marks.service"
+REMOTE = "https://github.com/maceip/marks.git"
+PUBLIC_ORIGIN = "https://marks.secure.build"
+LOCAL_ORIGIN = "http://127.0.0.1:5192"
+BUILDER_IMAGE = "rust:1.88.0-bookworm@sha256:af306cfa71d987911a781c37b59d7d67d934f49684058f96cf72079c3626bfe0"
+SHA_RE = re.compile(r"[0-9a-f]{40}")
+RELEASE_RE = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def fail(message: str) -> None:
+    raise RuntimeError(message)
+
+
+def run(argv, *, check=True, capture=False, env=None):
+    result = subprocess.run(
+        [str(item) for item in argv],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE if capture else None,
+        stderr=subprocess.STDOUT if capture else None,
+        env=env,
+    )
+    if check and result.returncode:
+        detail = f": {result.stdout.strip()}" if capture and result.stdout else ""
+        fail(f"command failed ({result.returncode}): {argv[0]}{detail}")
+    return result
+
+
+def sha(value: str) -> str:
+    if not SHA_RE.fullmatch(value):
+        fail("revision must be exactly 40 lowercase hexadecimal characters")
+    return value
+
+
+def release_id(value: str) -> str:
+    if not RELEASE_RE.fullmatch(value):
+        fail("release id contains unsupported characters")
+    return value
+
+
+def deploy_identity():
+    account = pwd.getpwnam("marks-deploy")
+    return account.pw_uid, account.pw_gid
+
+
+def fixed_environment():
+    return {
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "HOME": "/root",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+
+
+def ensure_layout() -> None:
+    uid, gid = deploy_identity()
+    for path, mode, owner in (
+        (RELEASES, 0o755, (0, 0)),
+        (MARKS_ROOT / "deploy", 0o755, (0, 0)),
+        (INCOMING, 0o700, (uid, gid)),
+        (CACHE, 0o700, (uid, gid)),
+        (CACHE / "npm", 0o700, (uid, gid)),
+        (CACHE / "cargo", 0o700, (uid, gid)),
+        (CACHE / "target", 0o700, (uid, gid)),
+        (CACHE / "home", 0o700, (uid, gid)),
+        (CANARY, 0o700, (uid, gid)),
+        (VERIFIED_GIT, 0o700, (0, 0)),
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+        os.chown(path, *owner)
+        os.chmod(path, mode)
+
+
+def under_releases(path: Path) -> Path:
+    resolved = path.resolve(strict=True)
+    root = RELEASES.resolve(strict=True)
+    if resolved.parent != root:
+        fail(f"release escapes fixed release root: {resolved}")
+    return resolved
+
+
+def link_target(link: Path):
+    if not link.is_symlink():
+        return None
+    try:
+        return under_releases(link)
+    except (FileNotFoundError, RuntimeError):
+        return None
+
+
+def hash_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def validate_release(path: Path) -> Path:
+    release = under_releases(path)
+    required = ("marks-server", "marks-admin", "marks.service", "release.json", "SHA256SUMS", "static/index.html")
+    for relative in required:
+        candidate = release / relative
+        if not candidate.is_file() or candidate.is_symlink():
+            fail(f"release is missing a regular {relative}")
+    for root, dirs, files in os.walk(release, followlinks=False):
+        for name in dirs + files:
+            item = Path(root) / name
+            info = item.lstat()
+            if stat.S_ISLNK(info.st_mode) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+                fail(f"release contains an unsupported filesystem object: {item}")
+            if info.st_uid != 0 or info.st_gid != 0 or info.st_mode & 0o022:
+                fail(f"release is not root-owned and sealed: {item}")
+    if TEMPLATE.read_bytes() != (release / "marks.service").read_bytes():
+        fail("release unit differs from the root-owned Marks unit template")
+    receipt = json.loads((release / "release.json").read_text(encoding="utf-8"))
+    if receipt.get("schema") != "marks-release.v1" or not SHA_RE.fullmatch(str(receipt.get("revision", ""))):
+        fail("release receipt is invalid")
+    declared = set()
+    for line in (release / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
+        digest, marker, relative = line.partition("  ")
+        if marker != "  " or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            fail("release checksum manifest is malformed")
+        candidate = Path(relative)
+        if candidate.is_absolute() or ".." in candidate.parts or relative == "SHA256SUMS":
+            fail("release checksum path is unsafe")
+        target = release / candidate
+        if not target.is_file() or target.is_symlink() or hash_file(target) != digest:
+            fail(f"release checksum failed: {relative}")
+        declared.add(relative)
+    actual = {
+        str(item.relative_to(release))
+        for item in release.rglob("*")
+        if item.is_file() and not item.is_symlink() and item.name != "SHA256SUMS"
+    }
+    if declared != actual:
+        fail("release checksum manifest does not cover exactly every release file")
+    return release
+
+
+def atomic_link(target: Path, link: Path) -> None:
+    target = under_releases(target)
+    temporary = link.with_name(f".{link.name}.new.{os.getpid()}")
+    try:
+        temporary.symlink_to(target)
+        os.replace(temporary, link)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def url_json(url: str, timeout=10):
+    with urllib.request.urlopen(url, timeout=timeout) as response:
+        if response.status != 200:
+            fail(f"{url} returned HTTP {response.status}")
+        return json.load(response)
+
+
+def wait_ready(origin: str, revision: str, *, legacy=False, timeout=60) -> None:
+    deadline = time.monotonic() + timeout
+    last = "not ready"
+    while time.monotonic() < deadline:
+        try:
+            health = url_json(f"{origin}/healthz", 5)
+            if health.get("ok") is not True:
+                fail("health response lacks ok=true")
+            if legacy:
+                return
+            ready = url_json(f"{origin}/readyz", 5)
+            artifact = url_json(f"{origin}/v1/artifact", 5)
+            required = {
+                "buildRevision": revision,
+                "serverSourceDirty": False,
+                "componentSourceDirty": False,
+                "staticArtifactVerified": True,
+                "profileCoherent": True,
+                "engineCoherent": True,
+                "releaseReady": True,
+            }
+            if ready.get("ok") is not True or any(artifact.get(key) != value for key, value in required.items()):
+                fail("readiness or artifact receipt does not match the release")
+            return
+        except Exception as error:
+            last = str(error)
+            time.sleep(1)
+    fail(f"timed out waiting for {origin}: {last}")
+
+
+def sandboxed_npm(source: Path, step: str, *arguments: str, extra_env=None) -> None:
+    uid, gid = deploy_identity()
+    unit = f"marks-build-{step}-{source.name[:12]}-{os.getpid()}"
+    command = [
+        "/usr/bin/systemd-run", "--quiet", "--wait", "--pipe", "--collect", f"--unit={unit}",
+        f"--uid={uid}", f"--gid={gid}", "--property=Type=exec",
+        f"--property=WorkingDirectory={source}", "--property=ProtectSystem=strict",
+        "--property=ProtectHome=yes", "--property=PrivateTmp=yes", "--property=PrivateDevices=yes",
+        "--property=NoNewPrivileges=yes", "--property=RestrictSUIDSGID=yes",
+        "--property=CapabilityBoundingSet=", "--property=RestrictRealtime=yes",
+        "--property=LockPersonality=yes", "--property=ProtectKernelTunables=yes",
+        "--property=ProtectKernelModules=yes", "--property=ProtectControlGroups=yes",
+        "--property=InaccessiblePaths=/var/lib/marks /etc/marks /home /root /run/docker.sock",
+        f"--property=ReadWritePaths={source} {CACHE}", "--setenv=HOME=/var/lib/marks-deploy/cache/home",
+        "--setenv=npm_config_cache=/var/lib/marks-deploy/cache/npm", "/usr/bin/npm", *arguments,
+    ]
+    for key, value in (extra_env or {}).items():
+        command.insert(-len(arguments) - 1, f"--setenv={key}={value}")
+    run(command)
+
+
+def verify_source(source: Path, revision: str) -> None:
+    if source.resolve().parent != INCOMING.resolve() or source.name != revision:
+        fail("source is outside the fixed incoming root")
+    for relative in ("Cargo.lock", "package-lock.json", "package.json", "deploy/systemd/marks.service"):
+        candidate = source / relative
+        if not candidate.is_file() or candidate.is_symlink():
+            fail(f"uploaded source lacks {relative}")
+    if (source / ".git").exists() or (source / ".git").is_symlink():
+        fail("uploaded source must not contain Git metadata")
+    env = fixed_environment()
+    git_dir = VERIFIED_GIT / f"{revision}.git"
+    if git_dir.exists():
+        shutil.rmtree(git_dir)
+    run(["/usr/bin/git", "init", "--quiet", "--bare", git_dir], env=env)
+    git = ["/usr/bin/git", f"--git-dir={git_dir}", f"--work-tree={source}"]
+    run([*git, "remote", "add", "origin", REMOTE], env=env)
+    run([*git, "fetch", "--quiet", "--depth=1", "origin", "refs/heads/main"], env=env)
+    fetched = run([*git, "rev-parse", "FETCH_HEAD"], capture=True, env=env).stdout.strip()
+    if fetched != revision:
+        fail(f"requested revision is not current remote main ({fetched})")
+    run([*git, "reset", "--quiet", "--mixed", revision], env=env)
+    dirty = run([*git, "status", "--porcelain=v1", "--untracked-files=all"], capture=True, env=env).stdout
+    if dirty:
+        fail("uploaded archive does not exactly match the requested Git revision")
+
+
+def docker_build(source: Path, revision: str) -> None:
+    uid, gid = deploy_identity()
+    run([
+        "/usr/bin/docker", "run", "--rm", "--read-only", "--cap-drop=ALL",
+        "--security-opt=no-new-privileges", "--pids-limit=1024", "--memory=4g", "--cpus=6",
+        f"--user={uid}:{gid}", "--env=HOME=/tmp", "--env=CARGO_HOME=/cargo",
+        "--env=CARGO_TARGET_DIR=/target", "--env=RUSTUP_TOOLCHAIN=1.88.0",
+        f"--env=MARKS_BUILD_REVISION={revision}", "--env=MARKS_SOURCE_DIRTY=0",
+        f"--volume={source}:/work:ro", f"--volume={CACHE / 'cargo'}:/cargo",
+        f"--volume={CACHE / 'target'}:/target", "--tmpfs=/tmp:rw,noexec,nosuid,size=1g",
+        "--workdir=/work", BUILDER_IMAGE, "/bin/bash", "-ceu",
+        "case \"$(rustc --version)\" in 'rustc 1.88.0 '*) ;; *) exit 1;; esac; cargo build -p marks-server --release --locked --bin marks-server --bin marks-admin",
+    ])
+
+
+def copy_regular_tree(source: Path, destination: Path) -> None:
+    for item in source.rglob("*"):
+        relative = item.relative_to(source)
+        target = destination / relative
+        info = item.lstat()
+        if stat.S_ISLNK(info.st_mode) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+            fail(f"build output contains unsupported object: {relative}")
+        if item.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(item, target)
+            os.chmod(target, 0o644)
+
+
+def seal_release(source: Path, revision: str) -> Path:
+    release = RELEASES / revision
+    if release.exists():
+        return validate_release(release)
+    stage = RELEASES / f".{revision}.staging.{os.getpid()}"
+    if stage.exists():
+        shutil.rmtree(stage)
+    stage.mkdir(mode=0o755)
+    try:
+        shutil.copyfile(CACHE / "target/release/marks-server", stage / "marks-server")
+        shutil.copyfile(CACHE / "target/release/marks-admin", stage / "marks-admin")
+        os.chmod(stage / "marks-server", 0o755)
+        os.chmod(stage / "marks-admin", 0o755)
+        (stage / "static").mkdir(mode=0o755)
+        copy_regular_tree(source / "client/dist", stage / "static")
+        shutil.copyfile(TEMPLATE, stage / "marks.service")
+        os.chmod(stage / "marks.service", 0o644)
+        receipt = {
+            "schema": "marks-release.v1", "revision": revision,
+            "createdAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "builderImage": BUILDER_IMAGE,
+            "nodeVersion": run(["/usr/bin/node", "--version"], capture=True).stdout.strip(),
+            "npmVersion": run(["/usr/bin/npm", "--version"], capture=True).stdout.strip(),
+        }
+        (stage / "release.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        files = sorted(item for item in stage.rglob("*") if item.is_file() and not item.is_symlink())
+        manifest = "".join(f"{hash_file(item)}  {item.relative_to(stage)}\n" for item in files)
+        (stage / "SHA256SUMS").write_text(manifest, encoding="utf-8")
+        for item in stage.rglob("*"):
+            os.chown(item, 0, 0)
+            if item.is_dir():
+                os.chmod(item, 0o755)
+            elif item.name in ("marks-server", "marks-admin"):
+                os.chmod(item, 0o755)
+            else:
+                os.chmod(item, 0o644)
+        os.chown(stage, 0, 0)
+        os.rename(stage, release)
+    except Exception:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
+    return validate_release(release)
+
+
+def canary(release: Path, revision: str) -> None:
+    uid, gid = deploy_identity()
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    state = CANARY / f"{revision}-{os.getpid()}"
+    state.mkdir(mode=0o700)
+    os.chown(state, uid, gid)
+    unit = f"marks-canary-{revision[:12]}-{os.getpid()}"
+    try:
+        run([
+            "/usr/bin/systemd-run", "--quiet", "--collect", f"--unit={unit}", f"--uid={uid}", f"--gid={gid}",
+            "--property=Type=exec", "--property=ProtectSystem=strict", "--property=ProtectHome=yes",
+            "--property=PrivateTmp=yes", "--property=PrivateDevices=yes", "--property=NoNewPrivileges=yes",
+            "--property=CapabilityBoundingSet=", "--property=InaccessiblePaths=/var/lib/marks /etc/marks /home /root /run/docker.sock",
+            f"--property=ReadWritePaths={state}", f"--setenv=MARKS_LISTEN=127.0.0.1:{port}",
+            f"--setenv=MARKS_ORIGIN=http://127.0.0.1:{port}", f"--setenv=MARKS_DB={state / 'marks.db3'}",
+            f"--setenv=MARKS_ASSET_DIR={state / 'assets'}", f"--setenv=MARKS_BACKUP_DIR={state / 'backups'}",
+            f"--setenv=MARKS_STATIC_DIR={release / 'static'}", "--setenv=RUST_LOG=info", release / "marks-server",
+        ])
+        wait_ready(f"http://127.0.0.1:{port}", revision)
+    finally:
+        run(["/usr/bin/systemctl", "stop", unit], check=False)
+        run(["/usr/bin/systemctl", "reset-failed", unit], check=False)
+        shutil.rmtree(state, ignore_errors=True)
+
+
+def snapshot_legacy() -> Path:
+    current = link_target(CURRENT)
+    if current:
+        return validate_release(current)
+    binary = MARKS_ROOT / "marks-server"
+    static_root = MARKS_ROOT / "static"
+    if not binary.is_file() or not (static_root / "index.html").is_file():
+        fail("no current release or legacy direct installation exists")
+    identifier = datetime.datetime.now(datetime.timezone.utc).strftime("legacy-%Y%m%dT%H%M%SZ")
+    release = RELEASES / identifier
+    stage = RELEASES / f".{identifier}.staging.{os.getpid()}"
+    stage.mkdir(mode=0o755)
+    shutil.copyfile(binary, stage / "marks-server")
+    os.chmod(stage / "marks-server", 0o755)
+    # The current legacy binary has no admin companion; use the server binary only
+    # for receipt completeness and never invoke it as marks-admin.
+    shutil.copyfile(binary, stage / "marks-admin")
+    os.chmod(stage / "marks-admin", 0o755)
+    (stage / "static").mkdir()
+    copy_regular_tree(static_root, stage / "static")
+    shutil.copyfile(TEMPLATE, stage / "marks.service")
+    receipt = {"schema": "marks-release.v1", "revision": "0" * 40, "legacy": True,
+               "createdAt": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+    (stage / "release.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+    files = sorted(item for item in stage.rglob("*") if item.is_file())
+    (stage / "SHA256SUMS").write_text("".join(f"{hash_file(item)}  {item.relative_to(stage)}\n" for item in files))
+    for item in stage.rglob("*"):
+        os.chown(item, 0, 0)
+        os.chmod(item, 0o755 if item.is_dir() or item.name in ("marks-server", "marks-admin") else 0o644)
+    os.chown(stage, 0, 0)
+    os.rename(stage, release)
+    atomic_link(release, CURRENT)
+    return validate_release(release)
+
+
+def service_state():
+    output = run(["/usr/bin/systemctl", "show", SERVICE, "-p", "ActiveState", "-p", "SubState", "-p", "MainPID", "-p", "NRestarts"], capture=True).stdout
+    return output.strip()
+
+
+def install_stable_unit() -> None:
+    shutil.copyfile(TEMPLATE, UNIT)
+    os.chown(UNIT, 0, 0)
+    os.chmod(UNIT, 0o644)
+    run(["/usr/bin/systemd-analyze", "verify", UNIT])
+    run(["/usr/bin/systemctl", "daemon-reload"])
+
+
+def activate(target: Path, *, observe: bool) -> None:
+    target = validate_release(target)
+    old = link_target(CURRENT)
+    if old == target:
+        receipt = json.loads((target / "release.json").read_text())
+        wait_ready(PUBLIC_ORIGIN, receipt["revision"], legacy=bool(receipt.get("legacy")))
+        return
+    run(["/usr/bin/systemctl", "stop", SERVICE])
+    try:
+        atomic_link(target, CURRENT)
+        install_stable_unit()
+        run(["/usr/bin/systemctl", "start", SERVICE])
+        receipt = json.loads((target / "release.json").read_text())
+        wait_ready(LOCAL_ORIGIN, receipt["revision"], legacy=bool(receipt.get("legacy")))
+        wait_ready(PUBLIC_ORIGIN, receipt["revision"], legacy=bool(receipt.get("legacy")))
+        if observe:
+            baseline = run(["/usr/bin/systemctl", "show", SERVICE, "-p", "NRestarts", "--value"], capture=True).stdout.strip()
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                now = run(["/usr/bin/systemctl", "show", SERVICE, "-p", "NRestarts", "--value"], capture=True).stdout.strip()
+                if now != baseline or run(["/usr/bin/systemctl", "is-active", SERVICE], check=False).returncode:
+                    fail("marks.service restarted or became inactive during observation")
+                time.sleep(2)
+    except Exception:
+        run(["/usr/bin/journalctl", "-u", SERVICE, "-n", "100", "--no-pager"], check=False)
+        run(["/usr/bin/systemctl", "stop", SERVICE], check=False)
+        if old:
+            atomic_link(old, CURRENT)
+            install_stable_unit()
+            run(["/usr/bin/systemctl", "start", SERVICE])
+            old_receipt = json.loads((old / "release.json").read_text())
+            wait_ready(LOCAL_ORIGIN, old_receipt["revision"], legacy=bool(old_receipt.get("legacy")))
+        raise
+    if old and old != target:
+        atomic_link(old, PREVIOUS)
+
+
+def build_deploy(revision: str) -> None:
+    ensure_layout()
+    source = INCOMING / revision
+    if not source.is_dir() or source.is_symlink():
+        fail("no completed upload exists for this revision")
+    verify_source(source, revision)
+    # A repository unit change must not pass CI and deploy while production
+    # silently keeps the older root-owned template. Require exact equality;
+    # re-provision the template first, then deploy the matching revision.
+    if (source / "deploy/systemd/marks.service").read_bytes() != TEMPLATE.read_bytes():
+        fail("uploaded deploy/systemd/marks.service differs from the root-owned service template")
+    sandboxed_npm(source, "ci", "ci")
+    sandboxed_npm(source, "verify", "run", "verify:esbt")
+    sandboxed_npm(source, "web", "run", "build", extra_env={"VITE_MARKS_DATA_MODE": "service"})
+    sandboxed_npm(source, "budget", "run", "check:ui-budgets")
+    git_dir = VERIFIED_GIT / f"{revision}.git"
+    dirty = run(["/usr/bin/git", f"--git-dir={git_dir}", f"--work-tree={source}", "status", "--porcelain=v1", "--untracked-files=no"], capture=True, env=fixed_environment()).stdout
+    if dirty:
+        fail("build modified tracked source files")
+    docker_build(source, revision)
+    release = seal_release(source, revision)
+    canary(release, revision)
+    snapshot_legacy()
+    activate(release, observe=True)
+    shutil.rmtree(source)
+    shutil.rmtree(git_dir, ignore_errors=True)
+
+
+def rollback(requested=None) -> None:
+    ensure_layout()
+    target = RELEASES / release_id(requested) if requested else link_target(PREVIOUS)
+    if target is None:
+        fail("no previous release exists")
+    activate(target, observe=False)
+
+
+def status_command() -> None:
+    current = link_target(CURRENT)
+    previous = link_target(PREVIOUS)
+    if current:
+        label = current.name
+    elif (MARKS_ROOT / "marks-server").is_file():
+        label = "legacy-direct (not yet rollback-managed)"
+    else:
+        label = ""
+    print(f"current:  {label}")
+    print(f"previous: {previous.name if previous else ''}")
+    print(service_state())
+    if current and (current / "release.json").is_file():
+        print((current / "release.json").read_text().strip())
+
+
+def releases_command() -> None:
+    current = link_target(CURRENT)
+    previous = link_target(PREVIOUS)
+    if not RELEASES.is_dir():
+        return
+    for item in sorted(RELEASES.iterdir()):
+        if not item.is_dir() or item.name.startswith("."):
+            continue
+        markers = []
+        if current == item.resolve(): markers.append("current")
+        if previous == item.resolve(): markers.append("previous")
+        print(item.name + ((" " + " ".join(markers)) if markers else ""))
+
+
+def probe() -> None:
+    commands = ("docker", "npm", "node", "git", "curl", "python3", "sha256sum", "systemd-run")
+    value = {
+        "protocol": "marks-deploy.v1", "host": socket.gethostname(), "architecture": os.uname().machine,
+        "commands": {name: bool(shutil.which(name)) for name in commands},
+        "service": service_state(), "incomingLimitBytes": 512 * 1024 * 1024,
+        "expandedLimitBytes": 1024 * 1024 * 1024, "fileLimit": 50_000,
+        # The deployment client refuses to proceed when these identities
+        # differ from the checked-in deploy/host sources, so a green
+        # repository test can never silently certify a different installed
+        # implementation.
+        "helpers": {
+            "dispatcher": hash_file(DISPATCHER),
+            "uploader": hash_file(UPLOADER),
+            "releaseRoot": hash_file(RELEASE_ROOT),
+            "serviceTemplate": hash_file(TEMPLATE),
+        },
+        "operations": ["probe", "upload", "cleanup", "deploy", "rollback", "status", "releases"],
+    }
+    print(json.dumps(value, sort_keys=True))
+
+
+def main() -> None:
+    if os.geteuid() != 0:
+        fail("root helper must run as root")
+    if len(sys.argv) < 2:
+        fail("missing operation")
+    operation = sys.argv[1]
+    args = sys.argv[2:]
+    allowed = {"probe", "status", "releases", "deploy", "rollback"}
+    if operation not in allowed:
+        fail("unsupported root operation")
+    ensure_layout()
+    if operation in ("probe", "status", "releases"):
+        if args: fail("read-only operation accepts no arguments")
+        {"probe": probe, "status": status_command, "releases": releases_command}[operation]()
+        return
+    LOCK.touch(mode=0o600, exist_ok=True)
+    with LOCK.open("r+") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            fail("another Marks deployment or rollback holds the release lock")
+        if operation == "deploy":
+            if len(args) != 1: fail("deploy requires one revision")
+            build_deploy(sha(args[0]))
+        else:
+            if len(args) > 1: fail("rollback accepts at most one release id")
+            rollback(args[0] if args else None)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        print(f"marks-release-root: {error}", file=sys.stderr)
+        raise SystemExit(1)

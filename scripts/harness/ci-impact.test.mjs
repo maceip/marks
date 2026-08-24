@@ -184,16 +184,71 @@ test('local harness implementation runs infrastructure contracts without deploym
   assert.equal(result.runHarness, true);
 });
 
-test('test changes force full verification but not a runtime deployment', () => {
-  for (const path of [
-    'client/src/markdown/render.test.ts',
-    'crates/marks-server/tests/room_collab.rs',
+test('a changed test runs the subsystem it verifies, never a deployment', () => {
+  const markdown = classifyPaths(['client/src/markdown/render.test.ts']);
+  assert.equal(markdown.profile, 'web-unit');
+  assert.equal(markdown.runtimeChanged, false);
+  assert.equal(markdown.runWeb, true);
+  assert.equal(markdown.runService, false);
+
+  const server = classifyPaths(['crates/marks-server/tests/room_collab.rs']);
+  assert.equal(server.profile, 'server-chromium');
+  assert.equal(server.runtimeChanged, false);
+  assert.equal(server.runRust, true);
+  assert.equal(server.runService, true);
+  assert.deepEqual(server.browsers, ['chromium']);
+
+  const designSystem = classifyPaths([
     'scripts/token-contract.test.mjs',
+    'client/src/components/ui/Button.test.ts',
+    'client/src/surface/materials.test.ts',
+  ]);
+  assert.equal(designSystem.profile, 'web-unit');
+  assert.equal(designSystem.runtimeChanged, false);
+  assert.equal(designSystem.runService, false);
+
+  const harness = classifyPaths(['scripts/harness/session.test.mjs']);
+  assert.equal(harness.profile, 'infra');
+  assert.equal(harness.runtimeChanged, false);
+  assert.equal(harness.runHarness, true);
+});
+
+test('editor, collaboration, auth, and protocol test changes stay full', () => {
+  for (const path of [
+    'client/src/editor/Editor.test.ts',
+    'client/src/collab/session.test.ts',
+    'client/src/auth/session.test.ts',
+    'client/src/browser/clipboard.test.ts',
   ]) {
     const result = classifyPaths([path]);
     assert.equal(result.profile, 'full', path);
     assert.equal(result.runtimeChanged, false, path);
+    assert.deepEqual(result.browsers, ['chromium', 'firefox', 'webkit'], path);
   }
+});
+
+test('markdown outside explicit documentation roots keeps runtime coverage', () => {
+  const fixture = classifyPaths(['fixtures/large-document.md']);
+  assert.equal(fixture.profile, 'full');
+  assert.equal(fixture.runtimeChanged, false);
+
+  const publicAsset = classifyPaths(['client/public/help.md']);
+  assert.equal(publicAsset.profile, 'full');
+  assert.equal(publicAsset.runtimeChanged, true);
+});
+
+test('the design-system proofs run their own lanes without full escalation', () => {
+  const catalog = classifyPaths(['scripts/check-design-system.mjs']);
+  assert.equal(catalog.profile, 'web-chromium');
+  assert.equal(catalog.runtimeChanged, false);
+  assert.equal(catalog.runWeb, true);
+  assert.equal(catalog.runService, true);
+  assert.deepEqual(catalog.browsers, ['chromium']);
+
+  const motion = classifyPaths(['scripts/check-motion-tokens.mjs']);
+  assert.equal(motion.profile, 'web-unit');
+  assert.equal(motion.runtimeChanged, false);
+  assert.equal(motion.runService, false);
 });
 
 test('type declarations are checked but do not replace production artifacts', () => {

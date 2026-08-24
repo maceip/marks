@@ -1,0 +1,42 @@
+#!/usr/bin/bash
+set -euo pipefail
+umask 077
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+original=${SSH_ORIGINAL_COMMAND-}
+if [[ -z "$original" || ! "$original" =~ ^[A-Za-z0-9._\ -]+$ ]]; then
+  echo "marks-deploy: empty or unsafe command rejected" >&2
+  exit 2
+fi
+
+read -r -a argv <<< "$original"
+command=${argv[0]-}
+argc=${#argv[@]}
+sha='^[0-9a-f]{40}$'
+release='^[A-Za-z0-9._-]+$'
+
+case "$command" in
+  probe|status|releases)
+    [[ $argc -eq 1 ]] || { echo "marks-deploy: extra arguments rejected" >&2; exit 2; }
+    exec /usr/bin/sudo -n /usr/local/sbin/marks-release-root "$command"
+    ;;
+  upload|cleanup)
+    [[ $argc -eq 2 && ${argv[1]} =~ $sha ]] || { echo "marks-deploy: invalid revision" >&2; exit 2; }
+    exec /usr/local/libexec/marks-upload "$command" "${argv[1]}"
+    ;;
+  deploy)
+    [[ $argc -eq 2 && ${argv[1]} =~ $sha ]] || { echo "marks-deploy: invalid revision" >&2; exit 2; }
+    exec /usr/bin/sudo -n /usr/local/sbin/marks-release-root deploy "${argv[1]}"
+    ;;
+  rollback)
+    if [[ $argc -eq 1 ]]; then
+      exec /usr/bin/sudo -n /usr/local/sbin/marks-release-root rollback
+    fi
+    [[ $argc -eq 2 && ${argv[1]} =~ $release ]] || { echo "marks-deploy: invalid release id" >&2; exit 2; }
+    exec /usr/bin/sudo -n /usr/local/sbin/marks-release-root rollback "${argv[1]}"
+    ;;
+  *)
+    echo "marks-deploy: command rejected" >&2
+    exit 2
+    ;;
+esac

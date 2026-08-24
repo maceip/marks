@@ -22,8 +22,10 @@ marks.secure.build {
 		max_size 12MiB
 	}
 
-	@assets path /assets/*
-	header @assets Cache-Control "public, max-age=31536000, immutable"
+	# Cache policy for /assets/* belongs to marks-server (headers.rs), which
+	# sends the immutable policy only when the hashed asset actually exists.
+	# Repeating it here duplicated the header and, worse, would stamp a 404
+	# as immutable — poisoning browser caches beyond the reach of rollback.
 
 	@flood `{http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > 12582912`
 	handle @flood {
@@ -38,6 +40,12 @@ marks.secure.build {
 	reverse_proxy 127.0.0.1:5192 {
 		flush_interval -1
 		header_up X-Real-IP {remote_host}
+		# Release activation and rollback stop the old process before the
+		# new one listens (~1s). Retry refused connections briefly instead
+		# of answering an immediate 502. Established WebSockets still drop;
+		# the client reconnect/resync path remains authoritative.
+		lb_try_duration 3s
+		lb_try_interval 250ms
 		transport http {
 			read_timeout 0
 			write_timeout 0

@@ -78,6 +78,43 @@ function isTestOnly(path) {
   );
 }
 
+// A changed test inherits the subsystem it verifies. Editor, collaboration/
+// ESBT, auth/protocol, service-worker, and CSS/input proofs keep the full
+// three-browser suite; server proofs run the Rust plus Chromium lane; pure
+// Node proofs run their aggregate lane; anything unrecognized stays full.
+function classifyTestPath(path) {
+  if (
+    startsWithAny(path, [
+      'client/public/',
+      'client/src/auth/',
+      'client/src/browser/',
+      'client/src/collab/',
+      'client/src/editor/',
+      'client/src/styles/',
+      'client/src/workers/',
+    ]) ||
+    /\.(?:css|scss)$/u.test(path)
+  ) {
+    return { profile: 'full', runtime: false, reason: 'cross-browser-test-self-check' };
+  }
+  if (startsWithAny(path, ['crates/'])) {
+    return { profile: 'server-chromium', runtime: false, reason: 'server-test-self-check' };
+  }
+  if (startsWithAny(path, ['scripts/harness/'])) {
+    return { profile: 'infra', runtime: false, reason: 'harness-test-self-check' };
+  }
+  if (
+    startsWithAny(path, ['client/src/components/', 'client/src/surface/']) ||
+    path === 'scripts/token-contract.test.mjs'
+  ) {
+    return { profile: 'web-unit', runtime: false, reason: 'design-system-test-self-check' };
+  }
+  if (startsWithAny(path, ['client/src/'])) {
+    return { profile: 'web-unit', runtime: false, reason: 'unit-test-self-check' };
+  }
+  return { profile: 'full', runtime: false, reason: 'test-self-check' };
+}
+
 function classifyPath(path) {
   if (
     typeof path !== 'string' ||
@@ -121,11 +158,11 @@ function classifyPath(path) {
     return { profile: 'infra', runtime: false, reason: 'deployment-infrastructure' };
   }
 
-  if (
-    path === 'README.md' ||
-    path.endsWith('.md') ||
-    startsWithAny(path, ['docs/'])
-  ) {
+  // Documentation is only the explicit documentation roots. Markdown
+  // elsewhere — an application fixture, a public asset — participates in
+  // whatever its directory is, so a content change cannot silently skip
+  // runtime testing by carrying a .md suffix.
+  if (/^README[^/]*$/u.test(path) || startsWithAny(path, ['docs/'])) {
     return { profile: 'docs', runtime: false, reason: 'documentation' };
   }
 
@@ -141,10 +178,11 @@ function classifyPath(path) {
     return { profile: 'web-unit', runtime: false, reason: 'type-declaration' };
   }
 
-  // Tests are conservative by design: changing a proof forces the full suite,
-  // but does not cause a production deployment when no runtime file changed.
+  // Tests are conservative but owned: a changed proof runs the subsystem it
+  // verifies instead of always escalating to the three-browser matrix. No
+  // test change causes a production deployment.
   if (isTestOnly(path)) {
-    return { profile: 'full', runtime: false, reason: 'test-self-check' };
+    return classifyTestPath(path);
   }
 
   if (startsWithAny(path, ['scripts/harness/'])) {
@@ -183,6 +221,16 @@ function classifyPath(path) {
     /\.(?:css|scss)$/u.test(path)
   ) {
     return { profile: 'full', runtime: true, reason: 'cross-browser-or-protocol-runtime' };
+  }
+
+  // The design-system catalog proof is browser-based but Chromium-only, and
+  // the motion contract is a pure Node check; neither needs the complete
+  // three-browser escalation on its own.
+  if (path === 'scripts/check-design-system.mjs') {
+    return { profile: 'web-chromium', runtime: false, reason: 'design-system-proof' };
+  }
+  if (path === 'scripts/check-motion-tokens.mjs') {
+    return { profile: 'web-unit', runtime: false, reason: 'design-system-proof' };
   }
 
   if (

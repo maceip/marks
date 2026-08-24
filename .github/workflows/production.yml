@@ -53,10 +53,13 @@ jobs:
 
     steps:
       - name: Check out the trusted production revision
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
-          fetch-depth: 0
+          # status, releases, and rollback never read Git history, so they
+          # take a depth-one checkout; deployment keeps complete history for
+          # the deployed-to-head impact comparison.
+          fetch-depth: ${{ (github.event_name == 'workflow_dispatch' && inputs.operation != 'deploy') && 1 || 0 }}
 
       - name: Resolve and validate the production request
         id: request
@@ -109,7 +112,7 @@ jobs:
 
       - name: Setup Node.js v24
         if: steps.request.outputs.operation == 'deploy'
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
 
@@ -224,8 +227,9 @@ jobs:
           github.event_name == 'workflow_dispatch' &&
           steps.request.outputs.operation == 'deploy' &&
           steps.impact.outputs.should_deploy == 'true'
-        uses: dtolnay/rust-toolchain@1.88.0
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # immutable action revision
         with:
+          toolchain: 1.88.0
           components: clippy, rustfmt
 
       - name: Deploy the exact successful CI revision without a duplicate local gate
@@ -276,13 +280,17 @@ jobs:
         if: steps.request.outputs.operation == 'releases'
         run: bash scripts/deploy-secure-build.sh releases
 
+      # `status` is output; `verify` is a gate. It fails unless the
+      # restricted status receipt, the public health and readiness
+      # endpoints, and the public artifact receipt all agree on one
+      # coherent, release-ready deployment.
       - name: Verify production after a state change
         if: >-
           success() &&
           ((steps.request.outputs.operation == 'deploy' &&
             steps.impact.outputs.should_deploy == 'true') ||
            steps.request.outputs.operation == 'rollback')
-        run: bash scripts/deploy-secure-build.sh status
+        run: bash scripts/deploy-secure-build.sh verify
 
       - name: Record production receipt
         if: success()

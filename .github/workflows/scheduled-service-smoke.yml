@@ -5,7 +5,11 @@ name: Scheduled service smoke and performance
 
 on:
   schedule:
+    # Daily release-shape smoke and performance budgets.
     - cron: '17 8 * * *'
+    # Weekly Firefox and WebKit full service proof, so incremental-classifier
+    # mistakes or browser drift cannot accumulate indefinitely.
+    - cron: '41 9 * * 1'
   workflow_dispatch:
   push:
     branches: [main]
@@ -32,14 +36,15 @@ env:
 
 jobs:
   release-smoke-and-performance:
+    if: github.event_name != 'schedule' || github.event.schedule == '17 8 * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Restore successive release build state
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -48,10 +53,12 @@ jobs:
           key: ${{ runner.os }}-rust-1.88.0-${{ hashFiles('Cargo.lock') }}-release-current
 
       - name: Install pinned Rust toolchain
-        uses: dtolnay/rust-toolchain@1.88.0
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # immutable action revision
+        with:
+          toolchain: 1.88.0
 
       - name: Setup Node.js v24
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
           cache: 'npm'
@@ -72,7 +79,15 @@ jobs:
         run: npm run check:ui-budgets
 
       - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          attempt() { timeout 300 npx playwright install --with-deps chromium; }
+          attempt || {
+            echo "playwright install stalled or failed once; retrying" >&2
+            attempt
+          }
 
       - name: Prove service admission, durability, offline recovery, and a native second peer
         run: bash scripts/run-service-ci.sh --bin target/release/marks-server --static-dir client/dist --browser chromium
@@ -137,3 +152,91 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           exit "$measure_status"
+
+  # Required CI runs Firefox and WebKit only when the incremental classifier
+  # decides a change needs them. Once a week the live service proof runs on
+  # both engines regardless, so a classification mistake or upstream browser
+  # drift is caught within days instead of accumulating.
+  weekly-browser-safety-net:
+    if: github.event_name != 'schedule' || github.event.schedule == '41 9 * * 1'
+    name: weekly ${{ matrix.browser }} service proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [firefox, webkit]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Restore successive Rust build state
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-rust-1.88.0-${{ hashFiles('Cargo.lock') }}-service-current
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # immutable action revision
+        with:
+          toolchain: 1.88.0
+          components: rustfmt
+
+      - name: Setup Node.js v24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build marks-server
+        run: cargo build -p marks-server --locked
+        env:
+          MARKS_BUILD_REVISION: ${{ github.sha }}
+          MARKS_SOURCE_DIRTY: '0'
+
+      - name: Production service-mode client
+        run: VITE_MARKS_DATA_MODE=service VITE_MARKS_TEST_SERVICE_WORKER=1 npm run build
+
+      - name: Install Playwright browser with a bounded retry
+        shell: bash
+        timeout-minutes: 12
+        env:
+          BROWSER: ${{ matrix.browser }}
+        run: |
+          set -euo pipefail
+          attempt() { timeout 300 npx playwright install --with-deps "$BROWSER"; }
+          attempt || {
+            echo "playwright install stalled or failed once; retrying" >&2
+            attempt
+          }
+
+      - name: Live service UI proof
+        shell: bash
+        env:
+          MARKS_BROWSER: ${{ matrix.browser }}
+          MARKS_REQUIRE_RELEASE: '1'
+          MARKS_TEST_SERVICE_WORKER: '1'
+        run: |
+          set -euo pipefail
+          bash scripts/run-service-ci.sh \
+            --bin target/debug/marks-server \
+            --static-dir client/dist \
+            --browser "${MARKS_BROWSER}" \
+            --skip-collab
+
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: weekly-service-failure-${{ matrix.browser }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            artifacts/
+            /tmp/marks-ci-*

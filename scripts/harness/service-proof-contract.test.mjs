@@ -54,7 +54,7 @@ test('incremental CI is conservative, gated, cached, and keeps full browser cove
   assert.match(workflow, /^\s*impact:\s*$/m);
   assert.match(workflow, /node scripts\/ci-impact\.mjs/);
   assert.match(workflow, /browser: \$\{\{ fromJSON\(needs\.impact\.outputs\.browser_matrix\) \}\}/);
-  assert.match(workflow, /actions\/cache@v6/);
+  assert.match(workflow, /actions\/cache@[0-9a-f]{40} # v6\./);
   assert.match(workflow, /aggregate-current/);
   assert.match(workflow, /service-current/);
   assert.match(workflow, /args\+\=\(--skip-collab\)/);

@@ -1,0 +1,2 @@
+Defaults:marks-deploy !authenticate,env_reset,secure_path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+marks-deploy ALL=(root) NOPASSWD: /usr/local/sbin/marks-release-root
