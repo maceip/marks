@@ -87,9 +87,23 @@ impl Peer {
                 .headers_mut()
                 .insert("Cookie", cookie.parse().unwrap());
         }
-        let (ws, response) = tokio_tungstenite::connect_async(request)
+        // Connect with TCP_NODELAY like a real browser socket. Nagle plus
+        // loopback delayed-ACK holds a rapid burst's follow-up frames in the
+        // client send buffer past the server's group-commit window, splitting
+        // one logical batch in two.
+        let uri = request.uri().clone();
+        let host = uri.host().expect("ws host").to_owned();
+        let port = uri.port_u16().expect("ws port");
+        let stream = TcpStream::connect((host.as_str(), port))
             .await
-            .expect("ws connect");
+            .expect("tcp connect");
+        stream.set_nodelay(true).expect("set nodelay");
+        let (ws, response) = tokio_tungstenite::client_async(
+            request,
+            tokio_tungstenite::MaybeTlsStream::Plain(stream),
+        )
+        .await
+        .expect("ws connect");
         assert_eq!(
             response
                 .headers()

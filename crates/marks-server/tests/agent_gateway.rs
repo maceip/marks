@@ -293,13 +293,16 @@ async fn hosted_run_is_authorized_idempotent_replayable_and_restart_durable() {
     assert!(events.windows(2).all(|pair| pair[0].id < pair[1].id));
     assert_eq!(events.last().unwrap().data["usage"]["totalTokens"], 10);
 
-    let seen = provider.requests.lock().unwrap();
-    assert_eq!(seen.len(), 1);
-    assert_eq!(seen[0].prompt, "Show rendered view");
-    assert!(!format!("{:?}", seen[0]).contains("NEVER_SENT_DOCUMENT_MARKER"));
-    assert_ne!(seen[0].safety_identifier, owner.principal_id);
-    assert_eq!(seen[0].safety_identifier.len(), 64);
-    drop(seen);
+    // Scoped so the guard provably ends before the next await point;
+    // clippy's await_holding_lock does not credit an explicit drop().
+    {
+        let seen = provider.requests.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].prompt, "Show rendered view");
+        assert!(!format!("{:?}", seen[0]).contains("NEVER_SENT_DOCUMENT_MARKER"));
+        assert_ne!(seen[0].safety_identifier, owner.principal_id);
+        assert_eq!(seen[0].safety_identifier.len(), 64);
+    }
 
     let replay = create_run(&base, &http, &owner, &body).await;
     assert_eq!(replay.status(), 200);
@@ -473,10 +476,13 @@ async fn tool_receipts_are_serialized_idempotent_bounded_and_cancellable() {
             .any(|event| event.kind == "tool.result.accepted")
     );
     assert_eq!(events.last().unwrap().kind, "run.completed");
-    let results = provider.results.lock().unwrap();
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].status, ToolResultStatus::Succeeded);
-    drop(results);
+    // Scoped so the guard provably ends before the next await point;
+    // clippy's await_holding_lock does not credit an explicit drop().
+    {
+        let results = provider.results.lock().unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, ToolResultStatus::Succeeded);
+    }
 
     let cancel_body = run_body("request_cancel_1", &document_id, "Show preview then wait");
     let cancel_run: Value = create_run(&base, &http, &owner, &cancel_body)
