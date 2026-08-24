@@ -25,16 +25,24 @@ import type {
 import { useCommandCenter } from '../../commands/context.tsx';
 import { getCommand } from '../../commands/registry.ts';
 import type { CommandReceipt, CommandRun } from '../../commands/types.ts';
+import { RIBBON_WILD_ENABLED } from '../../lib/product.ts';
 import { Glyph } from '../glyphs/Glyph';
 import { SurfaceMaterial } from '../ui/SurfaceMaterial';
 import '../../styles/agent.css';
 
-const SUGGESTIONS = [
-  'Check document health',
-  'What should I do next?',
-  'Stage the consequences of sharing',
-  'Show aging context and alternatives',
-] as const;
+const SUGGESTIONS = RIBBON_WILD_ENABLED
+  ? [
+      'Check document health',
+      'What should I do next?',
+      'Stage the consequences of sharing',
+      'Show aging context and alternatives',
+    ] as const
+  : [
+      'Check document health',
+      'Audit privacy and links',
+      'Show reader simulation',
+      'Open the task ledger',
+    ] as const;
 
 type ProviderChoice = 'local' | 'openai';
 

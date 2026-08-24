@@ -17,6 +17,14 @@ export const UI_PERFORMANCE_RECEIPT = {
 export const UI_DATA_MODE =
   import.meta.env?.VITE_MARKS_DATA_MODE === 'service' ? ('service' as const) : ('local' as const);
 
+/**
+ * The ribbon possibility layer is merged but intentionally dormant until its
+ * product and design review is complete. This is a build-time flag so an
+ * unflagged production bundle cannot accidentally activate it at runtime.
+ */
+export const RIBBON_WILD_ENABLED =
+  import.meta.env?.VITE_MARKS_RIBBON_WILD === '1';
+
 export const ENGINE = {
   id: 'esbt' as const,
   label: 'ESBT',

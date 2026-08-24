@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { projectCommands } from '../commands/projection.ts';
 import type { CommandEnvironment } from '../commands/types.ts';
+import { RIBBON_WILD_ENABLED } from '../lib/product.ts';
 import { planAgentRequest } from './planner.ts';
 
 const environment: CommandEnvironment = {
@@ -65,7 +66,7 @@ test('practical requests open the exact document-intelligence ribbon surface', (
   }
 });
 
-test('wild requests open the exact possibility-layer ribbon surface', () => {
+test('wild requests follow the off-by-default product flag', () => {
   const examples = new Map([
     ['What should we do next? Show the intent horizon', 'wild.intent-horizon'],
     ['Trace the causal lightpath', 'wild.causal-lightpath'],
@@ -74,6 +75,8 @@ test('wild requests open the exact possibility-layer ribbon surface', () => {
     ['Open the counterfactual shelf', 'wild.counterfactual-shelf'],
   ]);
   for (const [request, commandId] of examples) {
-    assert.equal(planAgentRequest(request, commands).steps[0]?.commandId, commandId, request);
+    const plan = planAgentRequest(request, commands);
+    if (RIBBON_WILD_ENABLED) assert.equal(plan.steps[0]?.commandId, commandId, request);
+    else assert.equal(plan.steps.length, 0, request);
   }
 });

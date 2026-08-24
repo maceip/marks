@@ -1,5 +1,6 @@
 import type { PracticalActionId } from './practical.ts';
 import type { WildActionId } from './wild.ts';
+import { RIBBON_WILD_ENABLED } from './product.ts';
 
 export type UiActionId =
   | 'new'
@@ -80,9 +81,11 @@ export const UI_ACTIONS: UiActionDescriptor[] = [
   { id: 'practical-paste', label: 'Paste intent & provenance', description: 'Control how clipboard material lands', group: 'Document' },
   { id: 'practical-blocks', label: 'Cross-document blocks', description: 'Reference another document section', group: 'Document' },
   { id: 'practical-quality', label: 'Audience & quality contract', description: 'Keep readability aligned to an audience', group: 'Review' },
-  { id: 'wild-intent-horizon', label: 'Intent Horizon', description: 'Turn declared outcomes and document signals into inspectable next moves', group: 'Review' },
-  { id: 'wild-causal-lightpath', label: 'Causal Lightpath', description: 'Trace real commands through source, rendering, collaboration, and durability', group: 'Review' },
-  { id: 'wild-consequence-lanes', label: 'Consequence Lanes', description: 'Stage a command and inspect every product plane it can touch', group: 'Review' },
-  { id: 'wild-context-half-life', label: 'Context Half-Life', description: 'Review claims as dates, versions, links, and assumptions age', group: 'Review' },
-  { id: 'wild-counterfactual-shelf', label: 'Counterfactual Shelf', description: 'Preserve, preview, branch, and safely apply alternate source patches', group: 'Review' },
+  ...(RIBBON_WILD_ENABLED ? [
+    { id: 'wild-intent-horizon' as const, label: 'Intent Horizon', description: 'Turn declared outcomes and document signals into inspectable next moves', group: 'Review' as const },
+    { id: 'wild-causal-lightpath' as const, label: 'Causal Lightpath', description: 'Trace real commands through source, rendering, collaboration, and durability', group: 'Review' as const },
+    { id: 'wild-consequence-lanes' as const, label: 'Consequence Lanes', description: 'Stage a command and inspect every product plane it can touch', group: 'Review' as const },
+    { id: 'wild-context-half-life' as const, label: 'Context Half-Life', description: 'Review claims as dates, versions, links, and assumptions age', group: 'Review' as const },
+    { id: 'wild-counterfactual-shelf' as const, label: 'Counterfactual Shelf', description: 'Preserve, preview, branch, and safely apply alternate source patches', group: 'Review' as const },
+  ] : []),
 ];

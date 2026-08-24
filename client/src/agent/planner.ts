@@ -122,7 +122,9 @@ export function planAgentRequest(request: string, commands: readonly ProjectedCo
     }];
   });
 
-  if (steps.length === 0) {
+  // An exact pattern that resolves to a gated or unavailable command must not
+  // fall through to fuzzy matching and execute an unrelated visible command.
+  if (steps.length === 0 && candidates.length === 0) {
     const fuzzy = fuzzyCommand(request, commands);
     if (fuzzy) {
       steps.push({ id: `${fuzzy.id}:1`, commandId: fuzzy.id, input: {}, reason: fuzzy.description });

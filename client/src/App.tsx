@@ -34,7 +34,7 @@ import { useTheme } from './hooks/useTheme';
 import { useUiPreferences } from './hooks/useUiPreferences';
 import { EMPTY_SNAPSHOT, type HudSnapshot } from './lib/hud';
 import { LatencyTracker } from './lib/latency';
-import { UI_DATA_MODE, UI_MEDIA } from './lib/product';
+import { RIBBON_WILD_ENABLED, UI_DATA_MODE, UI_MEDIA } from './lib/product';
 import { ScrollSync } from './lib/scroll-sync';
 import type { UiActionId } from './lib/ui-actions';
 import { practicalCapabilityForAction } from './lib/practical.ts';
@@ -80,12 +80,12 @@ const PerfHud = lazy(() =>
 const PracticalInspector = lazy(() =>
   import('./components/practical/PracticalInspector').then((module) => ({ default: module.PracticalInspector })),
 );
-const WildStudio = lazy(() =>
-  import('./components/wild/WildStudio').then((module) => ({ default: module.WildStudio })),
-);
-const WildTelemetry = lazy(() =>
-  import('./components/wild/WildTelemetry').then((module) => ({ default: module.WildTelemetry })),
-);
+const WildStudio = RIBBON_WILD_ENABLED
+  ? lazy(() => import('./components/wild/WildStudio').then((module) => ({ default: module.WildStudio })))
+  : null;
+const WildTelemetry = RIBBON_WILD_ENABLED
+  ? lazy(() => import('./components/wild/WildTelemetry').then((module) => ({ default: module.WildTelemetry })))
+  : null;
 
 /** How often the HUD and word counts refresh. Editing never waits on this. */
 const SAMPLE_INTERVAL_MS = 400;
@@ -509,7 +509,7 @@ export function App() {
         setDraftToolsOpen(false);
         return;
       }
-      const wild = wildCapabilityForAction(action);
+      const wild = RIBBON_WILD_ENABLED ? wildCapabilityForAction(action) : null;
       if (wild) {
         if (!docId || !session) return;
         setWildSurface(wild);
@@ -1069,7 +1069,7 @@ export function App() {
         </Suspense>
       )}
 
-      {wildSurface && route.name === 'document' && session && (
+      {RIBBON_WILD_ENABLED && WildStudio && wildSurface && route.name === 'document' && session && (
         <Suspense fallback={null}>
           <WildStudio
             capability={wildSurface}
@@ -1093,7 +1093,7 @@ export function App() {
         </Suspense>
       )}
 
-      {route.name === 'document' && session && (
+      {RIBBON_WILD_ENABLED && WildTelemetry && route.name === 'document' && session && (
         <Suspense fallback={null}>
           <WildTelemetry
             documentId={route.id}

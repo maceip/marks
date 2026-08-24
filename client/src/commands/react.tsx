@@ -18,7 +18,7 @@ import {
 } from './profile.ts';
 import { getCommand } from './registry.ts';
 import { CommandRuntime } from './runtime.ts';
-import { emitCommandEffect } from '../wild/observations.ts';
+import { RIBBON_WILD_ENABLED } from '../lib/product.ts';
 import type {
   CommandEnvironment,
   CommandId,
@@ -26,6 +26,10 @@ import type {
   CommandSource,
 } from './types.ts';
 import { CommandCenter, type CommandCenterValue } from './context.tsx';
+
+const wildObservations = RIBBON_WILD_ENABLED
+  ? import('../wild/observations.ts')
+  : null;
 
 export interface CommandProviderProps {
   documentId: string;
@@ -120,6 +124,10 @@ export function CommandProvider({ documentId, environment: providedEnvironment, 
     runtimeRef.current = new CommandRuntime({
       environment: () => environmentRef.current,
       execute: async (command, input, signal, run) => {
+        if (!wildObservations) {
+          return executeCommand(command, input, signal, executorServicesRef.current!);
+        }
+        const { emitCommandEffect } = await wildObservations;
         const activeDocumentId = documentIdRef.current;
         const activeServices = executorServicesRef.current!;
         const beforeText = activeServices.session?.getText() ?? '';

@@ -3,8 +3,9 @@ import test from 'node:test';
 import { UI_ACTIONS } from './ui-actions.ts';
 import { WILD_SURFACES } from './wild-surfaces.ts';
 import { WILD_ACTIONS, wildCapabilityForAction } from './wild.ts';
+import { RIBBON_WILD_ENABLED } from './product.ts';
 
-test('all five wild capabilities have one registered action and destination', () => {
+test('all five wild capabilities have one destination and registration follows the product flag', () => {
   assert.equal(WILD_ACTIONS.length, 5);
   assert.equal(WILD_SURFACES.length, 5);
   assert.equal(new Set(WILD_ACTIONS).size, 5);
@@ -13,7 +14,9 @@ test('all five wild capabilities have one registered action and destination', ()
     WILD_SURFACES.map((surface) => surface.capability),
   );
   const registered = new Set(UI_ACTIONS.map((action) => action.id));
-  for (const action of WILD_ACTIONS) assert.ok(registered.has(action), action);
+  for (const action of WILD_ACTIONS) {
+    assert.equal(registered.has(action), RIBBON_WILD_ENABLED, action);
+  }
 });
 
 test('prototype-shaped and unrelated values never reach a wild surface', () => {

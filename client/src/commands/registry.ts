@@ -1,4 +1,5 @@
 import type { UiActionId } from '../lib/ui-actions';
+import { RIBBON_WILD_ENABLED } from '../lib/product.ts';
 import type {
   CommandDefinition,
   CommandId,
@@ -173,11 +174,13 @@ const definitions: CommandDefinition[] = [
   ui('insert.cross-document-block', 'Document block', 'practical-blocks', 'insert', 'Links', 'duplicate', { description: 'Insert an access-checked reference to another document section', requiresDocument: true, capability: 'edit', priority: 72, risk: 'write' }),
   ui('review.quality-contract', 'Quality', 'practical-quality', 'review', 'Assurance', 'sparkles', { description: 'Declare the audience and inspect readability against its contract', requiresDocument: true, priority: 86 }),
 
-  ui('wild.intent-horizon', 'Horizon', 'wild-intent-horizon', 'review', 'Possibility', 'sparkles', { description: 'Infer and declare inspectable next actions for this exact document', requiresDocument: true, priority: 97, presentation: 'large' }),
-  ui('wild.causal-lightpath', 'Lightpath', 'wild-causal-lightpath', 'review', 'Possibility', 'mermaid', { description: 'Inspect receipts from real ribbon and agent commands', requiresDocument: true, priority: 83 }),
-  ui('wild.consequence-lanes', 'Lanes', 'wild-consequence-lanes', 'review', 'Possibility', 'split', { description: 'Stage a command and predict its source, render, collaboration, durability, and external effects', requiresDocument: true, priority: 88 }),
-  ui('wild.context-half-life', 'Half-life', 'wild-context-half-life', 'review', 'Time & alternatives', 'history', { description: 'Track time-sensitive claims and review their explicit freshness cadence', requiresDocument: true, priority: 84 }),
-  ui('wild.counterfactual-shelf', 'Shelf', 'wild-counterfactual-shelf', 'review', 'Time & alternatives', 'duplicate', { description: 'Preserve reversible source alternatives without overwriting the live document', requiresDocument: true, priority: 91 }),
+  ...(RIBBON_WILD_ENABLED ? [
+    ui('wild.intent-horizon', 'Horizon', 'wild-intent-horizon', 'review', 'Possibility', 'sparkles', { description: 'Infer and declare inspectable next actions for this exact document', requiresDocument: true, priority: 97, presentation: 'large' }),
+    ui('wild.causal-lightpath', 'Lightpath', 'wild-causal-lightpath', 'review', 'Possibility', 'mermaid', { description: 'Inspect receipts from real ribbon and agent commands', requiresDocument: true, priority: 83 }),
+    ui('wild.consequence-lanes', 'Lanes', 'wild-consequence-lanes', 'review', 'Possibility', 'split', { description: 'Stage a command and predict its source, render, collaboration, durability, and external effects', requiresDocument: true, priority: 88 }),
+    ui('wild.context-half-life', 'Half-life', 'wild-context-half-life', 'review', 'Time & alternatives', 'history', { description: 'Track time-sensitive claims and review their explicit freshness cadence', requiresDocument: true, priority: 84 }),
+    ui('wild.counterfactual-shelf', 'Shelf', 'wild-counterfactual-shelf', 'review', 'Time & alternatives', 'duplicate', { description: 'Preserve reversible source alternatives without overwriting the live document', requiresDocument: true, priority: 91 }),
+  ] : []),
 
   ui('review.performance', 'Performance', 'benchmark', 'review', 'Inspect', 'gauge', { description: 'Open the engine performance receipt', requiresDocument: false, priority: 45 }),
   define({ id: 'view.editor', label: 'Editor', description: 'Show only the Markdown source', category: 'View', tab: 'view', group: 'Layout', glyph: 'pencil', operation: { kind: 'mode', mode: 'edit' }, surfaces: ALL, requiresDocument: true, risk: 'read', priority: 90, keyTip: 'E', agent: { exposed: true, parameters: EMPTY_PARAMETERS } }),

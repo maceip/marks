@@ -1,8 +1,19 @@
 # Ribbon possibility layer: wild capabilities 1–5
 
-This branch adds five production capabilities as one browser-local possibility layer. They are not static demonstrations: every ribbon surface can open them, the guarded command runtime feeds their receipts, and their durable local state is shared across tabs with IndexedDB and `BroadcastChannel`.
+This code adds five production capabilities as one browser-local possibility layer. When explicitly enabled, every ribbon surface can open them, the guarded command runtime feeds their receipts, and their durable local state is shared across tabs with IndexedDB and `BroadcastChannel`.
 
-The wild branch is stacked on `codex/ribbon-practical`. It adds no Rust route, database migration, collaboration message, ESBT artifact, deployment file, or provider gateway. The existing document repository, version repository, command center, and `CollabSession` interfaces are reused without widening any protected server or protocol boundary.
+The layer adds no Rust route, database migration, collaboration message, ESBT artifact, deployment file, or provider gateway. The existing document repository, version repository, command center, and `CollabSession` interfaces are reused without widening any protected server or protocol boundary.
+
+## Activation contract
+
+The layer is merged but off by default while product and design review is pending.
+
+- Development: `VITE_MARKS_RIBBON_WILD=1 npm run dev`
+- Production build: `VITE_MARKS_RIBBON_WILD=1 npm run build`
+- Any missing value, including `0`, leaves the layer disabled.
+- The resolved build state is inspectable as `data-marks-ribbon-wild="enabled|disabled"` on the document root.
+
+In a disabled build, wild commands are omitted from the active command registry and legacy palette, the agent keeps its stable suggestions, command execution does not capture source observations, telemetry does not scan or open IndexedDB, and the lazy Wild Studio/Telemetry assets are not requested. Enabling the flag restores the five commands and all responsive/agent integration described below. This activation gate is not a substitute for the planned visual and interaction review.
 
 ## Capability contracts
 
