@@ -1,8 +1,8 @@
-import type { ReactNode } from 'react';
+import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from 'react';
 import type { CommandRunStatus } from '../../commands/types.ts';
 import { Glyph, type GlyphName } from '../glyphs/Glyph';
 
-interface RibbonCommandProps {
+export interface RibbonCommandProps {
   glyph: GlyphName;
   label: string;
   title?: string;
@@ -13,6 +13,8 @@ interface RibbonCommandProps {
   commandId?: string;
   agentState?: CommandRunStatus;
   agentRaised?: boolean;
+  loading?: boolean;
+  className?: string;
   onClick: () => void;
   onContextMenu?: () => void;
   children?: ReactNode;
@@ -29,6 +31,8 @@ export function RibbonCommand({
   commandId,
   agentState,
   agentRaised,
+  loading,
+  className,
   onClick,
   onContextMenu,
   children,
@@ -36,14 +40,16 @@ export function RibbonCommand({
   return (
     <button
       type="button"
-      className={`ribbon-command${pressed ? ' active' : ''}${danger ? ' danger-command' : ''}${large ? ' ribbon-command-large' : ''}${agentRaised ? ' agent-raised' : ''}${agentState ? ` agent-${agentState}` : ''}`}
+      className={`ribbon-command${pressed ? ' active' : ''}${danger ? ' danger-command' : ''}${large ? ' ribbon-command-large' : ''}${agentRaised ? ' agent-raised' : ''}${agentState ? ` agent-${agentState}` : ''}${className ? ` ${className}` : ''}`}
       data-command-id={commandId}
       data-agent-state={agentState}
+      data-loading={loading || undefined}
+      data-danger={danger || undefined}
       title={title ?? label}
       aria-label={label}
       aria-pressed={pressed}
-      aria-busy={agentState === 'running' || undefined}
-      disabled={disabled}
+      aria-busy={loading || agentState === 'running' || undefined}
+      disabled={disabled || loading}
       onMouseDown={(event) => event.preventDefault()}
       onContextMenu={(event) => {
         if (!onContextMenu) return;
@@ -59,12 +65,37 @@ export function RibbonCommand({
   );
 }
 
-interface RibbonGroupProps {
+export interface RibbonGroupProps {
   label: string;
   children: ReactNode;
   onLaunch?: () => void;
   launchLabel?: string;
   agentRaised?: boolean;
+}
+
+export function RibbonTabList({ children, ...props }: HTMLAttributes<HTMLElement>) {
+  return <nav className="ribbon-tabs" aria-label="Command ribbon" {...props}>{children}</nav>;
+}
+
+export interface RibbonTabButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  selected: boolean;
+  contextual?: boolean;
+}
+
+export function RibbonTabButton({ selected, contextual, className, ...props }: RibbonTabButtonProps) {
+  return <button type="button" role="tab" aria-selected={selected} className={`ribbon-tab${contextual ? ' contextual' : ''}${selected ? ' active' : ''}${className ? ` ${className}` : ''}`} {...props} />;
+}
+
+export function RibbonDeck({ children, className = '', ...props }: HTMLAttributes<HTMLDivElement>) {
+  return <div className={`ribbon-deck${className ? ` ${className}` : ''}`} {...props}>{children}</div>;
+}
+
+export function RibbonToolbar({ children, className = '', ...props }: HTMLAttributes<HTMLDivElement>) {
+  return <div className={`ribbon-toolbar${className ? ` ${className}` : ''}`} role="toolbar" {...props}>{children}</div>;
+}
+
+export function RibbonGallery({ children, className = '', ...props }: HTMLAttributes<HTMLDivElement>) {
+  return <div className={`ribbon-gallery${className ? ` ${className}` : ''}`} {...props}>{children}</div>;
 }
 
 export function RibbonGroup({ label, children, onLaunch, launchLabel, agentRaised }: RibbonGroupProps) {

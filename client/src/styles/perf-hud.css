@@ -1,0 +1,60 @@
+.hud-section {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--material-border);
+}
+
+.hud-section h3 {
+  margin-bottom: 8px;
+  color: var(--color-fg-subtle);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.hud-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.hud-metric {
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--color-bg-sunken) 76%, transparent);
+  text-align: center;
+}
+
+.hud-metric-value {
+  font-size: 14px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-metric-label {
+  color: var(--color-fg-subtle);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.hud-note {
+  margin-top: 8px;
+  color: var(--color-fg-subtle);
+  font-size: 11px;
+}
+
+.hud-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.hud-label { color: var(--color-fg-muted); }
+.hud-value { font-weight: 550; font-variant-numeric: tabular-nums; }
+.hud-cta { justify-content: center; margin: 12px 14px; }

@@ -1,3 +1,4 @@
+import '../../styles/components/ribbon.css';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { EditorView } from '@codemirror/view';
 import {
@@ -20,7 +21,14 @@ import { clearFormatPreview, showFormatPreview, type FormatPreviewKind } from '.
 import type { UiActionId } from '../../lib/ui-actions';
 import type { ViewMode } from '../shell/TopBar';
 import { Glyph } from '../glyphs/Glyph';
-import { RibbonCommand, RibbonGroup } from './RibbonCommand';
+import {
+  RibbonCommand,
+  RibbonDeck,
+  RibbonGroup,
+  RibbonTabButton,
+  RibbonTabList,
+  RibbonToolbar,
+} from './RibbonCommand';
 
 export type RibbonTab = RibbonTabId;
 
@@ -211,19 +219,19 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
       data-command-context={center.environment.context}
       data-agent-active={center.raised.size > 0 ? 'true' : undefined}
     >
-      <nav className="ribbon-tabs" aria-label="Command ribbon">
+      <RibbonTabList role="tablist">
         {tabs.map((item) => (
-          <button
+          <RibbonTabButton
             key={item.id}
-            type="button"
-            className={`ribbon-tab${tab === item.id ? ' active' : ''}${item.contextual ? ' contextual' : ''}${item.agentRaised ? ' agent-raised' : ''}`}
-            aria-pressed={tab === item.id}
+            selected={tab === item.id}
+            contextual={item.contextual}
+            className={item.agentRaised ? 'agent-raised' : undefined}
             onClick={() => selectTab(item.id)}
           >
             {item.label}
             {item.agentRaised && <span className="agent-tab-dot" aria-label="Agent-relevant commands" />}
             {keyTipLayer === 'tabs' && <KeyTip value={tabTips.get(item.id)} sequence={keySequence} />}
-          </button>
+          </RibbonTabButton>
         ))}
         <button
           type="button"
@@ -234,10 +242,10 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
         >
           {center.profile.expanded ? 'Essentials' : 'All commands'}
         </button>
-      </nav>
+      </RibbonTabList>
 
-      <div className="ribbon-deck">
-        <div className="ribbon-toolbar ribbon-deck-enter" role="toolbar" aria-label={`${selectedTab?.label ?? 'Command'} commands`}>
+      <RibbonDeck>
+        <RibbonToolbar className="ribbon-deck-enter" aria-label={`${selectedTab?.label ?? 'Command'} commands`}>
           {visibleGroups.map((group) => (
             <CommandGroup
               key={group.id}
@@ -291,8 +299,8 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
               )}
             </div>
           )}
-        </div>
-      </div>
+        </RibbonToolbar>
+      </RibbonDeck>
     </div>
   );
 }

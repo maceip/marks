@@ -89,3 +89,4 @@ export function PerfHud({ snapshot, onClose, onOpenBenchmark }: PerfHudProps) {
     </aside>
   );
 }
+import '../../styles/perf-hud.css';

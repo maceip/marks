@@ -903,7 +903,7 @@ export function PracticalInspector(props: PracticalInspectorProps) {
   if (!analysis) {
     return (
       <aside className="practical-inspector surface-material-host" data-shell={props.shell} data-practical-capability={props.capability} aria-label={descriptor.label} aria-busy="true">
-        <SurfaceMaterial variant="panel" intensity={0.97} />
+        <SurfaceMaterial variant="panel" modifier="emphasized" />
         <header className="practical-head"><div><span>Document intelligence</span><h2>{descriptor.label}</h2></div><button ref={closeRef} type="button" className="icon-button" aria-label="Close document intelligence" onClick={props.onClose}><Icon path={icons.close} /></button></header>
         <p className="practical-loading">{error ?? 'Analyzing the current source revision…'}</p>
       </aside>
@@ -971,7 +971,7 @@ export function PracticalInspector(props: PracticalInspectorProps) {
 
   return (
     <aside className="practical-inspector surface-material-host" data-shell={props.shell} data-practical-capability={props.capability} aria-label={descriptor.label} aria-busy={analyzing}>
-      <SurfaceMaterial variant="panel" intensity={0.97} />
+      <SurfaceMaterial variant="panel" modifier="emphasized" />
       <header className="practical-head">
         <div><span>Document intelligence {analyzing ? '· refreshing' : `· revision ${analysis.revision}`}</span><h2>{descriptor.label}</h2><p>{descriptor.description}</p></div>
         <button ref={closeRef} type="button" className="icon-button" aria-label="Close document intelligence" onClick={props.onClose}><Icon path={icons.close} /></button>

@@ -1,3 +1,6 @@
+import '../../styles/foundation-tokens.css';
+import '../../styles/browser.css';
+import '../../styles/document-tokens.css';
 import type { EditorView } from '@codemirror/view';
 import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type { CollabSession } from '../../collab/types';

@@ -1,0 +1,46 @@
+.outline {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.outline-empty {
+  align-items: center;
+  gap: 8px;
+  padding: 28px 20px;
+  color: var(--color-fg-subtle);
+  text-align: center;
+  font-size: 12.5px;
+}
+
+.outline-item {
+  overflow: hidden;
+  min-height: 34px;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: none;
+  color: var(--color-fg-muted);
+  font-size: 12.5px;
+  text-align: left;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.outline-item[data-level='1'] {
+  color: var(--color-fg-default);
+  font-weight: 600;
+}
+
+.outline-item:hover {
+  background: var(--color-bg-sunken);
+  color: var(--color-fg-default);
+}
+
+@media (max-width: 720px), (max-height: 560px) and (pointer: coarse) {
+  .outline-item {
+    min-height: var(--control-height-touch);
+  }
+}

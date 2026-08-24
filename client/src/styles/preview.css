@@ -43,7 +43,7 @@
 .marks-preview h1 {
   font-size: 1.9em;
   padding-bottom: 0.3em;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--color-border-default);
 }
 
 .app[data-doc='about-marks'] .marks-preview {
@@ -60,7 +60,7 @@
 .marks-preview h2 {
   font-size: 1.45em;
   padding-bottom: 0.25em;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--color-border-default);
 }
 
 .marks-preview h3 {
@@ -74,16 +74,16 @@
 .marks-preview h5,
 .marks-preview h6 {
   font-size: 0.95em;
-  color: var(--text-muted);
+  color: var(--color-fg-muted);
 }
 
 .marks-anchor {
   margin-left: 0.4em;
-  color: var(--text-faint);
+  color: var(--color-fg-subtle);
   font-weight: 400;
   text-decoration: none;
   opacity: 0;
-  transition: opacity 120ms ease;
+  transition: opacity var(--motion-fast) ease;
 }
 
 h1:hover .marks-anchor,
@@ -116,10 +116,10 @@ h4:hover .marks-anchor {
 .marks-preview blockquote {
   margin: 0 0 1.05em;
   padding: 0.75em 1em;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-sunken);
-  color: var(--text-muted);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-control);
+  background: var(--color-bg-sunken);
+  color: var(--color-fg-muted);
 }
 
 .marks-preview blockquote > :last-child {
@@ -130,34 +130,34 @@ h4:hover .marks-anchor {
   height: 1px;
   margin: 2em 0;
   border: 0;
-  background: var(--border);
+  background: var(--color-border-default);
 }
 
 .marks-preview a {
-  color: var(--accent);
-  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--color-action);
+  text-decoration-color: color-mix(in srgb, var(--color-action) 40%, transparent);
   text-underline-offset: 2px;
 }
 
 .marks-preview img {
   max-width: 100%;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-control);
 }
 
 .marks-preview kbd {
   padding: 1px 5px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--color-border-strong);
   border-bottom-width: 2px;
   border-radius: 4px;
-  background: var(--surface-sunken);
-  font-family: var(--font-mono);
+  background: var(--color-bg-sunken);
+  font-family: var(--font-family-mono);
   font-size: 0.85em;
 }
 
 .marks-preview mark {
   padding: 0.1em 0.2em;
   border-radius: 3px;
-  background: var(--search-match);
+  background: var(--color-search-match);
   color: inherit;
 }
 
@@ -166,9 +166,9 @@ h4:hover .marks-anchor {
 .marks-preview code {
   padding: 0.15em 0.36em;
   border-radius: 4px;
-  background: var(--code-bg);
-  color: var(--code);
-  font-family: var(--font-mono);
+  background: var(--color-code-bg);
+  color: var(--color-code-fg);
+  font-family: var(--font-family-mono);
   font-size: 0.875em;
 }
 
@@ -176,9 +176,9 @@ h4:hover .marks-anchor {
   margin: 0 0 1.15em;
   padding: 0.9em 1.1em;
   overflow-x: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--code-block-bg);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-card);
+  background: var(--color-code-block-bg);
   font-size: 12.8px;
   line-height: 1.6;
 }
@@ -186,7 +186,7 @@ h4:hover .marks-anchor {
 .marks-preview pre code {
   padding: 0;
   background: none;
-  color: var(--text);
+  color: var(--color-fg-default);
   font-size: inherit;
 }
 
@@ -197,7 +197,7 @@ h4:hover .marks-anchor {
 .hljs-section,
 .hljs-doctag,
 .hljs-name {
-  color: var(--syntax-keyword);
+  color: var(--color-syntax-keyword);
 }
 
 .hljs-string,
@@ -205,7 +205,7 @@ h4:hover .marks-anchor {
 .hljs-addition,
 .hljs-attribute,
 .hljs-meta .hljs-string {
-  color: var(--syntax-string);
+  color: var(--color-syntax-string);
 }
 
 .hljs-number,
@@ -214,13 +214,13 @@ h4:hover .marks-anchor {
 .hljs-link,
 .hljs-selector-attr,
 .hljs-selector-pseudo {
-  color: var(--syntax-number);
+  color: var(--color-syntax-number);
 }
 
 .hljs-title,
 .hljs-title.function_,
 .hljs-function .hljs-title {
-  color: var(--syntax-fn);
+  color: var(--color-syntax-function);
 }
 
 .hljs-type,
@@ -230,13 +230,13 @@ h4:hover .marks-anchor {
 .hljs-selector-id,
 .hljs-template-variable,
 .hljs-variable {
-  color: var(--syntax-type);
+  color: var(--color-syntax-type);
 }
 
 .hljs-comment,
 .hljs-quote,
 .hljs-deletion {
-  color: var(--syntax-comment);
+  color: var(--color-syntax-comment);
   font-style: italic;
 }
 
@@ -263,17 +263,17 @@ h4:hover .marks-anchor {
 .marks-preview th,
 .marks-preview td {
   padding: 7px 12px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--color-border-default);
   text-align: left;
 }
 
 .marks-preview th {
-  background: var(--surface-sunken);
+  background: var(--color-bg-sunken);
   font-weight: 600;
 }
 
 .marks-preview tbody tr:nth-child(even) {
-  background: color-mix(in srgb, var(--surface-sunken) 45%, transparent);
+  background: color-mix(in srgb, var(--color-bg-sunken) 45%, transparent);
 }
 
 /* ----------------------------------------------------------- task lists */
@@ -287,14 +287,14 @@ h4:hover .marks-anchor {
   width: 1em;
   height: 1em;
   margin-right: 0.5em;
-  accent-color: var(--accent);
+  accent-color: var(--color-action);
   cursor: pointer;
   vertical-align: -0.1em;
 }
 
 .marks-preview .task-list-item input[type='checkbox']:checked + label,
 .marks-preview .task-list-item input[type='checkbox']:checked ~ * {
-  color: var(--text-muted);
+  color: var(--color-fg-muted);
 }
 
 /* ------------------------------------------------------------- callouts */
@@ -302,9 +302,9 @@ h4:hover .marks-anchor {
 .marks-callout {
   margin: 0 0 1.15em;
   padding: 0.85em 1.1em;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-sunken);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-control);
+  background: var(--color-bg-sunken);
 }
 
 .marks-callout > :last-child {
@@ -317,27 +317,27 @@ h4:hover .marks-anchor {
 }
 
 .marks-callout-info {
-  border-color: color-mix(in srgb, var(--info) 30%, var(--border));
-  background: var(--info-soft);
+  border-color: color-mix(in srgb, var(--color-feedback-info) 30%, var(--color-border-default));
+  background: var(--color-feedback-info-soft);
 }
 
 .marks-callout-success {
-  border-color: color-mix(in srgb, var(--success) 30%, var(--border));
-  background: var(--success-soft);
+  border-color: color-mix(in srgb, var(--color-feedback-success) 30%, var(--color-border-default));
+  background: var(--color-feedback-success-soft);
 }
 
 .marks-callout-warning {
-  border-color: color-mix(in srgb, var(--warning) 30%, var(--border));
-  background: var(--warning-soft);
+  border-color: color-mix(in srgb, var(--color-feedback-warning) 30%, var(--color-border-default));
+  background: var(--color-feedback-warning-soft);
 }
 
 .marks-callout-danger {
-  border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
-  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--color-feedback-danger) 30%, var(--color-border-default));
+  background: var(--color-feedback-danger-soft);
 }
 
 .marks-callout-note {
-  border-color: var(--border-strong);
+  border-color: var(--color-border-strong);
 }
 
 /* ------------------------------------------------------------ footnotes */
@@ -345,8 +345,8 @@ h4:hover .marks-anchor {
 .footnotes {
   margin-top: 2.5em;
   padding-top: 1.2em;
-  border-top: 1px solid var(--border);
-  color: var(--text-muted);
+  border-top: 1px solid var(--color-border-default);
+  color: var(--color-fg-muted);
   font-size: 13px;
 }
 
@@ -371,9 +371,9 @@ h4:hover .marks-anchor {
   display: flex;
   justify-content: center;
   padding: 1em;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface-sunken);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-card);
+  background: var(--color-bg-sunken);
 }
 
 .marks-mermaid-out:empty {
@@ -386,7 +386,7 @@ h4:hover .marks-anchor {
 }
 
 .marks-diagram-error {
-  color: var(--danger);
+  color: var(--color-feedback-danger);
   font-size: 12px;
 }
 
@@ -395,7 +395,7 @@ h4:hover .marks-anchor {
   max-width: 100%;
   height: auto;
   border-radius: 12px;
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--elevation-sm);
 }
 
 .marks-figure[data-align='left'] { margin-right: auto; }
@@ -409,16 +409,16 @@ h4:hover .marks-anchor {
   width: min(100%, 280px);
   margin: 1.2em auto;
   padding: 12px;
-  border: 1px solid var(--glass-border);
+  border: 1px solid var(--material-border);
   border-radius: 18px;
-  background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface));
+  background: color-mix(in srgb, var(--color-action-soft) 55%, var(--color-bg-surface));
 }
 
 .marks-shape svg {
   width: 100%;
   height: auto;
   fill: none;
-  stroke: var(--accent);
+  stroke: var(--color-action);
   stroke-width: 3;
   stroke-linejoin: round;
   stroke-linecap: round;
@@ -428,11 +428,11 @@ h4:hover .marks-anchor {
 .marks-shape[data-shape='ellipse'] svg,
 .marks-shape[data-shape='diamond'] svg,
 .marks-shape[data-shape='bubble'] svg {
-  fill: color-mix(in srgb, var(--accent) 16%, transparent);
+  fill: color-mix(in srgb, var(--color-action) 16%, transparent);
 }
 
 .marks-shape figcaption {
-  color: var(--text-muted);
+  color: var(--color-fg-muted);
   font-size: 12.5px;
   font-weight: 620;
 }
@@ -446,10 +446,10 @@ h4:hover .marks-anchor {
 .marks-document-block {
   margin: 1.2em 0;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border: 1px solid color-mix(in srgb, var(--color-action) 24%, var(--color-border-default));
   border-radius: 14px;
-  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
-  box-shadow: 0 10px 28px -24px color-mix(in srgb, var(--accent) 60%, transparent);
+  background: color-mix(in srgb, var(--color-action) 4%, var(--color-bg-surface));
+  box-shadow: 0 10px 28px -24px color-mix(in srgb, var(--color-action) 60%, transparent);
 }
 
 .marks-document-block > header {
@@ -458,19 +458,19 @@ h4:hover .marks-anchor {
   justify-content: space-between;
   gap: 12px;
   padding: 9px 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-action) 18%, var(--color-border-default));
+  background: color-mix(in srgb, var(--color-action) 7%, transparent);
 }
 
 .marks-document-block > header a {
-  color: var(--accent);
+  color: var(--color-action);
   font-size: .8em;
   font-weight: 720;
   text-decoration: none;
 }
 
 .marks-document-block > header span {
-  color: var(--text-faint);
+  color: var(--color-fg-subtle);
   font-size: .62em;
   font-weight: 700;
   letter-spacing: .08em;
@@ -481,12 +481,12 @@ h4:hover .marks-anchor {
 .marks-document-block-content > :first-child { margin-top: 0; }
 .marks-document-block-content > :last-child { margin-bottom: 0; }
 .marks-document-block[data-marks-hydrated="error"],
-.marks-document-block[data-marks-hydrated="missing"] { border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
+.marks-document-block[data-marks-hydrated="missing"] { border-color: color-mix(in srgb, var(--color-feedback-danger) 35%, var(--color-border-default)); }
 
 .preview-pane { position: relative; }
 .preview-presence-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
 .preview-presence { position: absolute; pointer-events: auto; border: 0; padding: 0; cursor: pointer; color: inherit; }
 .preview-presence.section { width: 4px; border-radius: 4px; background: var(--cursor-color); color: var(--cursor-color); }
-.preview-presence.exact { width: 2px; min-height: 18px; background: var(--cursor-color); color: var(--cursor-color); animation: caret-blink 1.1s step-end infinite; }
-.preview-presence span { position: absolute; top: 0; left: 5px; max-width: 9rem; padding: 2px 6px; border-radius: 8px; background: currentColor; color: white; font: 600 11px/1.4 var(--font-ui); white-space: nowrap; opacity: 0; transform: translateY(-100%); }
+.preview-presence.exact { width: 2px; min-height: 18px; background: var(--cursor-color); color: var(--cursor-color); animation: caret-blink var(--motion-presence-caret) step-end infinite; }
+.preview-presence span { position: absolute; top: 0; left: 5px; max-width: 9rem; padding: 2px 6px; border-radius: 8px; background: currentColor; color: white; font: 600 11px/1.4 var(--font-family-sans); white-space: nowrap; opacity: 0; transform: translateY(-100%); }
 .preview-presence:hover span, .preview-presence:focus-visible span { opacity: 1; }

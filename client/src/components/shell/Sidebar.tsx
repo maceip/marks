@@ -96,7 +96,7 @@ export function Sidebar({
         role={overlay ? 'dialog' : undefined}
         ref={panelRef}
       >
-        <SurfaceMaterial variant="panel" intensity={0.82} />
+        <SurfaceMaterial variant="panel" />
         <div className="sidebar-head">
           <div className="sidebar-brand-row">
             <div className="brand">

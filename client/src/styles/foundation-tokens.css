@@ -1,0 +1,18 @@
+/* Extended foundation scale loaded by component-rich routes. */
+:root {
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  --font-size-xs: 10px;
+  --font-size-sm: 12px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-editor: 14.5px;
+  --line-height-tight: 1.2;
+  --line-height-default: 1.55;
+  --line-height-relaxed: 1.7;
+  --letter-spacing-tight: -0.02em;
+  --letter-spacing-default: 0;
+  --letter-spacing-caps: 0.075em;
+}

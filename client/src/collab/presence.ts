@@ -128,6 +128,7 @@ export function esbtPresence(
   const plugin = ViewPlugin.define((view) => {
     let destroyed = false;
     let scheduled = false;
+    let publishScheduled = false;
     // Epoch-based start prevents a reloaded sender from looking older than
     // its final pre-reload heartbeat while remaining a safe JSON integer.
     let sequence = Date.now() * 1_000;
@@ -138,11 +139,25 @@ export function esbtPresence(
       const main = view.state.selection.main;
       const document = getDocument();
       if (!document) return;
+      // CodeMirror view plugins observe a local transaction in extension
+      // order. The editor selection can therefore be one callback ahead of
+      // the ESBT sync plugin. Never mint an anchor against that mismatched
+      // length; the microtask below retries after every plugin has updated.
+      if (main.anchor > document.length || main.head > document.length) return;
       sequence += 1;
       presence.set(
         selectionKeyFor(),
         encodeSelectionPresence(captureSelectionPresence(document, main.anchor, main.head, sequence)),
       );
+    };
+
+    const schedulePublish = (): void => {
+      if (publishScheduled || destroyed) return;
+      publishScheduled = true;
+      queueMicrotask(() => {
+        publishScheduled = false;
+        if (!destroyed) publishSelection();
+      });
     };
 
     const refresh = (): void => {
@@ -172,13 +187,13 @@ export function esbtPresence(
     const unsubscribeReplica = getDocument()?.onReplicaChange(scheduleRefresh) ?? (() => {});
     const heartbeat = window.setInterval(publishSelection, HEARTBEAT_MS);
 
-    publishSelection();
+    schedulePublish();
     scheduleRefresh();
 
     return {
       update(update) {
         if (update.selectionSet || update.docChanged || update.focusChanged) {
-          publishSelection();
+          schedulePublish();
         }
       },
       destroy() {

@@ -1,0 +1,86 @@
+/* Workspace paint ships with the lazy document surface, not first paint. */
+.workspace {
+  display: grid;
+  grid-template-columns: var(--split, 50%) 6px minmax(0, 1fr);
+  min-height: 0;
+  background: var(--color-bg-surface);
+}
+
+.workspace.mode-edit {
+  grid-template-columns: 1fr 0 0;
+}
+
+.workspace.mode-preview {
+  grid-template-columns: 0 0 1fr;
+}
+
+.workspace.mode-edit .preview-pane,
+.workspace.mode-edit .splitter,
+.workspace.mode-preview .editor-pane,
+.workspace.mode-preview .splitter {
+  display: none;
+}
+
+.workspace.dragging {
+  user-select: none;
+  cursor: col-resize;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.editor-pane,
+.preview-pane {
+  background: var(--color-bg-surface);
+}
+
+.editor-host {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.editor-host .cm-editor {
+  height: 100%;
+}
+
+.preview-pane {
+  overflow-y: auto;
+  border-left: 1px solid var(--color-border-default);
+}
+
+.preview-loading,
+.editor-loading {
+  display: grid;
+  place-items: center;
+  color: var(--color-fg-subtle);
+  font-size: 12px;
+}
+
+.workspace.mode-preview .preview-pane {
+  grid-column: 3;
+  border-left: 0;
+}
+
+.splitter {
+  position: relative;
+  background: var(--color-border-default);
+  cursor: col-resize;
+  transition: background var(--duration-fast) ease;
+}
+
+.splitter::after {
+  content: '';
+  position: absolute;
+  inset: 0 -4px;
+}
+
+.splitter:hover,
+.workspace.dragging .splitter {
+  background: var(--color-action);
+}

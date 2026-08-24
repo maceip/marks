@@ -164,7 +164,7 @@ export function PhoneComposer(props: PhoneComposerProps) {
         <div className="phone-sheet-layer">
           <button type="button" className="phone-sheet-scrim" aria-label="Close sheet" onClick={() => setSheet(null)} />
           <div className="phone-sheet surface-material-host" role="dialog" aria-label={`${sheetTitle} commands`}>
-            <SurfaceMaterial variant="floating" intensity={1.08} />
+            <SurfaceMaterial variant="floating" modifier="emphasized" />
             <header>
               <h2>{sheetTitle}</h2>
               <button type="button" className="icon-button" aria-label="Close" onClick={() => setSheet(null)}>
@@ -196,7 +196,7 @@ export function PhoneComposer(props: PhoneComposerProps) {
       )}
 
       <nav className="phone-nav surface-material-host" aria-label="Phone composer">
-        <SurfaceMaterial variant="chrome" intensity={0.9} />
+        <SurfaceMaterial variant="chrome" modifier="subtle" />
         {editMode && (
           <PhoneNavCommand command={editMode} label="Write" active={writing} onInvoke={invoke} />
         )}

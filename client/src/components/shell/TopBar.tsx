@@ -98,7 +98,7 @@ export function TopBar(props: TopBarProps) {
 
   return (
     <header className={`app-ribbon ribbon-${props.route} surface-material-host`}>
-      <SurfaceMaterial variant="chrome" intensity={0.96} />
+      <SurfaceMaterial variant="chrome" />
       <div className="titlebar">
         <div className="topbar-left">
           {documentRoute && !props.posture.phone && (

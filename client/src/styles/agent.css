@@ -1,12 +1,12 @@
 .agent-pill {
   position: fixed;
   right: max(16px, env(safe-area-inset-right));
-  bottom: calc(var(--statusbar-height) + 14px);
+  bottom: calc(var(--layout-statusbar-height) + 14px);
   z-index: 58;
   width: min(620px, calc(100vw - 32px));
-  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--glass-border));
+  border: 1px solid color-mix(in srgb, var(--color-action) 20%, var(--material-border));
   border-radius: 28px;
-  background: var(--glass-refraction), var(--liquid-glass);
+  background: var(--material-refraction), var(--material-tint-liquid);
   box-shadow: 0 24px 70px -30px rgb(4 25 72 / 54%), inset 0 1px rgb(255 255 255 / 60%);
   -webkit-backdrop-filter: blur(var(--glass-blur-floating)) saturate(var(--glass-saturation));
   backdrop-filter: blur(var(--glass-blur-floating)) saturate(var(--glass-saturation));
@@ -14,10 +14,10 @@
 }
 
 .agent-pill.expanded { border-radius: 22px; }
-.agent-pill.active { border-color: color-mix(in srgb, var(--brand-green) 52%, var(--glass-border)); }
+.agent-pill.active { border-color: color-mix(in srgb, var(--color-brand-positive) 52%, var(--material-border)); }
 .agent-pill.inspector-linked {
   width: min(390px, calc(100vw - 32px));
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--glass-border));
+  border-color: color-mix(in srgb, var(--color-action) 42%, var(--material-border));
 }
 .agent-pill.inspector-linked::after {
   position: absolute;
@@ -26,7 +26,7 @@
   width: 34px;
   height: 3px;
   border-radius: 999px;
-  background: linear-gradient(90deg, transparent, var(--accent));
+  background: linear-gradient(90deg, transparent, var(--color-action));
   content: '';
   opacity: .72;
   pointer-events: none;
@@ -50,10 +50,10 @@
   border: 0;
   outline: 0;
   background: transparent;
-  color: var(--text);
-  font: 500 13px/1.4 var(--font-sans);
+  color: var(--color-fg-default);
+  font: 500 13px/1.4 var(--font-family-sans);
 }
-.agent-pill-compose input::placeholder { color: var(--text-faint); }
+.agent-pill-compose input::placeholder { color: var(--color-fg-subtle); }
 
 .agent-orb,
 .agent-submit {
@@ -68,25 +68,25 @@
 }
 .agent-orb {
   position: relative;
-  background: linear-gradient(145deg, color-mix(in srgb, var(--accent) 86%, white), color-mix(in srgb, var(--brand-teal) 80%, var(--brand-navy)));
+  background: linear-gradient(145deg, color-mix(in srgb, var(--color-action) 86%, white), color-mix(in srgb, var(--color-brand-teal) 80%, var(--color-brand-primary)));
   color: white;
-  box-shadow: inset 0 1px rgb(255 255 255 / 50%), 0 8px 20px -10px var(--accent);
+  box-shadow: inset 0 1px rgb(255 255 255 / 50%), 0 8px 20px -10px var(--color-action);
 }
-.agent-submit { width: 32px; height: 32px; background: var(--accent); color: white; font-size: 18px; font-weight: 750; }
+.agent-submit { width: 32px; height: 32px; background: var(--color-action); color: white; font-size: 18px; font-weight: 750; }
 .agent-submit:disabled { opacity: .28; cursor: default; }
 
 .agent-provider {
   max-width: 84px;
   padding: 3px 7px;
-  border: 1px solid var(--glass-border);
+  border: 1px solid var(--material-border);
   border-radius: 999px;
   outline: 0;
-  background: color-mix(in srgb, var(--surface) 72%, transparent);
-  color: var(--text-faint);
-  font: 650 9px/1.2 var(--font-mono);
+  background: color-mix(in srgb, var(--color-bg-surface) 72%, transparent);
+  color: var(--color-fg-subtle);
+  font: 650 9px/1.2 var(--font-family-mono);
   text-transform: uppercase;
 }
-.agent-provider:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent); }
+.agent-provider:focus-visible { border-color: var(--color-action); box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-action) 18%, transparent); }
 .agent-provider:disabled { opacity: .6; }
 
 .agent-running-dot {
@@ -95,10 +95,10 @@
   right: -1px;
   width: 10px;
   height: 10px;
-  border: 2px solid var(--surface);
+  border: 2px solid var(--color-bg-surface);
   border-radius: 50%;
-  background: var(--brand-green);
-  animation: agent-pill-pulse 850ms ease-in-out infinite alternate;
+  background: var(--color-brand-positive);
+  animation: agent-pill-pulse var(--motion-agent-pill-pulse) ease-in-out infinite alternate;
 }
 
 .agent-pill-panel {
@@ -109,33 +109,33 @@
   max-height: min(52vh, 480px);
   padding: 12px 12px 2px;
   overflow: auto;
-  border-bottom: 1px solid var(--glass-border);
+  border-bottom: 1px solid var(--material-border);
 }
 .agent-pill-panel > header { display: flex; align-items: center; justify-content: space-between; }
 .agent-pill-panel > header > span { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 720; }
 .agent-header-actions { display: flex; align-items: center; gap: 5px; }
 .agent-run-stop {
   padding: 4px 8px;
-  border: 1px solid color-mix(in srgb, var(--danger) 42%, var(--glass-border));
+  border: 1px solid color-mix(in srgb, var(--color-feedback-danger) 42%, var(--material-border));
   border-radius: 999px;
-  background: var(--danger-soft);
-  color: var(--danger);
+  background: var(--color-feedback-danger-soft);
+  color: var(--color-feedback-danger);
   font-size: 9px;
   font-weight: 700;
   cursor: pointer;
 }
-.agent-privacy { margin: 0; color: var(--text-faint); font-size: 10px; }
+.agent-privacy { margin: 0; color: var(--color-fg-subtle); font-size: 10px; }
 .agent-plan { display: grid; gap: 8px; }
-.agent-plan > p { margin: 0; color: var(--text-muted); font-size: 11px; }
+.agent-plan > p { margin: 0; color: var(--color-fg-muted); font-size: 11px; }
 .agent-assistant-text {
   max-height: 82px;
   padding: 7px 8px;
   overflow: auto;
-  border-left: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
-  background: color-mix(in srgb, var(--surface-raised) 50%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--color-action) 45%, transparent);
+  background: color-mix(in srgb, var(--color-bg-raised) 50%, transparent);
   white-space: pre-wrap;
 }
-.agent-usage { color: var(--text-faint); font: 600 9px/1.3 var(--font-mono); }
+.agent-usage { color: var(--color-fg-subtle); font: 600 9px/1.3 var(--font-family-mono); }
 
 .agent-horizon {
   display: grid;
@@ -151,40 +151,40 @@
   gap: 8px;
   min-height: 44px;
   padding: 6px 7px;
-  border: 1px solid var(--glass-border);
+  border: 1px solid var(--material-border);
   border-radius: 12px;
-  background: color-mix(in srgb, var(--surface-raised) 58%, transparent);
+  background: color-mix(in srgb, var(--color-bg-raised) 58%, transparent);
 }
-.agent-step.state-running { border-color: color-mix(in srgb, var(--brand-green) 45%, var(--glass-border)); }
-.agent-step.state-failed { border-color: color-mix(in srgb, var(--danger) 45%, var(--glass-border)); }
+.agent-step.state-running { border-color: color-mix(in srgb, var(--color-brand-positive) 45%, var(--material-border)); }
+.agent-step.state-failed { border-color: color-mix(in srgb, var(--color-feedback-danger) 45%, var(--material-border)); }
 .agent-step > span:nth-child(2) { display: grid; min-width: 0; }
 .agent-step strong { font-size: 11px; }
-.agent-step small { overflow: hidden; color: var(--text-faint); font-size: 9.5px; white-space: nowrap; text-overflow: ellipsis; }
-.agent-step-state { color: var(--text-faint); font: 650 9px var(--font-mono); text-transform: capitalize; }
+.agent-step small { overflow: hidden; color: var(--color-fg-subtle); font-size: 9.5px; white-space: nowrap; text-overflow: ellipsis; }
+.agent-step-state { color: var(--color-fg-subtle); font: 650 9px var(--font-family-mono); text-transform: capitalize; }
 .agent-step-approval { display: flex; gap: 4px; }
 .agent-step-approval button,
 .agent-step-cancel {
   padding: 4px 7px;
-  border: 1px solid var(--glass-border);
+  border: 1px solid var(--material-border);
   border-radius: 999px;
-  background: var(--surface);
-  color: var(--text-muted);
+  background: var(--color-bg-surface);
+  color: var(--color-fg-muted);
   font-size: 9px;
   cursor: pointer;
 }
-.agent-step-approval button:first-child { border-color: var(--accent); background: var(--accent); color: white; }
+.agent-step-approval button:first-child { border-color: var(--color-action); background: var(--color-action); color: white; }
 
 .agent-suggestions { display: flex; flex-wrap: wrap; gap: 5px; }
 .agent-suggestions button {
   padding: 5px 8px;
-  border: 1px solid var(--glass-border);
+  border: 1px solid var(--material-border);
   border-radius: 999px;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--color-fg-muted);
   font-size: 10px;
   cursor: pointer;
 }
-.agent-suggestions button:hover { border-color: var(--accent); color: var(--accent); }
+.agent-suggestions button:hover { border-color: var(--color-action); color: var(--color-action); }
 
 .agent-receipt {
   display: grid;
@@ -192,20 +192,20 @@
   align-items: center;
   gap: 7px;
   padding: 7px;
-  border: 1px solid var(--glass-border);
+  border: 1px solid var(--material-border);
   border-radius: 12px;
   background: transparent;
-  color: var(--text);
+  color: var(--color-fg-default);
   text-align: left;
   cursor: pointer;
 }
-.agent-receipt > span:first-child { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--success-soft); color: var(--success); }
+.agent-receipt > span:first-child { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--color-feedback-success-soft); color: var(--color-feedback-success); }
 .agent-receipt > span:last-child { display: grid; }
 .agent-receipt strong { font-size: 10px; text-transform: capitalize; }
-.agent-receipt small { color: var(--text-faint); font-size: 9px; }
-.receipt-failed > span:first-child { background: var(--danger-soft); color: var(--danger); }
+.agent-receipt small { color: var(--color-fg-subtle); font-size: 9px; }
+.receipt-failed > span:first-child { background: var(--color-feedback-danger-soft); color: var(--color-feedback-danger); }
 
-@keyframes agent-pill-pulse { to { transform: scale(1.2); box-shadow: 0 0 0 5px color-mix(in srgb, var(--brand-green) 12%, transparent); } }
+@keyframes agent-pill-pulse { to { transform: scale(1.2); box-shadow: 0 0 0 5px color-mix(in srgb, var(--color-brand-positive) 12%, transparent); } }
 
 .with-sidebar .agent-pill { right: max(16px, env(safe-area-inset-right)); }
 
@@ -227,7 +227,7 @@
 
 :root[data-shell='fold-laptop'] .agent-pill {
   right: 50%;
-  bottom: calc(var(--statusbar-height) + 12px);
+  bottom: calc(var(--layout-statusbar-height) + 12px);
   width: min(680px, calc(100vw - 32px));
   transform: translateX(50%);
 }

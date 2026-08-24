@@ -40,8 +40,12 @@ export class PresenceActivityController {
     }
     this.windowTarget = options.windowTarget;
     this.documentTarget = options.documentTarget;
-    this.schedule = options.setTimeout ?? globalThis.setTimeout;
-    this.cancel = options.clearTimeout ?? globalThis.clearTimeout;
+    // Browser timer methods require their Window receiver in some engines.
+    // Keep the injectable test clock, but never retain an unbound native
+    // method: Chromium reports `TypeError: Illegal invocation` before a
+    // document session can hydrate.
+    this.schedule = options.setTimeout ?? ((callback, delay) => globalThis.setTimeout(callback, delay));
+    this.cancel = options.clearTimeout ?? ((timer) => globalThis.clearTimeout(timer));
   }
 
   get state(): PresenceActivityState {

@@ -108,7 +108,7 @@ export function FoldableRibbon({ posture }: FoldableRibbonProps) {
       data-agent-active={raised.length ? 'true' : undefined}
     >
       <section className="fold-ribbon-segment fold-ribbon-primary" aria-label="Foldable primary commands">
-        <SurfaceMaterial variant="chrome" intensity={0.92} />
+        <SurfaceMaterial variant="chrome" />
         <header className="fold-ribbon-head">
           <div role="tablist" aria-label="Foldable ribbon tasks">
             <button type="button" role="tab" aria-selected={task === 'compose'} onClick={() => setTask('compose')}>Compose</button>
@@ -134,7 +134,7 @@ export function FoldableRibbon({ posture }: FoldableRibbonProps) {
       {posture.hinge === 'vertical' && <div className="fold-ribbon-hinge" aria-hidden="true" />}
 
       <section className="fold-ribbon-segment fold-ribbon-companion" aria-label="Foldable companion commands">
-        <SurfaceMaterial variant="chrome" intensity={0.86} />
+        <SurfaceMaterial variant="chrome" modifier="subtle" />
         <header className="fold-ribbon-head">
           <strong>{task === 'compose' ? 'Companion' : 'Quick compose'}</strong>
           <span>{raised.length ? 'Agent-directed' : posture.hinge === 'vertical' ? 'Second screen' : 'Lower touch shelf'}</span>
@@ -146,7 +146,7 @@ export function FoldableRibbon({ posture }: FoldableRibbonProps) {
 
       {moreOpen && (
         <div className="fold-command-library surface-material-host" role="dialog" aria-modal="false" aria-label="All foldable commands">
-          <SurfaceMaterial variant="floating" intensity={1.08} />
+          <SurfaceMaterial variant="floating" />
           <header>
             <div>
               <strong>Command library</strong>

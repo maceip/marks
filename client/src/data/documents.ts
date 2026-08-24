@@ -17,8 +17,6 @@ import type { DocumentMeta } from '../lib/api';
 import { UI_DATA_MODE } from '../lib/product';
 import { ServiceError } from '../lib/service-errors';
 import { loadServiceApi } from '../lib/service-api.ts';
-import { purgeLocalReviewMetadata } from './review';
-import { purgeLocalDocumentAssets } from './assets';
 
 const DOCUMENT_REPOSITORY_EVENT = 'marks:document-repository-change';
 
@@ -76,8 +74,14 @@ function createDocumentRepository(): DocumentRepository {
         return restoreLocalDocument(id);
       },
       async purge(id) {
-        await purgeLocalReviewMetadata(id);
-        await purgeLocalDocumentAssets(id);
+        const [{ purgeLocalReviewMetadata }, { purgeLocalDocumentAssets }] = await Promise.all([
+          import('./review'),
+          import('./assets'),
+        ]);
+        await Promise.all([
+          purgeLocalReviewMetadata(id),
+          purgeLocalDocumentAssets(id),
+        ]);
         purgeLocalDocument(id);
       },
       subscribe(listener) {

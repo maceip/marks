@@ -1,3 +1,4 @@
+import '../../styles/outline.css';
 import type { Heading } from '../../markdown/types';
 import { Icon, icons } from '../ui/Icon';
 

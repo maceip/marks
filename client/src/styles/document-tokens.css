@@ -1,0 +1,51 @@
+/* Document-only semantic colors. Loaded with the lazy workspace boundary. */
+:root {
+  --color-selection: var(--primitive-blue-100);
+  --color-selection-match: #e8edff;
+  --color-search-match: #fdf0c2;
+  --color-search-match-active: var(--primitive-amber-300);
+  --color-active-line: #f7f7fa;
+  --color-code-fg: var(--primitive-red-700);
+  --color-code-bg: var(--primitive-neutral-75);
+  --color-code-block-bg: var(--primitive-neutral-50);
+  --color-syntax-keyword: #8250df;
+  --color-syntax-string: var(--primitive-green-700);
+  --color-syntax-number: #b8500b;
+  --color-syntax-function: #2a5cd7;
+  --color-syntax-type: var(--primitive-red-700);
+  --color-syntax-comment: #8b909a;
+  --color-collaborator-1: #e0567a;
+  --color-collaborator-2: #2f8f5b;
+  --color-collaborator-3: #2f6fd0;
+  --color-collaborator-4: #c2681a;
+  --color-collaborator-5: #8a4fd8;
+  --color-collaborator-6: #0f8f9e;
+  --color-collaborator-7: #c43b8e;
+  --color-collaborator-8: #6b7a2f;
+
+}
+
+[data-theme='dark'] {
+  --color-selection: #294079;
+  --color-selection-match: #22345e;
+  --color-search-match: #4a3f16;
+  --color-search-match-active: #6d5c1d;
+  --color-active-line: #191d23;
+  --color-code-fg: #f0879c;
+  --color-code-bg: #21262e;
+  --color-code-block-bg: #14171c;
+  --color-syntax-keyword: #c39bfa;
+  --color-syntax-string: #7ed3a5;
+  --color-syntax-number: #f0b072;
+  --color-syntax-function: #86b6f8;
+  --color-syntax-type: #f0879c;
+  --color-syntax-comment: #737b88;
+  --color-collaborator-1: #ff8098;
+  --color-collaborator-2: #5fd28f;
+  --color-collaborator-3: #74a9f5;
+  --color-collaborator-4: #f0a45e;
+  --color-collaborator-5: #bb92f5;
+  --color-collaborator-6: #4fc6d4;
+  --color-collaborator-7: #f078bd;
+  --color-collaborator-8: #b3c46b;
+}

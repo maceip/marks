@@ -83,8 +83,11 @@ export function useSession(
           next.onHydrated(() => setHydrated(true)),
         ];
       })
-      .catch(() => {
-        if (active) setStatus('offline');
+      .catch((error) => {
+        if (active) {
+          console.error('[marks] session bootstrap failed', error);
+          setStatus('offline');
+        }
       });
 
     return () => {

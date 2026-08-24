@@ -1,6 +1,5 @@
 import type { EditorView } from '@codemirror/view';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { logout } from './auth/identity';
 import type { CommandEnvironment } from './commands/types';
 import { bindPendingDevice, getOrCreatePendingDevice } from './auth/pending-device';
 import { ensureServiceCaller, getActiveCaller, type ServiceCaller } from './auth/caller';
@@ -14,7 +13,6 @@ import type { CursorInfo } from './components/workspace/EditorPane';
 import { StatusBar } from './components/workspace/StatusBar';
 import { ABOUT_DOCUMENT_ID, isAboutDocument } from './content/about';
 import { signalDocumentRepositoryChange } from './data/documents';
-import { createLocalPortableBundle } from './data/assets';
 import { Home } from './pages/Home';
 import { LOGOUT_LOCAL_LINE } from './lib/identity-copy';
 import { readPairingHash } from './lib/pairing-link';
@@ -46,6 +44,9 @@ import type { Heading } from './markdown/types';
 
 const Benchmark = lazy(() =>
   import('./pages/Benchmark').then((module) => ({ default: module.Benchmark })),
+);
+const DesignSystem = lazy(() =>
+  import('./design-system/DesignSystem').then((module) => ({ default: module.DesignSystem })),
 );
 const Workspace = lazy(() =>
   import('./components/workspace/Workspace').then((module) => ({ default: module.Workspace })),
@@ -169,7 +170,7 @@ export function App() {
     history.replaceState(null, '', `${location.pathname}${location.search}`);
   }, []);
 
-  const documents = useDocuments(route.name !== 'benchmark');
+  const documents = useDocuments(route.name !== 'benchmark' && route.name !== 'design-system');
   const docId = route.name === 'document' ? route.id : null;
   const { meta, engine, supported, resolved } = useDocumentMeta(docId);
   const { session, status, peers, hydrated } = useSession(
@@ -473,7 +474,7 @@ export function App() {
       await session.whenDurable();
       const blob = UI_DATA_MODE === 'service'
         ? await (await loadServiceApi()).downloadDocumentBundle(docId)
-        : await createLocalPortableBundle(docId, session.getText());
+        : await (await import('./data/assets')).createLocalPortableBundle(docId, session.getText());
       const filename = `${exportStem(title)}.zip`;
       downloadBlob(blob, filename);
       notify('Portable bundle exported', `${filename} contains Markdown and referenced images.`, 'success');
@@ -610,7 +611,8 @@ export function App() {
           break;
         case 'logout':
           if (UI_DATA_MODE === 'service' && serviceCaller?.kind === 'session') {
-            void logout()
+            void import('./auth/identity')
+              .then(({ logout }) => logout())
               .then(() => {
                 setServiceCaller(null);
                 void ensureServiceCaller({ forceProbe: true }).then(setServiceCaller);
@@ -712,6 +714,8 @@ export function App() {
     document.title =
       route.name === 'benchmark'
         ? 'Benchmark · marks'
+        : route.name === 'design-system'
+          ? 'Design system · marks'
         : route.name === 'link'
           ? 'Phone confirmation · marks'
           : route.name === 'document'
@@ -778,6 +782,14 @@ export function App() {
     onToggleRibbon: () => setRibbonCollapsed((collapsed) => !collapsed),
     onToggleVoice: session?.capabilities().edit ? surface.toggleVoice : undefined,
   }), [getView, runAction, session, surface.toggleVoice, toggleTheme]);
+
+  if (route.name === 'design-system') {
+    return (
+      <Suspense fallback={<div className="empty-state">Loading design system…</div>}>
+        <DesignSystem onBack={() => navigate({ name: 'home' })} />
+      </Suspense>
+    );
+  }
 
   const appSurface = (
     <div className={`app route-${route.name}${sidebarOpen && !focusMode && !posture.foldable ? ' with-sidebar' : ''}${focusMode ? ' focus-mode' : ''}${ribbonCollapsed ? ' ribbon-collapsed' : ''}${practicalSurface ? ' practical-open' : ''}`} data-shell={posture.shell} data-doc={docId ?? undefined}>

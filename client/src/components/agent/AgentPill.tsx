@@ -509,7 +509,7 @@ export function AgentPill({ documentId, linkedSurface = null }: AgentPillProps) 
       data-linked-surface={linkedSurface ?? undefined}
       aria-label="Marks command agent"
     >
-      <SurfaceMaterial variant="floating" intensity={1.22} />
+      <SurfaceMaterial variant="floating" modifier="emphasized" />
       {expanded && (
         <div className="agent-pill-panel">
           <header>
