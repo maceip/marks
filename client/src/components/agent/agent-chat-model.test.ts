@@ -18,7 +18,8 @@ test('responsive shells select a non-obstructive host', () => {
   assert.equal(agentChatHost('desktop'), 'floating');
   assert.equal(agentChatHost('studio'), 'anchored-panel');
   assert.equal(agentChatHost('phone'), 'phone-tools-sheet');
-  assert.equal(agentChatHost('fold-book'), 'companion-stage');
+  assert.equal(agentChatHost('fold-book'), 'floating');
+  assert.equal(agentChatHost('fold-laptop'), 'anchored-panel');
 });
 
 test('active work offers cancellation and a recoverable error offers retry', () => {

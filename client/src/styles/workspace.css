@@ -14,6 +14,29 @@
   grid-template-columns: 0 0 1fr;
 }
 
+/* Unfolded foldables are one continuous canvas. Split uses the same hairline
+   divider as desktop — never a hinge-sized dead zone, never stacked on a
+   horizontal hinge. These beat the phone media-query collapse. */
+:root[data-shell='fold-book'] .workspace.mode-split,
+:root[data-shell='fold-laptop'] .workspace.mode-split {
+  grid-template-columns: var(--split, 50%) 6px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+:root[data-shell='fold-book'] .workspace.mode-split .splitter,
+:root[data-shell='fold-laptop'] .workspace.mode-split .splitter {
+  display: block;
+  pointer-events: auto;
+  background: var(--color-border-default);
+}
+
+:root[data-shell='fold-book'] .workspace.mode-split .preview-pane,
+:root[data-shell='fold-laptop'] .workspace.mode-split .preview-pane {
+  display: flex;
+  border-left: 1px solid var(--color-border-default);
+  border-top: 0;
+}
+
 .workspace.mode-edit .preview-pane,
 .workspace.mode-edit .splitter,
 .workspace.mode-preview .editor-pane,

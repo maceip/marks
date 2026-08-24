@@ -197,8 +197,8 @@ fallback when those signals are absent. Shared fallback widths live in
 - **studio** — tablet mid-width: compact top ribbon, modal document drawer.
 - **desktop** — persistent document rail, full ribbon, selection mini-toolbar,
   and the floating liquid dock.
-- **fold-book** — one wide canvas with a 72px view rail (thinner than Material 3's 80dp navigation rail) for Markdown / Split / Preview. Split snaps the editor and preview to the vertical hinge. The ribbon spans the full remaining chrome width and follows the rail's view, not pane clicks.
-- **fold-laptop** — the same view rail and full-width ribbon; Split stacks source above preview on the horizontal hinge.
+- **fold-book** — one wide canvas with a 72px view rail (thinner than Material 3's 80dp navigation rail) for Markdown / Split / Preview. Split is the desktop two-column layout with a hairline divider; there is no hinge gutter. The ribbon spans the full remaining chrome width and follows the rail's view, not pane clicks.
+- **fold-laptop** — the same view rail, full-width ribbon, and continuous two-column Split. Do not stack panes on a horizontal hinge.
 
 `?marks-posture=fold-book` (or `fold-laptop`) forces a shell for walkthroughs
 when hardware segments are unavailable.

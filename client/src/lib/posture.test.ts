@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { classifyPosture } from './posture.ts';
+import { classifyPosture, postureCssVars } from './posture.ts';
 
 describe('classifyPosture', () => {
   it('uses viewport segments for a book fold, not width', () => {
@@ -76,7 +76,24 @@ describe('classifyPosture', () => {
     });
     assert.equal(posture.shell, 'fold-book');
     assert.equal(posture.segments, 2);
-    assert.ok(posture.geometry.hingeGap > 0);
+    assert.equal(posture.geometry.hingeGap, 0);
+  });
+
+  it('does not publish hinge geometry as layout CSS variables', () => {
+    const posture = classifyPosture({
+      width: 1280,
+      height: 800,
+      coarse: true,
+      spanningHorizontal: true,
+      segments: [
+        { x: 0, y: 0, width: 620, height: 800 },
+        { x: 656, y: 0, width: 624, height: 800 },
+      ],
+    });
+    const vars = postureCssVars(posture);
+    assert.equal('--hinge-gap' in vars, false);
+    assert.equal('--segment-0-width' in vars, false);
+    assert.ok('--keyboard-inset' in vars);
   });
 
   it('detects a virtual keyboard from the visual viewport', () => {

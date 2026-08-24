@@ -286,18 +286,6 @@
   .causal-lightpath .lightpath-rail { grid-column: 1 / -1; grid-row: 2; }
 }
 
-.wild-studio[data-shell="fold-book"] {
-  right: max(14px, env(safe-area-inset-right));
-  left: auto;
-  width: min(560px, calc(var(--segment-1-width) - 28px));
-}
-.wild-studio[data-shell="fold-laptop"] {
-  inset: calc(var(--segment-0-height) + var(--hinge-gap) + 98px) max(14px, env(safe-area-inset-right)) 116px max(14px, env(safe-area-inset-left));
-  width: auto;
-  max-width: none;
-}
-.wild-studio[data-shell="fold-laptop"] .intent-horizon { grid-template-columns: repeat(3, minmax(180px, 1fr)); }
-
 @media (prefers-reduced-motion: reduce) {
   .wild-studio,
   .causal-lightpath,

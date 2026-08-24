@@ -106,6 +106,9 @@ export function useDevicePosture(): Posture {
     root.dataset.shell = posture.shell;
     root.dataset.hinge = posture.hinge;
     root.dataset.keyboard = posture.keyboardOpen ? 'open' : 'closed';
+    for (const name of ['--segment-0-width', '--segment-1-width', '--segment-0-height', '--segment-1-height', '--hinge-gap']) {
+      root.style.removeProperty(name);
+    }
     for (const [name, value] of Object.entries(postureCssVars(posture))) {
       root.style.setProperty(name, value);
     }

@@ -1,7 +1,6 @@
 .agent-chat-host { z-index: 28; color: var(--color-fg-default); }
 .agent-chat-host.host-floating { position: fixed; right: 28px; top: calc(var(--ribbon-height) + 18px); }
 .agent-chat-host.host-anchored-panel { position: absolute; right: 18px; top: calc(var(--layout-ribbon-height) + 12px); }
-.agent-chat-host.host-companion-stage { position: relative; margin: 16px auto; width: min(92%, 560px); }
 .agent-chat-host.host-phone-tools-sheet { position: relative; width: 100%; }
 .agent-chat-launcher, .agent-chat-surface { border: 1px solid var(--material-border); box-shadow: var(--material-elevation); overflow: hidden; }
 .agent-chat-launcher { position: relative; display: flex; gap: 8px; align-items: center; min-height: 44px; padding: 0 17px; border-radius: 999px; background: var(--material-tint-strong); color: var(--color-fg-default); font-weight: 650; transition: transform var(--motion-fast); }

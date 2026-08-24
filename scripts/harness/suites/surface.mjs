@@ -66,8 +66,21 @@ async function measureWorkspacePanes(session) {
       previewTop: pr ? Math.round(pr.top) : 0,
       editorVisible: visible(editor, er),
       previewVisible: visible(preview, pr),
+      gutter: er && pr ? Math.round(pr.left - (er.left + er.width)) : -1,
     };
   });
+}
+
+function isContinuousTwoColumnSplit(panes) {
+  return panes.mode === 'mode-split'
+    && panes.editorVisible
+    && panes.previewVisible
+    && panes.editorW > 80
+    && panes.previewW > 80
+    && Math.abs(panes.editorTop - panes.previewTop) < 24
+    && Math.abs(panes.editorH - panes.previewH) < 48
+    && panes.gutter >= 0
+    && panes.gutter <= 8;
 }
 
 export async function runSurface(session, { check }) {
@@ -346,14 +359,8 @@ export async function runSurface(session, { check }) {
   check('book fold split does not use the phone ghost overlay',
     bookSplit.ghost === false && bookSplit.shell === 'fold-book',
     JSON.stringify(bookSplit));
-  check('book fold split is a real two-pane hinge canvas',
-    bookSplit.mode === 'mode-split' &&
-    bookSplit.editorVisible &&
-    bookSplit.previewVisible &&
-    bookSplit.editorW > 80 &&
-    bookSplit.previewW > 80 &&
-    Math.abs(bookSplit.editorTop - bookSplit.previewTop) < 24 &&
-    bookSplit.previewLeft >= bookSplit.editorLeft + bookSplit.editorW - 8,
+  check('book fold split is a continuous two-column canvas',
+    isContinuousTwoColumnSplit(bookSplit),
     JSON.stringify(bookSplit));
 
   await session.click('.preview-pane');
@@ -403,14 +410,8 @@ export async function runSurface(session, { check }) {
   check('laptop fold split does not use the phone ghost overlay',
     laptopSplit.ghost === false && laptopSplit.shell === 'fold-laptop',
     JSON.stringify(laptopSplit));
-  check('laptop fold split is a real stacked hinge canvas',
-    laptopSplit.mode === 'mode-split' &&
-    laptopSplit.editorVisible &&
-    laptopSplit.previewVisible &&
-    laptopSplit.editorH > 80 &&
-    laptopSplit.previewH > 80 &&
-    Math.abs(laptopSplit.editorLeft - laptopSplit.previewLeft) < 24 &&
-    laptopSplit.previewTop >= laptopSplit.editorTop + laptopSplit.editorH - 8,
+  check('laptop fold split is a continuous two-column canvas',
+    isContinuousTwoColumnSplit(laptopSplit),
     JSON.stringify(laptopSplit));
   if (ribbonWildEnabled) {
     await session.evaluate(() => {
@@ -610,7 +611,7 @@ export const SURFACE_CHECK_NAMES = [
   'unfolded app rail is thinner than the Material 3 80dp rail',
   'book fold ribbon spans its chrome container',
   'book fold split does not use the phone ghost overlay',
-  'book fold split is a real two-pane hinge canvas',
+  'book fold split is a continuous two-column canvas',
   'book fold split keeps compose until the app rail changes the view',
   'book fold preview rail shows inspect commands',
   'disabled ribbon-wild stays absent from foldable command libraries',
@@ -618,7 +619,7 @@ export const SURFACE_CHECK_NAMES = [
   'possibility layer respects the unfolded book posture',
   'laptop fold uses a view rail and a full-width ribbon',
   'laptop fold split does not use the phone ghost overlay',
-  'laptop fold split is a real stacked hinge canvas',
+  'laptop fold split is a continuous two-column canvas',
   'possibility layer respects the unfolded laptop posture',
   'phone uses a focused composer instead of desktop ribbon',
   'phone write keeps a full-width editor under a right-hand ghost preview',

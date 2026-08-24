@@ -871,30 +871,6 @@
 :root[data-shell='fold-book'] .statusbar,
 :root[data-shell='fold-laptop'] .statusbar { display: flex; }
 
-:root[data-shell='fold-book'] .workspace.mode-split {
-  grid-template-columns: minmax(0, calc(var(--segment-0-width) - var(--layout-app-rail-width))) var(--hinge-gap, 28px) minmax(0, 1fr);
-}
-
-:root[data-shell='fold-book'] .workspace.mode-split .splitter {
-  pointer-events: none;
-  background: transparent;
-}
-
-:root[data-shell='fold-laptop'] .workspace.mode-split {
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, var(--segment-0-height, 1fr)) var(--hinge-gap, 24px) minmax(0, 1fr);
-}
-
-:root[data-shell='fold-laptop'] .workspace.mode-split .splitter {
-  pointer-events: none;
-  background: transparent;
-}
-
-:root[data-shell='fold-laptop'] .workspace.mode-split .preview-pane {
-  border-left: 0;
-  border-top: 1px solid var(--color-border-default);
-}
-
 :root[data-shell='fold-book'] .focus-mode .main.route-document,
 :root[data-shell='fold-laptop'] .focus-mode .main.route-document {
   padding-left: 0;

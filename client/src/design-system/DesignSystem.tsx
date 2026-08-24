@@ -249,7 +249,7 @@ export function DesignSystem({ onBack }: { onBack: () => void }) {
             <article className="phone">Phone<br /><small>composer + sheet</small></article>
             <article className="studio">Studio<br /><small>compact ribbon</small></article>
             <article className="desktop">Desktop<br /><small>rail + full ribbon</small></article>
-            <article className="fold">Fold book<br /><small>editor │ companion</small></article>
+            <article className="fold">Fold book<br /><small>view rail + one canvas</small></article>
           </div>
           <ul>
             <li>All controls have visible keyboard focus and a minimum 44px comfortable target.</li>

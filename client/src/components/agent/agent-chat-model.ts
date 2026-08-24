@@ -9,12 +9,11 @@ export type AgentChatState =
   | 'error'
   | 'expanded';
 
-export type AgentChatHost = 'floating' | 'anchored-panel' | 'phone-tools-sheet' | 'companion-stage';
+export type AgentChatHost = 'floating' | 'anchored-panel' | 'phone-tools-sheet';
 
 export function agentChatHost(shell: Shell): AgentChatHost {
   if (shell === 'phone') return 'phone-tools-sheet';
   if (shell === 'studio' || shell === 'fold-laptop') return 'anchored-panel';
-  if (shell === 'fold-book') return 'companion-stage';
   return 'floating';
 }
 

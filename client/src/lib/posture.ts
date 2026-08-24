@@ -150,26 +150,22 @@ function isStacked(segments: ViewportSegment[]): boolean {
 
 function syntheticSegments(width: number, height: number, hinge: Exclude<Hinge, 'none'>): ViewportSegment[] {
   if (hinge === 'vertical') {
-    const pane = Math.round((width - 28) / 2);
+    const pane = Math.round(width / 2);
     return [
       { x: 0, y: 0, width: pane, height },
-      { x: pane + 28, y: 0, width: width - pane - 28, height },
+      { x: pane, y: 0, width: width - pane, height },
     ];
   }
-  const pane = Math.round((height - 24) / 2);
+  const pane = Math.round(height / 2);
   return [
     { x: 0, y: 0, width, height: pane },
-    { x: 0, y: pane + 24, width, height: height - pane - 24 },
+    { x: 0, y: pane, width, height: height - pane },
   ];
 }
 
+/** Hardware metrics stay on the posture model. Layout CSS must not consume a hinge gap. */
 export function postureCssVars(posture: Posture): Record<string, string> {
   return {
-    '--segment-0-width': `${Math.round(posture.geometry.segment0Width)}px`,
-    '--segment-1-width': `${Math.round(posture.geometry.segment1Width)}px`,
-    '--segment-0-height': `${Math.round(posture.geometry.segment0Height)}px`,
-    '--segment-1-height': `${Math.round(posture.geometry.segment1Height)}px`,
-    '--hinge-gap': `${Math.round(posture.geometry.hingeGap)}px`,
     '--keyboard-inset': `${Math.round(posture.keyboardInset)}px`,
   };
 }

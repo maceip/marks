@@ -15,8 +15,8 @@ treatment. Repeated values are a strong signal that the decision belongs in
 `tokens.css`.
 
 A **local custom property** is acceptable when it names component-owned
-geometry or runtime state, such as a responsive split position, foldable hinge
-gap, list item index, avatar color supplied by data, or pointer tilt. Its name
+geometry or runtime state, such as a responsive split position, list item
+index, avatar color supplied by data, or pointer tilt. Its name
 must describe that local purpose, it should be declared near its consumer, and
 it must not be used to alias a palette value or evade a global semantic token.
 

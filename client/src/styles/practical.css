@@ -273,18 +273,6 @@
   }
 }
 
-.practical-inspector[data-shell="fold-book"] {
-  right: max(14px, env(safe-area-inset-right));
-  left: auto;
-  width: min(500px, calc(var(--segment-1-width) - 28px));
-}
-
-.practical-inspector[data-shell="fold-laptop"] {
-  inset: calc(var(--segment-0-height) + var(--hinge-gap) + 98px) max(14px, env(safe-area-inset-right)) 116px max(14px, env(safe-area-inset-left));
-  width: auto;
-  max-width: none;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .practical-inspector { animation: none; }
   .reader-simulation { transition: none; }

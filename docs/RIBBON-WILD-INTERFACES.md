@@ -75,8 +75,8 @@ The command-observation backlog exists only before the telemetry listener mounts
 
 - **Desktop:** all five commands live under Review in `Possibility` and `Time & alternatives` groups. The studio docks to the right and the agent pill contracts into a linked receipt dock instead of covering it.
 - **Phone:** all five commands are in the Document intelligence sheet. The studio becomes a bottom sheet above the composer and safe area. The live causal path moves above the phone controls.
-- **Unfolded book posture:** a 72px view rail switches Markdown / Split / Preview. All five possibility commands live in the full-width Review ribbon. The studio is constrained to the companion physical segment rather than crossing the hinge.
-- **Unfolded laptop posture:** the same view rail and full-width ribbon. The studio occupies the lower segment beneath the horizontal hinge, leaving the upper reading/editing segment intact.
+- **Unfolded book posture:** a 72px view rail switches Markdown / Split / Preview. All five possibility commands live in the full-width Review ribbon. The studio docks to the right of the one continuous canvas, the same as desktop.
+- **Unfolded laptop posture:** the same view rail, full-width ribbon, and right-docked studio. Do not park overlays in a lower hinge segment.
 
 ## Agent and WebMCP boundary
 
