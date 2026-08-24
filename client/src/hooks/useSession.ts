@@ -44,6 +44,18 @@ export function useSession(
       return;
     }
 
+    // Service authority is resolved asynchronously from the first paint. A
+    // fast document lookup (notably in WebKit) can therefore win that race.
+    // Stay in the opening state until admission is available instead of
+    // attempting a session that is guaranteed to fail and then retrying it.
+    if (UI_DATA_MODE === 'service' && !isAboutDocument(docId) && !access) {
+      setSession(null);
+      setStatus('connecting');
+      setHydrated(false);
+      setPeers([]);
+      return;
+    }
+
     let active = true;
     let next: CollabSession | null = null;
     let unsubscribe: Array<() => void> = [];
