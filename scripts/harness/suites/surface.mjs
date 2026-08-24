@@ -1,9 +1,9 @@
 /**
  * Portable browser-surface checks that every driver can run.
  *
- * Deep collab / two-peer / REST cases stay in scripts/smoke.mjs
- * (Playwright). This suite covers the glass: create a doc, preview,
- * select-all, context menu, voice affordance, theme, offline.
+ * Deep collaboration and REST cases stay in scripts/ci-service-ui.mjs
+ * (Playwright against marks-server). This suite covers the portable glass:
+ * create a doc, preview, select-all, context menu, voice, theme, and offline.
  */
 
 import { parseBooleanFlag } from '../env.mjs';

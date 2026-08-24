@@ -11,14 +11,15 @@ before applying any entry.
 
 ## Browser matrix
 
-The retained pre-auth Playwright smoke suite opens each collaborator in an
-independent browser context, but those contexts do not currently establish
-separate valid scratch/session authorities. It is therefore not admitted CI
-evidence. The scenarios below remain the browser/browser acceptance target;
-current release CI instead proves one authorized Playwright client plus a
-native second peer. The target two-browser checks cover avatar/caret arrival,
-selection placement, removal/expiry, edits inserted before a remote cursor,
-and section navigation while the editor is unmounted in preview-only mode.
+The Playwright service suite opens two isolated browser contexts with separate
+IndexedDB and BroadcastChannel state. The current scratch capability is placed
+explicitly in each context, and each must mint its own one-use room ticket, so
+their convergence and presence cross the Rust service. Release CI proves
+browser/browser convergence, caret arrival, live-connection visibility,
+per-peer undo, and preview writeback, then adds native peers. Selection
+placement, removal/expiry, edits inserted before a remote cursor, and section
+navigation while the editor is unmounted in preview-only mode remain the
+broader presence acceptance target.
 Every release run exercises split, editor, and preview modes plus:
 
 * hidden/background tabs and two tabs for one principal;

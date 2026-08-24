@@ -3,9 +3,10 @@
  * Prove the service-mode browser talks to a live marks-server.
  *
  * This is the production-path browser proof: artifact identity, scratch
- * admission, Wasm editing, durable server commit, reload recovery, optional
- * offline journal/reconnect, and Markdown import/export. Pair its receipt
- * with `live_service` for a native second peer on the same document.
+ * admission, two isolated browser replicas, per-peer undo, preview writeback,
+ * durable server commit, reload recovery, optional offline journal/reconnect,
+ * and Markdown import/export. Pair its receipt with `live_service` for native
+ * peers on the same document.
  *
  * Examples:
  *   MARKS_URL=http://127.0.0.1:3000 node scripts/ci-service-ui.mjs
@@ -69,6 +70,23 @@ function pathnameOf(url) {
     return url;
   }
 }
+
+const SCRATCH_STORAGE_KEY = 'marks.auth.scratch.v1';
+const SCROLL_PROSE = Array.from(
+  { length: 24 },
+  (_, index) => `Paragraph ${index + 1}: enough current-service prose to make both panes scroll.`,
+).join('\n\n');
+
+const SERVICE_FIXTURE = (browserName) => `# Current ${browserName} service proof
+
+Cross-browser ${browserName} proof 🧭
+
+- [ ] shared service task
+
+## Scroll synchronization
+
+${SCROLL_PROSE}
+`;
 
 async function readReplicaEvidence(page, documentId) {
   return page.evaluate(async (id) => {
@@ -154,6 +172,32 @@ const check = (name, pass, detail = '') => {
 };
 
 const v1 = [];
+function observePage(page, label) {
+  page.on('console', (message) => {
+    const text = message.text();
+    if (
+      message.type() === 'error' &&
+      (text.includes('[marks]') || /Content Security Policy|Refused to (execute|load)/i.test(text))
+    ) {
+      applicationErrors.push(`${label} console: ${text}`);
+    }
+  });
+  page.on('pageerror', (error) => {
+    applicationErrors.push(`${label} pageerror: ${error.stack ?? error.message}`);
+  });
+  page.on('requestfailed', (request) => {
+    failedRequests.push(
+      `${label} ${request.method()} ${request.url()} — ${request.failure()?.errorText ?? 'unknown'}`,
+    );
+  });
+  page.on('response', (response) => {
+    const path = pathnameOf(response.url());
+    if (path.startsWith('/v1') || path.startsWith('/api') || path.startsWith('/collab')) {
+      v1.push({ label, method: response.request().method(), path, status: response.status() });
+    }
+  });
+}
+
 const browserType = { chromium, firefox, webkit }[args.browser];
 const browser = await browserType.launch(
   args.browser === 'chromium'
@@ -168,29 +212,7 @@ const browser = await browserType.launch(
 try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
-  page.on('console', (message) => {
-    const text = message.text();
-    if (
-      message.type() === 'error' &&
-      (text.includes('[marks]') || /Content Security Policy|Refused to (execute|load)/i.test(text))
-    ) {
-      applicationErrors.push(`console: ${text}`);
-    }
-  });
-  page.on('pageerror', (error) => {
-    applicationErrors.push(`pageerror: ${error.stack ?? error.message}`);
-  });
-  page.on('requestfailed', (request) => {
-    failedRequests.push(
-      `${request.method()} ${request.url()} — ${request.failure()?.errorText ?? 'unknown'}`,
-    );
-  });
-  page.on('response', (response) => {
-    const path = pathnameOf(response.url());
-    if (path.startsWith('/v1') || path.startsWith('/api') || path.startsWith('/collab')) {
-      v1.push({ method: response.request().method(), path, status: response.status() });
-    }
-  });
+  observePage(page, 'primary');
 
   const sessionProbe = page.waitForResponse(
     (response) => pathnameOf(response.url()) === '/v1/auth/session',
@@ -277,12 +299,13 @@ try {
 
   await page.waitForSelector('.cm-content', { timeout: 30_000 });
   const committedText = `Cross-browser ${args.browser} proof 🧭`;
+  const fixture = SERVICE_FIXTURE(args.browser);
   check(
     'admitted scratch document is writable',
     await page.locator('.cm-content').getAttribute('contenteditable') === 'true',
   );
   await page.locator('.cm-content').click();
-  await page.keyboard.insertText(committedText);
+  await page.keyboard.insertText(fixture);
   await page.waitForFunction(
     (expected) => document.querySelector('.cm-content')?.textContent?.includes(expected),
     committedText,
@@ -302,6 +325,161 @@ try {
     { timeout: 30_000 },
   );
   check('editor mutation receives a durable server-visible commit', true, committedText);
+
+  await page.waitForSelector('.marks-preview input[type=checkbox]', { timeout: 30_000 });
+  check(
+    'current service renders an interactive task from the admitted replica',
+    (await page.locator('.marks-preview input[type=checkbox]').count()) === 1,
+  );
+  await page.evaluate(() => {
+    const preview = document.querySelector('.preview-pane');
+    const editor = document.querySelector('.cm-scroller');
+    if (!(preview instanceof HTMLElement) || !(editor instanceof HTMLElement)) {
+      throw new Error('scroll panes are missing');
+    }
+    preview.scrollTop = 0;
+    editor.scrollTop = 0;
+  });
+  const previewCheckbox = page.locator('.marks-preview input[type=checkbox]');
+  await page.waitForTimeout(200);
+  const checkboxCenter = await previewCheckbox.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  });
+  // Use the settled DOM box so WebKit cannot calculate its action point from
+  // the preview's prior synchronized scroll position.
+  await page.mouse.click(checkboxCenter.x, checkboxCenter.y);
+  await page.waitForFunction(
+    () => document.querySelector('.cm-content')?.textContent?.includes('[x] shared service task'),
+    undefined,
+    { timeout: 15_000 },
+  );
+  await page.waitForFunction(
+    async ({ documentId, credential }) => {
+      const response = await fetch(`/v1/documents/${documentId}/export`, {
+        headers: {
+          Authorization: `MarksScratch ${credential.scratchId}.${credential.capability}`,
+        },
+      }).catch(() => null);
+      return response?.ok && (await response.text()).includes('[x] shared service task');
+    },
+    { documentId, credential },
+    { timeout: 30_000 },
+  );
+  check('preview checkbox writes through to the editor and durable service source', true);
+
+  const outlineChord = process.platform === 'darwin' ? 'Meta+Shift+o' : 'Control+Shift+o';
+  await page.keyboard.press(outlineChord);
+  await page.waitForSelector('.outline-item', { timeout: 10_000 });
+  const outlineItems = await page.locator('.outline-item').allInnerTexts();
+  check(
+    'current service outline reflects admitted Markdown headings',
+    outlineItems.some((text) => text.trim() === `Current ${args.browser} service proof`) &&
+      outlineItems.some((text) => text.trim() === 'Scroll synchronization'),
+    JSON.stringify(outlineItems.map((text) => text.trim())),
+  );
+  await page.locator('button[aria-label="Close outline"]').click();
+
+  await page.evaluate(() => {
+    const preview = document.querySelector('.preview-pane');
+    const editor = document.querySelector('.cm-scroller');
+    if (!(preview instanceof HTMLElement) || !(editor instanceof HTMLElement)) {
+      throw new Error('scroll panes are missing');
+    }
+    preview.scrollTop = 0;
+    editor.scrollTop = Math.floor(editor.scrollHeight / 2);
+    editor.dispatchEvent(new Event('scroll', { bubbles: true }));
+  });
+  await page.waitForTimeout(600);
+  const previewScroll = await page.evaluate(
+    () => document.querySelector('.preview-pane')?.scrollTop ?? 0,
+  );
+  check('current service editor scrolling moves the preview', previewScroll > 0, String(previewScroll));
+
+  // The scratch capability is the current temporary-workspace authority. Give
+  // the same explicit bearer to an isolated browser profile, then require that
+  // profile to mint its own one-use room ticket. Separate BrowserContexts do
+  // not share IndexedDB or BroadcastChannel, so convergence must cross the
+  // production Rust service rather than a same-profile shortcut.
+  const peerContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await peerContext.addInitScript(
+    ({ storageKey, scratchCredential }) => {
+      sessionStorage.setItem(storageKey, JSON.stringify(scratchCredential));
+    },
+    { storageKey: SCRATCH_STORAGE_KEY, scratchCredential: credential },
+  );
+  const peerPage = await peerContext.newPage();
+  observePage(peerPage, 'peer');
+  const peerSnapshotWait = peerPage.waitForResponse(
+    (response) =>
+      response.request().method() === 'GET' &&
+      pathnameOf(response.url()) === `/v1/scratch/documents/${documentId}/snapshot`,
+    { timeout: 30_000 },
+  );
+  const peerTicketWait = peerPage.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      pathnameOf(response.url()) === `/v1/scratch/documents/${documentId}/session`,
+    { timeout: 30_000 },
+  );
+  await peerPage.goto(`${BASE}/d/${documentId}`, { waitUntil: 'domcontentloaded' });
+  const [peerSnapshot, peerTicket] = await Promise.all([peerSnapshotWait, peerTicketWait]);
+  check(
+    'second isolated browser is admitted by current scratch authority',
+    peerSnapshot.ok() && peerTicket.ok(),
+    `snapshot ${peerSnapshot.status()} ticket ${peerTicket.status()}`,
+  );
+  await peerPage.waitForSelector('.cm-content', { timeout: 30_000 });
+  await peerPage.waitForFunction(
+    ({ expected, task }) => {
+      const source = document.querySelector('.cm-content')?.textContent;
+      return source?.includes(expected) && source.includes(task);
+    },
+    { expected: committedText, task: '[x] shared service task' },
+    { timeout: 30_000 },
+  );
+  check('isolated browser peer cold-opens committed content including preview writeback', true);
+
+  const peerText = `Second ${args.browser} browser edit`;
+  await peerPage.locator('.cm-line').last().click();
+  await peerPage.keyboard.press('End');
+  await peerPage.keyboard.insertText(`\n\n${peerText}`);
+  await page.waitForFunction(
+    (expected) => document.querySelector('.cm-content')?.textContent?.includes(expected),
+    peerText,
+    { timeout: 30_000 },
+  );
+  check('isolated browser replicas converge through marks-server', true, peerText);
+
+  await page.waitForSelector('.esbt-caret', { timeout: 15_000 });
+  check('current service paints the remote browser caret', true);
+  await page.waitForFunction(
+    () => document.querySelectorAll('.presence-avatar-button').length >= 2,
+    undefined,
+    { timeout: 15_000 },
+  );
+  check('presence bar shows both live browser connections', true, '2 connections');
+
+  const undoChord = process.platform === 'darwin' ? 'Meta+z' : 'Control+z';
+  let peerSource = await peerPage.locator('.cm-content').innerText();
+  for (let attempt = 0; attempt < 5 && peerSource.includes(peerText); attempt += 1) {
+    await peerPage.locator('.cm-content').click();
+    await peerPage.keyboard.press(undoChord);
+    await peerPage.waitForTimeout(500);
+    peerSource = await peerPage.locator('.cm-content').innerText();
+  }
+  check(
+    'per-peer undo removes only the second browser edit',
+    !peerSource.includes(peerText) && peerSource.includes(committedText),
+  );
+  await page.waitForFunction(
+    (removed) => !document.querySelector('.cm-content')?.textContent?.includes(removed),
+    peerText,
+    { timeout: 30_000 },
+  );
+  check('the first browser receives the second browser undo', true);
+
+  await peerContext.close();
 
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForSelector('.cm-content', { timeout: 30_000 });

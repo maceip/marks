@@ -251,21 +251,17 @@ version in `rust-toolchain.toml` (the same pin as
   `room_collab`), strict Wasm identity/ABI verification, Node unit suites
   including `test:wasm`, and the default local client build.
 - `service-collab` — builds `marks-server` plus `VITE_MARKS_DATA_MODE=service`,
-  boots the binary, drives first-paint `/v1` from Playwright, then runs two
-  native ESBT peers against the UI-created document (`npm run ci:service`).
+  boots the binary, drives first-paint `/v1` from Playwright, proves two
+  isolated browser replicas through separately minted room tickets, then runs
+  two native ESBT peers against the UI-created document (`npm run ci:service`).
 
-A green workflow is proof of service-mode admission, native multi-peer room
-convergence, and the Wasm client plumbing tests. It is not a two-live-browser
-paint test. The separate `scheduled-service-smoke.yml` workflow runs daily,
-manually, and whenever its own contract changes: it builds the release-shaped
-service client/server, repeats the Chromium service/native-peer proof, then
-enforces large-document first-render, p50/p95, dirty-block, and DOM-operation
-budgets.
-
-The old `npm run smoke` program is retained for its interaction scenarios, but
-its independent-browser-context sharing path predates the current scratch and
-session admission boundary and is not an admitted service acceptance suite.
-Use `npm run ci:service` for current service evidence.
+A green workflow is proof of current service admission, isolated-browser
+convergence, remote caret/presence rendering, per-peer undo, preview writeback,
+native multi-peer convergence, and the Wasm client plumbing tests. The separate
+`scheduled-service-smoke.yml` workflow runs daily, manually, and whenever its
+own contract changes: it builds the release-shaped service client/server,
+repeats the Chromium browser/native-peer proof, then enforces large-document
+first-render, p50/p95, dirty-block, and DOM-operation budgets.
 
 `npm run smoke:platforms` runs the same document-glass checks (rendering,
 select-all, context menu, honest voice availability, theme, and connectivity
@@ -292,11 +288,11 @@ MARKS_TEST_SERVICE_WORKER=1 npm run ci:service -- --bin target/debug/marks-serve
   churn; format v3 already front-codes and dictionary-codes update payloads,
   which is the compact encoding the paper called future work. Further
   identifier compression remains engine research, not a Marks wiring gap.
-- Local mode is a real Wasm replica with an IndexedDB journal. Service-mode
-  admission and native multi-peer rooms are proven in the `service-collab`
-  CI job. A two-live-browser service proof with independently authorized
-  browser contexts remains a separate acceptance gap; the retained pre-auth
-  `npm run smoke` path does not satisfy it.
+- Local mode is a real Wasm replica with an IndexedDB journal. The
+  `service-collab` CI job proves two isolated browser profiles using the
+  current scratch capability and separately minted one-use room tickets, plus
+  two native peers. Distinct-account link sharing remains a separate product
+  flow covered by the Rust authorization integration tests.
 
 ## Built on
 

@@ -2,17 +2,15 @@
 #   `test` — compile, format, typecheck, unit/integration suites that do not
 #   start the production binary (including in-process room_collab).
 #   `service-collab` — a live marks-server, a VITE_MARKS_DATA_MODE=service
-#   client, Playwright artifact/admission/durable-edit/reload/offline/import
-#   proof in Chromium, Firefox, and WebKit, and two native ESBT peers
-#   converging on the UI-created document.
+#   client, Playwright artifact/admission/two-browser/durable-edit/reload/
+#   offline/import proof in Chromium, Firefox, and WebKit, and two native ESBT
+#   peers converging on the UI-created document.
 #
 # What it is not:
 #   `npm run test:harness` is helper-unit tests. `smoke:platforms` stays local.
-#   The retained pre-auth `npm run smoke` path is not an admitted service proof.
-#   CI proves native multi-peer rooms plus Wasm plumbing units. The service
-#   matrix proves one production browser at a time plus native second peers;
-#   it is not a two-live-browser paint test. The scheduled workflow separately
-#   reruns the Chromium release shape and enforces large-document UI budgets.
+#   CI proves isolated browser replicas, native multi-peer rooms, and Wasm
+#   plumbing units. The scheduled workflow separately reruns the Chromium
+#   release shape and enforces large-document UI budgets.
 #   Floating `stable` is forbidden: pin rust-toolchain.toml / rust-version.
 name: CI
 

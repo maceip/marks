@@ -1,7 +1,6 @@
 # Nightly coverage that is intentionally different from the required CI matrix:
 # build the production release shape, rerun the current Chromium service/admission
 # proof with a native second peer, then enforce large-document UI latency budgets.
-# The retired pre-auth `npm run smoke` path is not an admitted service proof.
 name: Scheduled service smoke and performance
 
 on:

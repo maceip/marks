@@ -96,6 +96,7 @@ const userKey = (siteId: string) => `${siteId}-cm-user`;
 const fromCrdt = Annotation.define<boolean>();
 const setEditorEditable = StateEffect.define<boolean>();
 const EDITOR_ORIGIN = 'editor';
+const SESSION_ORIGIN = 'session';
 
 let sharedRuntime: Promise<EsbtRuntime> | null = null;
 
@@ -475,7 +476,7 @@ export class EsbtEngine implements CollabSession {
     try {
       update.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
         const insert = inserted.sliceString(0, 1e9, '\n');
-        this.replaceRangeChunked(fromA, toA, insert);
+        this.replaceRangeChunked(fromA, toA, insert, EDITOR_ORIGIN);
       });
     } catch (error) {
       if (isEsbtError(error)) {
@@ -487,9 +488,9 @@ export class EsbtEngine implements CollabSession {
     }
   }
 
-  private replaceRangeChunked(from: number, to: number, insert: string): void {
+  private replaceRangeChunked(from: number, to: number, insert: string, origin: string): void {
     const doc = this.requireDoc();
-    const options = { origin: EDITOR_ORIGIN, undoGroup: this.nextUndoGroup() };
+    const options = { origin, undoGroup: this.nextUndoGroup() };
     if (to - from + insert.length <= EDITOR_CHUNK_UNITS) {
       doc.transact(() => {
         if (to > from) doc.delete(from, to - from);
@@ -551,7 +552,10 @@ export class EsbtEngine implements CollabSession {
   replaceRange(from: number, to: number, insert: string): void {
     if (!this.doc || !this.capabilities().edit) return;
     try {
-      this.replaceRangeChunked(from, to, insert);
+      // Unlike a CodeMirror transaction, an API-level mutation has not
+      // already changed the mounted editor. Give it a distinct origin so the
+      // CRDT-to-editor bridge applies the resulting visible edit.
+      this.replaceRangeChunked(from, to, insert, SESSION_ORIGIN);
     } catch (error) {
       if (isEsbtError(error)) this.emitEngineError(error);
       else throw error;

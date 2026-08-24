@@ -11,13 +11,13 @@ There are two layers:
   CDP 9222/9223/9224. Used by `.cursor/harness/run-marks-tests.sh` for
   cross-namespace collab against a running **Rust** `marks-server`. It will
   not start the retired Node `server/` workspace. Not required for
-  `npm run smoke` or `smoke:platforms`.
+  `smoke:platforms` or the repository CI matrix.
 
 marks is exercised on three local browser platforms:
 
 | Platform | Role | How it is found |
 | --- | --- | --- |
-| **Playwright** | Production service proof, retained legacy smoke, performance, and the portable surface suite | `playwright` in this repo. Uses its bundled Chromium unless `CHROMIUM_PATH` is set. |
+| **Playwright** | Production two-browser service proof, performance, and the portable surface suite | `playwright` in this repo. Uses its bundled Chromium unless `CHROMIUM_PATH` is set. |
 | **Puppeteer** | Same portable surface suite | `puppeteer-core` (preferred) or `puppeteer`. Never downloads Chrome; it launches the system binary. |
 | **agent-browser** | Same portable surface suite | The Vercel Labs CLI (`node_modules/.bin/agent-browser` or `PATH`). A CLI, not a Node library — the harness wraps it. |
 
@@ -56,7 +56,6 @@ npm run test:bench                 # deterministic engine fixture + receipt stat
 # app must already be running
 npm run measure                    # large-doc preview latency (print only)
 npm run measure -- --budget-p50 150 --budget-p95 300 --budget-first-ms 20000
-npm run smoke                      # retained pre-auth runner; not current service evidence
 npm run smoke:surface              # portable glass checks, Playwright
 npm run smoke:puppeteer
 npm run smoke:agent-browser
@@ -77,7 +76,6 @@ MARKS_TEST_SERVICE_WORKER=1 npm run ci:service -- --bin target/debug/marks-serve
 MARKS_TEST_SERVICE_WORKER=1 npm run ci:service -- --bin target/debug/marks-server --static-dir client/dist --browser webkit
 
 # The scheduled release-shaped workflow uses ci:service, then measure.
-# It deliberately does not call the retained pre-auth smoke runner.
 ```
 
 The retired Node prototype has been removed. `npm run preview` serves only the
@@ -91,14 +89,14 @@ first paint, scoped select-all, preview context menu, honest voice availability,
 theme toggle, and honest local/offline status. This is the set that must stay
 green on all three platforms.
 
-**Retained Playwright smoke** (`scripts/smoke.mjs`) — preserves incremental preview, two-context, undo, checkbox, outline, scroll, REST, deletion, and retired-engine scenarios from before scratch/session admission. Its independent contexts do not currently establish separate valid authorities, so it is not an admitted service proof and is not scheduled.
-
 **Production service matrix** (`scripts/ci-service-ui.mjs` plus
 `crates/marks-server/tests/live_service.rs`) — coherent runtime artifact,
 session/scratch first paint, atomic document creation, snapshot and one-use
-ticket admission, writable CodeMirror, durable server-visible mutation,
-reload recovery, IndexedDB checkpoint, Markdown import/export, and absence of
-uncaught application errors or `/api` aliases. With
+ticket admission, two isolated browser profiles with separate storage and room
+tickets, server-mediated convergence, remote caret/presence, per-peer undo,
+preview checkbox writeback, outline/scroll behavior, durable server-visible
+mutation, reload recovery, IndexedDB checkpoint, Markdown import/export, and
+absence of uncaught application errors or `/api` aliases. With
 `MARKS_TEST_SERVICE_WORKER=1`, Chromium and Firefox additionally prove a cold
 offline service-worker boot, offline journal edit, reconnect, and commit.
 Playwright WebKit aborts offline top-level navigation before a controlling
@@ -121,6 +119,6 @@ hard limits. It runs daily, manually, and on changes to its own contract.
 
 Put a policy unit test in `client/src/browser/*.test.ts` when the logic is a
 function. Put a DOM/gesture check in `scripts/harness/suites/surface.mjs` when
-all three drivers should run it. Put service durability, reload, offline, and
-import/export checks in `scripts/ci-service-ui.mjs`; put live native-peer room
-invariants in `live_service.rs` or `room_collab.rs`.
+all three drivers should run it. Put browser collaboration, service durability,
+reload, offline, and import/export checks in `scripts/ci-service-ui.mjs`; put
+live native-peer room invariants in `live_service.rs` or `room_collab.rs`.

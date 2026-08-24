@@ -36,7 +36,7 @@ Examples:
 The app must already be running. Vite on :5173 proxies /v1 and /collab to the
 Rust marks-server (MARKS_SERVER, default http://localhost:3000). Do not start
 a Node server workspace.
-Deep collab / two-peer / REST checks stay on Playwright: npm run smoke
+Deep browser collaboration and REST checks stay on Playwright: npm run ci:service
 `;
 
 function printHelp() {

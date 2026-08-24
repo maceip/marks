@@ -27,7 +27,6 @@
     "test:auth": "node --experimental-strip-types --test client/src/auth/*.test.ts",
     "test:harness": "node --test scripts/harness/*.test.mjs",
     "harness:probe": "node scripts/harness/probe.mjs",
-    "smoke": "node scripts/smoke.mjs",
     "smoke:surface": "node scripts/harness/run.mjs --driver=playwright",
     "smoke:playwright": "node scripts/harness/run.mjs --driver=playwright",
     "smoke:puppeteer": "node scripts/harness/run.mjs --driver=puppeteer",

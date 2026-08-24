@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { CollabSession } from '../../collab/types';
 import { getPresenceDisplay, PRESENCE_DISPLAY_EVENT, type DocumentPresenceDisplay } from '../../collab/presence-display';
 import { PreviewRenderer, type PreviewStats } from '../../markdown/preview';
+import { taskMarkerAt } from '../../markdown/tasks';
 import type { Heading } from '../../markdown/types';
 
 interface PreviewPaneProps {
@@ -12,8 +13,6 @@ interface PreviewPaneProps {
   onScroll: () => void;
   renderedOnly?: boolean;
 }
-
-const TASK_LINE = /^(\s*(?:[-*+]|\d+\.)\s+)\[([ xX])\]/;
 
 export function PreviewPane({
   session,
@@ -119,10 +118,7 @@ export function PreviewPane({
     return () => observer.disconnect();
   }, [session]);
 
-  /**
-   * Clicking a rendered checkbox edits the source line behind it, so task
-   * lists work the way they do everywhere else instead of being read-only.
-   */
+  /** Resolve preview interactions against the renderer's exact CRDT span. */
   const handleClick = (event: React.MouseEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
 
@@ -141,34 +137,17 @@ export function PreviewPane({
     const block = target.closest('.marks-block') as HTMLElement | null;
     if (!block) return;
 
-    // Find which checkbox inside this block was clicked, then the matching
-    // task line inside the block's source range. Working from the CRDT text
-    // rather than the editor keeps this working in preview-only mode.
+    // Match the checkbox ordinal inside the exact rendered source span. This
+    // remains correct for multi-item list blocks and in preview-only mode.
     const ordinal = Array.from(block.querySelectorAll('input[type="checkbox"]')).indexOf(target);
-    const startLine = Number(block.dataset.line ?? 0);
-    const nextBlock = block.nextElementSibling as HTMLElement | null;
-    const nextLine = nextBlock ? Number(nextBlock.dataset.line ?? NaN) : NaN;
-
-    const lines = session.getText().split('\n');
-    const endLine = Number.isNaN(nextLine) ? lines.length : Math.min(nextLine, lines.length);
-
-    let offset = 0;
-    for (let index = 0; index < startLine && index < lines.length; index++) {
-      offset += lines[index].length + 1;
-    }
-
-    let seen = -1;
-    for (let index = startLine; index < endLine; index++) {
-      const match = TASK_LINE.exec(lines[index]);
-      if (match) {
-        seen += 1;
-        if (seen === ordinal) {
-          const at = offset + match[1].length + 1;
-          session.replaceRange(at, at + 1, match[2] === ' ' ? 'x' : ' ');
-          return;
-        }
-      }
-      offset += lines[index].length + 1;
+    const marker = taskMarkerAt(
+      session.getText(),
+      Number(block.dataset.sourceStart),
+      Number(block.dataset.sourceEnd),
+      ordinal,
+    );
+    if (marker) {
+      session.replaceRange(marker.from, marker.from + 1, marker.checked ? ' ' : 'x');
     }
   };
 
