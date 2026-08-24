@@ -113,11 +113,12 @@ client/                     Vite + React + TypeScript
   auth/                     scratch/device primitives and room admission
   data/                     one document adapter; local workspace or Rust /v1
   browser/                  clipboard, context menu, voice, tab sync, cache
-  collab/                   CollabSession, Wasm ESBT document, journal,
+  collab/                   CollabSession, WIT ESBT component, journal,
                             presence decorations for CodeMirror
   markdown/                 markdown-it setup, incremental block parse, DOM patch
   workers/                  markdown.worker.ts, bench.worker.ts
-  public/esbt.wasm          Rust core + embedded, generated ABI contract
+  public/esbt.component.*   component, WIT, manifest, revision receipt
+  public/esbt.core*.wasm    Jco browser core modules declared by the manifest
   editor/                   CodeMirror 6 setup, commands, theme
   pages/                    route screens: Home, Benchmark
   content/                  canonical documents (About opens in the editor)
@@ -133,17 +134,18 @@ crates/marks-auth/          identity/authorization validators
 crates/marks-server/        the only HTTP/WebSocket process
 ```
 
-Rebuild the Wasm artifact and generated TypeScript binding from the pinned
-ESBT-web revision with `scripts/build-esbt-wasm.sh`; verify its revision,
-content hashes, embedded ABI, import surface, and export signatures with
-`npm run verify:esbt`.
+Rebuild the WebAssembly Component, generated Jco TypeScript binding, core
+modules, WIT source, and provenance manifest from the pinned ESBT-web revision
+with `scripts/build-esbt-component.sh`. `npm run verify:esbt` verifies their
+revision, hashes, Wasm value types, generated TypeScript types, and the WIT
+interface extracted from the actual component.
 
 `marks-server` is one Rust process owning HTTP, sessions, ACLs, durable
 document rooms, and the native ESBT replica (the pinned
 [maceip/ESBT-web](https://github.com/maceip/ESBT-web) core). There is
-intentionally no Node server or compatibility layer: room payloads are the
-Rust core's canonical `ESBM`/`ESBS`/`ESBF` encodings, which the browser
-speaks through the same core compiled to Wasm.
+intentionally no Node server or compatibility layer. Durable room payloads use
+the one canonical `ESBT` artifact envelope and one of its six kinds; the
+browser speaks it through the same Rust core exposed as a WIT component.
 
 ### The rendering path
 
@@ -170,8 +172,11 @@ Documents are stored in **ESBT** (Mechaoui & Imine,
 orders characters by weighted identifiers — Stern–Brocot fractions with an
 integer ladder and a sequence path behind them — so deletes remove state
 instead of leaving tombstones. The browser runs the Rust core through the
-`esbt_doc_*` Wasm ABI (`client/src/collab/wasm`), the same crate
-`marks-server` uses natively. Per-replica undo, transaction batching, and an
+generated `esbt:document/engine` WIT component binding
+(`client/src/collab/wasm`), while `marks-server` uses the same crate natively.
+Typed config, receipts, edits, errors, and document resources cross WIT; bytes
+cross only for the six canonical ESBT artifacts. Per-replica undo,
+transaction batching, and an
 IndexedDB full-snapshot + update journal live on the Marks side of that
 boundary; the engine does not schedule its own compaction or persistence.
 Transient presence is a small Marks-owned, bounded, non-persistent protocol;
@@ -179,11 +184,12 @@ there is no second TypeScript document engine. Comments and version history
 are fully usable in local mode. Remote
 comment storage, commenter authorization, and cross-user history are still
 absent until the authenticated metadata service lands. The binding and release
-boundary is [docs/V1-SCOPE.md](docs/V1-SCOPE.md).
+boundary is [docs/ESBT-INTEGRATION.md](docs/ESBT-INTEGRATION.md).
 
-Presence is intentionally outside durable sync. Its delivered V1 offset path,
-defined degraded behavior, planned V2 anchor path, privacy invariants, and
-reader-first rollout are tracked separately in [docs/PRESENCE.md](docs/PRESENCE.md);
+Presence is intentionally outside durable sync. Selection positions are ESBT
+causal anchors; the retired raw-offset shape is rejected. Defined degraded
+behavior, privacy invariants, and richer planned presence work are tracked
+separately in [docs/PRESENCE.md](docs/PRESENCE.md);
 the avatar/cursor bullet above must not be read as claiming those planned
 semantics.
 
@@ -228,11 +234,11 @@ size, IndexedDB journal saved-ness, and the encoded size of the document.
 ## Tests
 
 ```bash
-npm run verify:esbt      # strict artifact revision/hash/ABI/provenance gate
+npm run verify:esbt      # strict component/WIT/codec/provenance gate
 npm run test:bench       # deterministic trace and median/p95 receipt policy
 npm run test:browser     # clipboard, context-menu, select-all, tab isolation
 npm run test:markdown    # document-global preview invalidation and incremental parse
-npm run test:wasm        # Wasm adapter, site conversion, journal, reconnect fallbacks
+npm run test:component   # WIT adapter, large edits, journal, reconnect fallbacks
 npm run test:auth        # browser/Rust canonical auth wire and scratch helpers
 npm run test:harness     # helper units only: chrome discovery, budget parsers, wait-for-server
 cargo test --workspace   # marks-auth validators plus marks-server HTTP/room integration
@@ -248,8 +254,8 @@ version in `rust-toolchain.toml` (the same pin as
 `workspace.package.rust-version`):
 
 - `test` — format, clippy, workspace tests (including in-process
-  `room_collab`), strict Wasm identity/ABI verification, Node unit suites
-  including `test:wasm`, and the default local client build.
+  `room_collab`), strict component/WIT/codec verification, Node unit suites
+  including `test:component`, and the default local client build.
 - `service-collab` — builds `marks-server` plus `VITE_MARKS_DATA_MODE=service`,
   boots the binary, drives first-paint `/v1` from Playwright, proves two
   isolated browser replicas through separately minted room tickets, then runs

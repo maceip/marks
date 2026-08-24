@@ -92,7 +92,7 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Verify checked-in ESBT artifact identity and ABI
+      - name: Verify checked-in ESBT component, WIT, codec, and provenance
         run: npm run verify:esbt
 
       - name: Browser unit tests
@@ -107,8 +107,8 @@ jobs:
       - name: Benchmark fixture and receipt tests
         run: npm run test:bench
 
-      - name: Wasm client plumbing tests
-        run: npm run test:wasm
+      - name: ESBT component client plumbing tests
+        run: npm run test:component
 
       - name: Browser auth protocol tests
         run: npm run test:auth

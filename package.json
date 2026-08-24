@@ -21,7 +21,7 @@
     "test:surface": "node --experimental-strip-types --test client/src/agent/*.test.ts client/src/commands/*.test.ts client/src/content/*.test.ts client/src/data/*.test.ts client/src/editor/*.test.ts client/src/hooks/*.test.ts client/src/intelligence/*.test.ts client/src/lib/*.test.ts client/src/wild/*.test.ts",
     "test:markdown": "node --experimental-strip-types --test client/src/markdown/*.test.ts client/src/text/*.test.ts",
     "test:bench": "node --experimental-strip-types --test client/src/bench/*.test.ts",
-    "test:wasm": "node --experimental-strip-types --test client/src/collab/*.test.ts client/src/collab/wasm/*.test.ts",
+    "test:component": "node --experimental-strip-types --test client/src/collab/*.test.ts client/src/collab/wasm/*.test.ts",
     "verify:esbt": "node scripts/verify-esbt-artifact.mjs",
     "verify:esbt:dev": "node scripts/verify-esbt-artifact.mjs --allow-dirty-source",
     "test:auth": "node --experimental-strip-types --test client/src/auth/*.test.ts",
@@ -47,6 +47,7 @@
     "deploy:status": "bash scripts/deploy-secure-build.sh status"
   },
   "devDependencies": {
+    "@bytecodealliance/jco-transpile": "0.12.1",
     "agent-browser": "^0.34.0",
     "playwright": "^1.62.1",
     "puppeteer-core": "^25.8.0",

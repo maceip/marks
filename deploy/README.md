@@ -164,7 +164,7 @@ asset before switching production. The repository integration test performs
 that full backup → verify → restore → restart → export/image proof.
 
 For a release build, set the compile-time receipt explicitly and keep the
-strict Wasm verifier green:
+strict component/WIT verifier green:
 
 ```bash
 MARKS_BUILD_REVISION=<40-character-git-sha> MARKS_SOURCE_DIRTY=0 \
@@ -173,7 +173,8 @@ npm run verify:esbt
 ```
 
 The process refuses startup unless `/opt/marks/current/static` contains the
-exact manifest bound into the binary and `esbt.wasm` hashes to that manifest.
+exact manifest bound into the binary and the component, WIT, and every declared
+core module hash to that manifest.
 `GET /v1/artifact` must report `staticArtifactVerified: true`,
 `profileCoherent: true`, and `releaseReady: true`; its response and every server
 response expose matching `X-Marks-Release` and `X-Marks-Engine` values.

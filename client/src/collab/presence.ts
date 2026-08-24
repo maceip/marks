@@ -145,10 +145,19 @@ export function esbtPresence(
       // length; the microtask below retries after every plugin has updated.
       if (main.anchor > document.length || main.head > document.length) return;
       sequence += 1;
-      presence.set(
-        selectionKeyFor(),
-        encodeSelectionPresence(captureSelectionPresence(document, main.anchor, main.head, sequence)),
-      );
+      let encoded;
+      try {
+        encoded = encodeSelectionPresence(
+          captureSelectionPresence(document, main.anchor, main.head, sequence),
+        );
+      } catch (error) {
+        // Presence is lossy UI state. A causally large position or another
+        // typed engine refusal drops this heartbeat without affecting edits.
+        if (error instanceof RangeError
+          || (error instanceof Error && error.name === 'EsbtError')) return;
+        throw error;
+      }
+      presence.set(selectionKeyFor(), encoded);
     };
 
     const schedulePublish = (): void => {

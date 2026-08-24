@@ -225,7 +225,7 @@ with open(body_path, encoding="utf-8") as handle:
 required = {
     "buildRevision": expected,
     "serverSourceDirty": False,
-    "wasmSourceDirty": False,
+    "componentSourceDirty": False,
     "staticArtifactVerified": True,
     "profileCoherent": True,
     "engineCoherent": True,

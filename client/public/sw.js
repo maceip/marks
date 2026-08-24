@@ -8,29 +8,22 @@
  * Updates install in the background and take over on the next navigation.
  * We never prompt the user to refresh.
  */
-const VERSION = 'v4';
+const VERSION = 'v5';
 const SHELL = `marks-shell-${VERSION}`;
 const ASSETS = `marks-assets-${VERSION}`;
 const CURRENT_CACHES = new Set([SHELL, ASSETS]);
 const APP_SHELL = '/';
 const MARKETING_SHELL = '/welcome/';
 const ROOT_RUNTIME = new Set([
-  '/esbt.wasm',
-  '/esbt.wasm.manifest.json',
+  '/esbt.component.manifest.json',
+  '/esbt.component.wasm',
+  '/esbt.wit',
   '/manifest.webmanifest',
   '/theme-bootstrap.js',
 ]);
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(SHELL).then((cache) =>
-      Promise.all(
-        [APP_SHELL, MARKETING_SHELL, ...ROOT_RUNTIME].map((path) =>
-          cache.add(path).catch(() => undefined),
-        ),
-      ),
-    ),
-  );
+  event.waitUntil(precacheCoherentShell());
 });
 
 self.addEventListener('activate', (event) => {
@@ -60,7 +53,7 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith('/v1') || url.pathname.startsWith('/collab')) return;
 
-  if (url.pathname.startsWith('/assets/') || ROOT_RUNTIME.has(url.pathname)) {
+  if (url.pathname.startsWith('/assets/') || isRootRuntime(url.pathname)) {
     event.respondWith(cacheFirst(request));
     return;
   }
@@ -70,6 +63,47 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(networkFirst(request, fallback));
   }
 });
+
+async function precacheCoherentShell() {
+  const cache = await caches.open(SHELL);
+  const manifestResponse = await fetch('/esbt.component.manifest.json');
+  if (!manifestResponse.ok) throw new Error('ESBT component manifest is unavailable');
+  const manifest = await manifestResponse.clone().json();
+  if (!Array.isArray(manifest.core_modules)
+      || manifest.core_modules.length === 0
+      || manifest.core_modules.length > 16) {
+    throw new Error('ESBT component manifest has an invalid core-module set');
+  }
+  const componentPaths = [
+    manifest.component?.path,
+    '/esbt.wit',
+    ...(manifest.core_modules ?? []).map((entry) => entry.path),
+  ];
+  if (componentPaths.some((path) => !isComponentPath(path))) {
+    throw new Error('ESBT component manifest contains an unsafe runtime path');
+  }
+  if (new Set(componentPaths).size !== componentPaths.length) {
+    throw new Error('ESBT component manifest repeats a runtime path');
+  }
+  await cache.put('/esbt.component.manifest.json', manifestResponse);
+  await Promise.all([
+    APP_SHELL,
+    MARKETING_SHELL,
+    '/manifest.webmanifest',
+    '/theme-bootstrap.js',
+    ...componentPaths,
+  ].map((path) => cache.add(path)));
+}
+
+function isComponentPath(path) {
+  return path === '/esbt.component.wasm'
+    || path === '/esbt.wit'
+    || /^\/esbt\.core\d*\.wasm$/.test(path);
+}
+
+function isRootRuntime(path) {
+  return ROOT_RUNTIME.has(path) || /^\/esbt\.core\d*\.wasm$/.test(path);
+}
 
 async function cacheFirst(request) {
   const cached = await caches.match(request);

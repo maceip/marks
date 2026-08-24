@@ -24,7 +24,7 @@ const TIMING_ROWS: Array<{
   {
     key: 'instantiateMs',
     label: 'Warm instantiate',
-    hint: 'Instantiate the fetched artifact and validate its embedded ABI; the first compile is reported separately.',
+    hint: 'Instantiate the generated WIT binding from already compiled core modules; the first compile is reported separately.',
     rate: () => '—',
   },
   {
@@ -48,7 +48,7 @@ const TIMING_ROWS: Array<{
   {
     key: 'hydrateMs',
     label: 'Hydrate snapshot',
-    hint: 'Apply that snapshot to a new document in an already instantiated Wasm module.',
+    hint: 'Apply that snapshot to a new document in an already instantiated component runtime.',
     rate: (receipt, milliseconds) => byteRate(receipt.sizes.snapshotBytes.median, milliseconds),
   },
   {
@@ -104,7 +104,7 @@ export function Benchmark({ onBack }: BenchmarkProps) {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `marks-esbt-benchmark-${receipt.artifact.wasmSha256.slice(0, 12)}.json`;
+    anchor.download = `marks-esbt-benchmark-${receipt.artifact.componentSha256.slice(0, 12)}.json`;
     anchor.click();
     URL.revokeObjectURL(url);
   };
@@ -118,7 +118,7 @@ export function Benchmark({ onBack }: BenchmarkProps) {
 
         <h2>Engine performance receipt</h2>
         <p className="benchmark-lede">
-          This runs the production Rust/Wasm artifact in a worker. It discards one warm-up, records
+          This runs the production ESBT WIT component binding in a worker. It discards one warm-up, records
           three to five fresh replicas, reports median and p95, and keeps every raw sample with the
           artifact, fixture, and browser identity. It measures ESBT only; it does not declare a
           cross-engine winner.
@@ -161,9 +161,10 @@ export function Benchmark({ onBack }: BenchmarkProps) {
             )}
 
             <div className="benchmark-receipt-meta">
-              <span>Wasm {receipt.artifact.wasmSha256.slice(0, 12)}</span>
+              <span>component {receipt.artifact.componentSha256.slice(0, 12)}</span>
               <span>engine {receipt.artifact.engineRevision.slice(0, 12)}</span>
-              <span>ABI v{receipt.artifact.abiVersion}</span>
+              <span>{receipt.artifact.witPackage}</span>
+              <span>wire v{receipt.artifact.wireVersion}</span>
               <span>seed {receipt.fixture.seed}</span>
               <span>{receipt.fixture.trials} recorded trials</span>
             </div>
@@ -198,11 +199,11 @@ export function Benchmark({ onBack }: BenchmarkProps) {
             <div className="benchmark-size-grid">
               <ReceiptValue label="First compile + instantiate" value={formatMs(receipt.firstCompileInstantiateMs)} />
               <ReceiptValue label="Artifact fetch" value={formatMs(receipt.fetchMs)} />
-              <ReceiptValue label="Wasm artifact" value={formatBytes(receipt.artifact.wasmBytes)} />
+              <ReceiptValue label="Component artifact" value={formatBytes(receipt.artifact.componentBytes)} />
+              <ReceiptValue label="Browser core modules" value={formatBytes(receipt.artifact.coreModuleBytes)} />
               <ReceiptValue label="Full snapshot" value={formatBytes(receipt.sizes.snapshotBytes.median)} />
               <ReceiptValue label="Interactive traffic" value={formatBytes(receipt.sizes.updateBytes.median)} />
               <ReceiptValue label="Branch traffic" value={formatBytes(receipt.sizes.mergeBytes.median)} />
-              <ReceiptValue label="Wasm memory after trace" value={formatBytes(receipt.sizes.wasmMemoryBytes.median)} />
               <ReceiptValue
                 label="Convergence"
                 value={`${receipt.outcome.converged ? 'verified' : 'FAILED'} · ${formatCount(receipt.outcome.chars)} chars`}

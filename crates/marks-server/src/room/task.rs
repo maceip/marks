@@ -18,9 +18,9 @@ use crate::db::Db;
 use crate::error::{ApiError, ApiResult};
 use crate::ids::now_ms;
 use crate::store;
+use esbt::Artifact;
 use esbt::ErrorCode;
 use esbt::clock::Version;
-use esbt::snapshot::Message;
 use marks_auth::{DocumentAction, DocumentId, RoomActor, authorize_room_action};
 use rusqlite::{OptionalExtension, params};
 use sha2::{Digest, Sha256};
@@ -557,7 +557,7 @@ impl Room {
                 MSG_EPHEMERAL | MSG_PRESENCE_DELTA => self.client_presence(conn, payload),
                 // These tags are server-to-client engine state. A stale client
                 // must fail closed instead of believing an unacknowledged
-                // legacy write was saved.
+                // direct write was saved.
                 MSG_UPDATE | MSG_SNAPSHOT => self.close_one(conn, CLOSE_INVALID_PAYLOAD),
                 // Unknown client tags are ignored, not fatal: forward-compatible.
                 _ => {}
@@ -670,15 +670,15 @@ impl Room {
                 // Decode once on the hot path. A mutation may carry only the
                 // immutable room site assigned to this actor; otherwise an
                 // editor could forge another collaborator's operation origin.
-                let update = match Message::decode_with_limits(mutation.payload, &self.limits) {
-                    Ok(Message::Update(update))
+                let update = match Artifact::decode_with_limits(mutation.payload, &self.limits) {
+                    Ok(Artifact::Update(update))
                         if update.operations().iter().all(|operation| {
                             operation.origin == actor.site && sequence_fits_storage(operation.seq)
                         }) =>
                     {
                         update
                     }
-                    Ok(Message::Update(_)) | Ok(_) | Err(_) => {
+                    Ok(Artifact::Update(_)) | Ok(_) | Err(_) => {
                         self.close_one(conn, CLOSE_INVALID_PAYLOAD);
                         return;
                     }
@@ -732,9 +732,9 @@ impl Room {
                 // receipt newly introduced to the server must belong to the
                 // submitting actor's assigned site.
                 let incoming_version =
-                    match Message::decode_with_limits(mutation.payload, &self.limits) {
-                        Ok(Message::Snapshot(snapshot)) => snapshot.version,
-                        Ok(Message::FullSnapshot(snapshot)) => snapshot.state.version,
+                    match Artifact::decode_with_limits(mutation.payload, &self.limits) {
+                        Ok(Artifact::CompactSnapshot(snapshot)) => snapshot.version,
+                        Ok(Artifact::FullSnapshot(snapshot)) => snapshot.state.version,
                         Ok(_) | Err(_) => {
                             self.close_one(conn, CLOSE_INVALID_PAYLOAD);
                             return;
@@ -1597,12 +1597,12 @@ fn map_commit_result(result: ApiResult<()>) -> Result<(), u16> {
 }
 
 fn snapshot_envelope(payload: &[u8]) -> bool {
-    payload.len() >= 11
-        && payload[0] == b'E'
-        && payload[1] == b'S'
-        && payload[2] == b'B'
-        && payload[3] == b'M'
-        && matches!(payload[6], 3 | 6)
+    Artifact::classify(payload).is_ok_and(|kind| {
+        matches!(
+            kind,
+            esbt::ArtifactKind::CompactSnapshot | esbt::ArtifactKind::FullSnapshot
+        )
+    })
 }
 
 fn resource_pressure(code: &ErrorCode) -> bool {

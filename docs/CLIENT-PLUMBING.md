@@ -1,8 +1,10 @@
 # Marks client plumbing
 
-The production browser replica is the Rust `esbt` crate compiled to Wasm,
-owned through `client/src/collab/wasm` (`EsbtDocument` over the `esbt_doc_*`
-ABI). The loops the engine deliberately does **not** run — configuration,
+The production browser replica is the Rust `esbt` crate exposed through its
+WIT WebAssembly Component and generated Jco binding, owned through
+`client/src/collab/wasm` (`EsbtDocument` over the typed
+`esbt:document/engine` interface). The loops the engine deliberately does
+**not** run — configuration,
 compaction, persistence, transport — live in `client/src/collab/esbt-engine.ts`.
 
 Normative API and safety rules:
@@ -20,12 +22,14 @@ Marks implements that guide as follows:
 | §5 Error codes | Allocation / depth / size refusals snap the editor back and toast; corrupt frames are dropped |
 | §6 Telemetry | Performance panel reads retained/pending ops, `currentDmax()`, last update bytes, and local journal saved-ness |
 
-The Wasm artifact `client/public/esbt.wasm` is built from the same
+The component set under `client/public/esbt.*` is built from the same
 `ESBT-web` revision pinned in `crates/marks-server/Cargo.toml`. Rebuild it and
-the generated TypeScript ABI with `scripts/build-esbt-wasm.sh`; the artifact
-embeds the IDL it implements. Production loading fetches the format-2 manifest
-beside the Wasm, hashes the received bytes, and returns no runtime until that
-digest matches; streaming compilation runs in parallel but never bypasses the
-hash or embedded-ABI checks. `npm run verify:esbt` checks the pin, clean source
-provenance, profile/ABI/artifact hashes, empty import surface, and every export
-name/arity.
+the generated TypeScript binding with `scripts/build-esbt-component.sh`.
+Production loading validates the component manifest, hashes every declared
+core module before compiling it, and instantiates only the generated Jco
+binding. `npm run verify:esbt` checks the server pin, clean source provenance,
+product profile, WIT source/hash/package, exact official transpiler version,
+component and core
+Wasm headers/hashes/lengths, generated TypeScript value types, and the WIT
+export extracted from the component binary. There is no raw ABI fallback or
+retired ESBT envelope decoder.

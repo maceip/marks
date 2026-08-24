@@ -231,7 +231,7 @@ try {
       && artifact.engineCoherent === true
       && artifact.profileCoherent === true
       && artifact.staticArtifactVerified === true,
-    `${artifact.serverEngineRevision} / ${artifact.wasmEngineRevision}`);
+    `${artifact.serverEngineRevision} / ${artifact.componentEngineRevision}`);
   if (process.env.MARKS_REQUIRE_RELEASE === '1') {
     check('runtime artifact is release-ready', artifact.releaseReady === true, artifact.buildRevision);
   }

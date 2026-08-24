@@ -1,0 +1,195 @@
+package esbt:document@1.0.0;
+
+/// Typed host contract for the ESBT document engine.
+///
+/// Byte lists appear only where the value is a canonical ESBT artifact.
+/// Configuration, edits, receipts, and failures are ordinary WIT values.
+interface engine {
+  type bytes = list<u8>;
+  type utf16-units = list<u16>;
+
+  record site-id {
+    low: u64,
+    high: u64,
+  }
+
+  enum allocation-strategy-kind {
+    midpoint,
+    boundary-low,
+    boundary-high,
+    alternating-by-depth,
+  }
+
+  record allocation-strategy {
+    kind: allocation-strategy-kind,
+    /// Zero only for `midpoint`; otherwise the nonzero gap boundary.
+    boundary: u32,
+  }
+
+  record adaptive-dmax-config {
+    floor: u32,
+    ceiling: u32,
+    window: u32,
+    holdoff-windows: u32,
+  }
+
+  record resource-limits {
+    max-message-bytes: u32,
+    max-operations-per-update: u32,
+    max-identifier-depth: u32,
+    max-version-sites: u32,
+    max-sparse-receipts: u32,
+    max-snapshot-items: u32,
+    max-pending-operations: u32,
+    max-deferred-deletes: u32,
+    max-document-units: u32,
+    max-allocation-attempts: u32,
+    max-retained-operations: u32,
+    max-undo-transactions: u32,
+  }
+
+  record document-config {
+    dmax: u32,
+    base: u32,
+    depth: u32,
+    strategy: allocation-strategy,
+    adaptive-dmax: option<adaptive-dmax-config>,
+    limits: resource-limits,
+  }
+
+  record engine-error {
+    code: u32,
+    message: string,
+  }
+
+  record visible-edit {
+    %from: u32,
+    to: u32,
+    inserted: utf16-units,
+  }
+
+  record operation-ref {
+    origin: site-id,
+    sequence: u64,
+  }
+
+  enum apply-outcome {
+    applied,
+    duplicate,
+    buffered,
+    mixed,
+    noop,
+  }
+
+  record local-change {
+    update: bytes,
+    visible-changed: bool,
+    visible-edits: list<visible-edit>,
+  }
+
+  record apply-receipt {
+    outcome: apply-outcome,
+    accepted-operations: list<operation-ref>,
+    applied-operations: list<operation-ref>,
+    buffered-operations: list<operation-ref>,
+    newly-ready-operations: list<operation-ref>,
+    version: bytes,
+    visible-changed: bool,
+    visible-edits: list<visible-edit>,
+    journal: option<bytes>,
+  }
+
+  enum snapshot-kind {
+    full,
+    compact,
+  }
+
+  enum undo-disposition {
+    preserved,
+    partially-preserved,
+    cleared,
+  }
+
+  record snapshot-receipt {
+    kind: snapshot-kind,
+    version: bytes,
+    visible-changed: bool,
+    visible-edits: list<visible-edit>,
+    undo: undo-disposition,
+  }
+
+  enum affinity {
+    before,
+    after,
+  }
+
+  enum artifact-kind {
+    update,
+    compact-snapshot,
+    full-snapshot,
+    version,
+    anchor,
+    causal-position,
+  }
+
+  record anchored-insert {
+    change: option<local-change>,
+    anchor: bytes,
+  }
+
+  resource document {
+    site: func() -> site-id;
+    length: func() -> u32;
+    text: func() -> utf16-units;
+    state-hash: func() -> u64;
+    pending-operations: func() -> u32;
+    retained-operations: func() -> u32;
+    current-dmax: func() -> u32;
+    version: func() -> bytes;
+    history-floor: func() -> bytes;
+
+    begin-transaction: func(undo-group: option<u64>) -> result<_, engine-error>;
+    commit-transaction: func() -> result<option<local-change>, engine-error>;
+    abort-transaction: func() -> result<_, engine-error>;
+    replace: func(
+      %from: u32,
+      to: u32,
+      inserted: utf16-units,
+      undo-group: option<u64>,
+    ) -> result<option<local-change>, engine-error>;
+    insert-at-anchor: func(
+      anchor: bytes,
+      inserted: utf16-units,
+      undo-group: option<u64>,
+    ) -> result<anchored-insert, engine-error>;
+
+    apply-update: func(update: bytes) -> result<apply-receipt, engine-error>;
+    export-update: func(remote-version: bytes) -> result<bytes, engine-error>;
+    export-compact-snapshot: func() -> result<bytes, engine-error>;
+    export-full-snapshot: func() -> result<bytes, engine-error>;
+    apply-snapshot: func(snapshot: bytes) -> result<snapshot-receipt, engine-error>;
+
+    anchor: func(index: u32, affinity: affinity) -> result<bytes, engine-error>;
+    resolve-anchor: func(anchor: bytes) -> result<u32, engine-error>;
+    capture-causal-position: func(index: u32, affinity: affinity) -> result<bytes, engine-error>;
+    resolve-causal-position: func(position: bytes) -> result<option<u32>, engine-error>;
+
+    prune-history-through: func(version: bytes) -> result<u32, engine-error>;
+    can-undo: func() -> bool;
+    can-redo: func() -> bool;
+    undo: func() -> result<option<local-change>, engine-error>;
+    redo: func() -> result<option<local-change>, engine-error>;
+  }
+
+  default-config: func() -> document-config;
+  default-adaptive-dmax-config: func() -> adaptive-dmax-config;
+  create: func(site: site-id, config: document-config) -> result<document, engine-error>;
+  wire-version: func() -> u16;
+  empty-version: func() -> bytes;
+  classify-artifact: func(artifact: bytes) -> result<artifact-kind, engine-error>;
+  version-covers: func(version: bytes, expected: bytes) -> result<bool, engine-error>;
+}
+
+world esbt {
+  export engine;
+}

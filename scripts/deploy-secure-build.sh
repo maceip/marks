@@ -181,7 +181,7 @@ run_local_gate() {
   (cd "$ROOT" && npm run test:surface)
   (cd "$ROOT" && npm run test:markdown)
   (cd "$ROOT" && npm run test:bench)
-  (cd "$ROOT" && npm run test:wasm)
+  (cd "$ROOT" && npm run test:component)
   (cd "$ROOT" && npm run test:auth)
   (cd "$ROOT" && npm run test:harness)
 

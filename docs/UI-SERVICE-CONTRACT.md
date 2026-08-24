@@ -27,9 +27,10 @@ room admission rule, update this file in the same change.
 | [`ESBT-INTEGRATION.md`](ESBT-INTEGRATION.md) | Engine/wire work; not a second identity system |
 | [`PRESENCE.md`](PRESENCE.md) | Presence states, identity aggregation, transient frames, preview following, privacy, and rollout |
 
-Do not re-litigate ESBT encoding here. Room replica and wire stay canonical
-Rust-core `ESBM` / `ESBS` / `ESBF`. The browser uses the same Rust source
-through a generated, artifact-embedded Wasm ABI; no transcoding package exists.
+Do not re-litigate ESBT encoding here. Durable room replica bytes use the
+canonical Rust-core `ESBT` envelope and its six artifact kinds. The browser
+uses the same Rust source through the generated WIT component binding; no
+transcoding package or raw ABI fallback exists.
 
 ## 2. Two product modes
 
@@ -146,7 +147,7 @@ under `components/`.
 | `client/src/data/review.ts` | Durable local/service comments and named versions | Local rows and quota metadata are transactional IndexedDB records; anchors stay ESBT bytes |
 | `client/src/data/assets.ts` | Local content-addressed image store or service upload | PNG/JPEG/GIF/WebP only; document quotas match the service defaults |
 | `client/src/hooks/useSession.ts` | Opens `CollabSession` only with a provider | Service requires `documentAccess` |
-| `client/src/collab/` | `CollabSession` + Wasm `EsbtEngine` + journal | Local and service rooms speak canonical `ESBM`/`ESBS`/`ESBF` |
+| `client/src/collab/` | `CollabSession` + WIT component `EsbtEngine` + journal | Local and service rooms speak canonical `ESBT` artifacts |
 
 Presentation (`App.tsx`, ribbon, overlays) consumes these modules. It does
 not parse cookies, mint tickets, or choose `/v1` vs `/v1/scratch` itself
@@ -566,8 +567,8 @@ Every binary frame is one tag byte followed by this payload:
 | `0x03` | server → client | canonical server version |
 | `0x04` | server → client | canonical compact/full snapshot |
 | `0x05` | server → client | empty initial-sync boundary |
-| `0x06` | client → server | `MKMT` v1 stable mutation ID, kind, and canonical bytes |
-| `0x07` | server → origin client | `MKCM` v1 mutation ID, durable revision, and committed version |
+| `0x06` | client → server | `MKMT` format byte 1, stable mutation ID, kind, and canonical artifact |
+| `0x07` | server → origin client | `MKCM` format byte 1, mutation ID, durable revision, and committed Version artifact |
 
 Clients never send bare `0x01`/`0x04` under v2. Viewer and commenter sockets
 may not send `0x06`. A mutation remains `saving` until its exact `0x07` receipt
@@ -575,18 +576,18 @@ has been reflected atomically into IndexedDB. Retrying an ID with the same
 digest returns its original receipt; reusing it for different bytes is a
 protocol violation. Comments are not ESBT bytes.
 
-The room currently delivers per-site V1 presence and source offset rendering.
-It does **not** yet deliver the authenticated participant aggregation, server
-bootstrap/removal, V2 engine anchors, activity states, deterministic room
+The room currently delivers per-site presence and ESBT causal-position
+selection rendering. It does **not** yet deliver authenticated participant
+aggregation, server bootstrap/removal, activity states, deterministic room
 colors, or preview-follow modes in [`PRESENCE.md`](PRESENCE.md). Loss or
 rejection of presence is the defined degraded path: keep editing and durable
 sync working, and hide stale decorations rather than inventing identity or
 positions.
 
-**Service-mode text sync uses the Rust/Wasm `CollabSession`.** The room and
-the browser speak the same `ESBM`/`ESBS`/`ESBF` encodings. Do not add a
-TypeScript transcoder. Catalog, identity, admission, snapshot fetch, and
-room bytes all go through that one binding.
+**Service-mode text sync uses the Rust/WIT-component `CollabSession`.** The room
+and browser speak the same unified `ESBT` artifact codec. Do not add a
+TypeScript transcoder. Catalog, identity, admission, snapshot fetch, and room
+bytes all go through that one binding.
 
 ## 8. Product behavior invariants
 

@@ -11,15 +11,17 @@ import type {
   BenchTrial,
 } from '../bench/types';
 import {
-  ESBT_WASM_URL,
+  ESBT_COMPONENT_MANIFEST_URL,
   EsbtDocument,
   EsbtRuntime,
   MARKS_DOCUMENT_CONFIG,
+  isEsbtComponentManifest,
   marksSiteToEngine,
+  verifyComponentArtifact,
   type EsbtDocument as Document,
+  type EsbtComponentManifest,
 } from '../collab/wasm';
 
-const MANIFEST_URL = `${ESBT_WASM_URL}.manifest.json`;
 const TIMINGS: BenchTiming[] = [
   'instantiateMs',
   'localMs',
@@ -29,14 +31,11 @@ const TIMINGS: BenchTiming[] = [
   'mergeMs',
 ];
 
-interface ArtifactManifest {
-  format: number;
-  engine_revision: string;
-  source_dirty: boolean;
-  source_sha256: string;
-  abi_version: number;
-  wasm_sha256: string;
-  compiler: string;
+type CoreModules = Readonly<Record<string, Uint8Array<ArrayBuffer>>>;
+
+interface ArtifactBundle {
+  manifest: EsbtComponentManifest;
+  coreModules: CoreModules;
 }
 
 const post = (message: BenchMessage): void => {
@@ -72,14 +71,14 @@ function applyBranch(doc: Document, operations: number, seed: number): void {
 }
 
 async function runTrial(
-  wasm: Uint8Array<ArrayBuffer>,
+  coreModules: CoreModules,
   trace: readonly TraceOp[],
   options: Pick<BenchOptions, 'branchOps' | 'seed'>,
   trial: number,
   siteBase: number,
 ): Promise<BenchTrial> {
   const instantiateStart = performance.now();
-  const runtime = await EsbtRuntime.fromBytes(wasm);
+  const runtime = await EsbtRuntime.fromCoreModules(coreModules);
   const instantiateMs = performance.now() - instantiateStart;
   const documents: Document[] = [];
 
@@ -147,7 +146,6 @@ async function runTrial(
       updateBytes,
       mergeBytes: forA.byteLength + forB.byteLength,
       emittedUpdates: updates.length,
-      wasmMemoryBytes: runtime.exports.memory.buffer.byteLength,
       chars: local.length,
       converged,
     };
@@ -161,6 +159,44 @@ async function sha256(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   return [...new Uint8Array(digest)]
     .map((byte) => byte.toString(16).padStart(2, '0'))
     .join('');
+}
+
+async function fetchArtifactBundle(): Promise<ArtifactBundle> {
+  const manifestResponse = await fetch(ESBT_COMPONENT_MANIFEST_URL);
+  if (!manifestResponse.ok) {
+    throw new Error(`could not load the component manifest (${manifestResponse.status})`);
+  }
+  const manifest: unknown = await manifestResponse.json();
+  if (!isEsbtComponentManifest(manifest)) {
+    throw new Error('component manifest is malformed or unsupported');
+  }
+
+  const [componentResponse, witResponse, ...moduleResponses] = await Promise.all([
+    fetch(manifest.component.path),
+    fetch('/esbt.wit'),
+    ...manifest.core_modules.map((descriptor) => fetch(descriptor.path)),
+  ]);
+  if (!componentResponse.ok || !witResponse.ok || moduleResponses.some((response) => !response.ok)) {
+    throw new Error('could not load every declared component artifact');
+  }
+
+  const [componentBuffer, witBuffer, ...moduleBuffers] = await Promise.all([
+    componentResponse.arrayBuffer(),
+    witResponse.arrayBuffer(),
+    ...moduleResponses.map((response) => response.arrayBuffer()),
+  ]);
+  await verifyComponentArtifact(new Uint8Array(componentBuffer), manifest.component);
+  if (await sha256(new Uint8Array(witBuffer)) !== manifest.wit_sha256) {
+    throw new Error('WIT contract does not match its provenance manifest');
+  }
+
+  const coreModules: Record<string, Uint8Array<ArrayBuffer>> = {};
+  await Promise.all(manifest.core_modules.map(async (descriptor, index) => {
+    const bytes = new Uint8Array(moduleBuffers[index]!);
+    await verifyComponentArtifact(bytes, descriptor);
+    coreModules[descriptor.path.slice(descriptor.path.lastIndexOf('/') + 1)] = bytes;
+  }));
+  return { manifest, coreModules };
 }
 
 async function benchmark(options: BenchOptions): Promise<BenchReceipt> {
@@ -178,32 +214,17 @@ async function benchmark(options: BenchOptions): Promise<BenchReceipt> {
 
   post({ type: 'progress', phase: 'fetching and identifying the production artifact' });
   const fetchStart = performance.now();
-  const [wasmResponse, manifestResponse] = await Promise.all([
-    fetch(ESBT_WASM_URL),
-    fetch(MANIFEST_URL),
-  ]);
-  if (!wasmResponse.ok || !manifestResponse.ok) {
-    throw new Error('could not load the benchmark artifact and manifest');
-  }
-  const [wasmBuffer, manifest] = await Promise.all([
-    wasmResponse.arrayBuffer(),
-    manifestResponse.json() as Promise<ArtifactManifest>,
-  ]);
+  const { manifest, coreModules } = await fetchArtifactBundle();
   const fetchMs = performance.now() - fetchStart;
-  const wasm = new Uint8Array(wasmBuffer);
-  const wasmSha256 = await sha256(wasm);
-  if (manifest.format !== 2 || wasmSha256 !== manifest.wasm_sha256) {
-    throw new Error('benchmark artifact does not match its provenance manifest');
-  }
 
   const trace = generateTrace(options.ops, options.seed);
   const traceSha256 = await sha256(new TextEncoder().encode(JSON.stringify(trace)));
   const warmupOps = Math.min(options.ops, 500);
   const warmupTrace = generateTrace(warmupOps, options.seed);
 
-  post({ type: 'progress', phase: 'first compile and ABI validation' });
+  post({ type: 'progress', phase: 'first compile and WIT contract validation' });
   const firstInstantiateStart = performance.now();
-  const firstRuntime = await EsbtRuntime.fromBytes(wasm);
+  const firstRuntime = await EsbtRuntime.fromCoreModules(coreModules);
   const firstCompileInstantiateMs = performance.now() - firstInstantiateStart;
   const warmupDocuments: Document[] = [];
   try {
@@ -217,7 +238,7 @@ async function benchmark(options: BenchOptions): Promise<BenchReceipt> {
   const rawTrials: BenchTrial[] = [];
   for (let trial = 1; trial <= options.trials; trial += 1) {
     post({ type: 'progress', trial, phase: `recording trial ${trial} of ${options.trials}` });
-    rawTrials.push(await runTrial(wasm, trace, options, trial, 1_000_000 + trial * 16));
+    rawTrials.push(await runTrial(coreModules, trace, options, trial, 1_000_000 + trial * 16));
   }
 
   const timings = Object.fromEntries(
@@ -227,20 +248,27 @@ async function benchmark(options: BenchOptions): Promise<BenchReceipt> {
     snapshotBytes: summarizeSamples(rawTrials.map((trial) => trial.snapshotBytes)),
     updateBytes: summarizeSamples(rawTrials.map((trial) => trial.updateBytes)),
     mergeBytes: summarizeSamples(rawTrials.map((trial) => trial.mergeBytes)),
-    wasmMemoryBytes: summarizeSamples(rawTrials.map((trial) => trial.wasmMemoryBytes)),
   };
 
   return {
-    format: 2,
+    format: 3,
     createdAt: new Date().toISOString(),
-    engine: 'esbt-rust-wasm',
+    engine: 'esbt-rust-component',
     artifact: {
-      wasmSha256,
-      wasmBytes: wasm.byteLength,
+      componentSha256: manifest.component.sha256,
+      componentBytes: manifest.component.bytes,
+      wrapperSha256: manifest.wrapper.sha256,
+      wrapperBytes: manifest.wrapper.bytes,
+      coreModules: manifest.core_modules.map((entry) => ({ ...entry })),
+      coreModuleBytes: manifest.core_modules.reduce((sum, entry) => sum + entry.bytes, 0),
       engineRevision: manifest.engine_revision,
       sourceSha256: manifest.source_sha256,
       sourceDirty: manifest.source_dirty,
-      abiVersion: manifest.abi_version,
+      witPackage: manifest.wit_package,
+      witSha256: manifest.wit_sha256,
+      wireVersion: manifest.wire_version,
+      transpilerPackage: manifest.transpiler_package,
+      transpilerVersion: manifest.transpiler_version,
       compiler: manifest.compiler,
     },
     environment: {

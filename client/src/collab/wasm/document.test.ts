@@ -1,22 +1,17 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { applyTextEdits, type TextEdit } from '../../text/change.ts';
-import { EsbtDocument, EsbtRuntime } from './esbt-document.ts';
+import { EsbtDocument } from './esbt-document.ts';
 import { MARKS_DOCUMENT_CONFIG, marksSiteToEngine } from './index.ts';
+import { createTestRuntime } from './test-runtime.ts';
 import {
   captureSelectionPresence,
   remoteSelections,
 } from '../presence-position.ts';
 import { encodeSelectionPresence } from '../protocol.ts';
 
-const wasmPath = join(dirname(fileURLToPath(import.meta.url)), '../../../public/esbt.wasm');
-
-test('two configured Wasm replicas converge and batch one transaction', async () => {
-  const bytes = await readFile(wasmPath);
-  const runtime = await EsbtRuntime.fromBytes(bytes);
+test('two configured component replicas converge and batch one transaction', async () => {
+  const runtime = await createTestRuntime();
   const left = await EsbtDocument.create({
     runtime,
     siteId: marksSiteToEngine('2'),
@@ -62,8 +57,7 @@ test('two configured Wasm replicas converge and batch one transaction', async ()
 });
 
 test('persisted anchors follow their identities through edits', async () => {
-  const bytes = await readFile(wasmPath);
-  const runtime = await EsbtRuntime.fromBytes(bytes);
+  const runtime = await createTestRuntime();
   const document = await EsbtDocument.create({
     runtime,
     siteId: marksSiteToEngine('22'),
@@ -83,8 +77,7 @@ test('persisted anchors follow their identities through edits', async () => {
 });
 
 test('presence identities are deterministic across concurrent edits and offline merge', async () => {
-  const bytes = await readFile(wasmPath);
-  const runtime = await EsbtRuntime.fromBytes(bytes);
+  const runtime = await createTestRuntime();
   const left = await EsbtDocument.create({
     runtime, siteId: marksSiteToEngine('31'), config: MARKS_DOCUMENT_CONFIG,
   });
@@ -129,8 +122,7 @@ test('presence identities are deterministic across concurrent edits and offline 
 });
 
 test('presence delivery order hides unavailable identities and retries after durable update', async () => {
-  const bytes = await readFile(wasmPath);
-  const runtime = await EsbtRuntime.fromBytes(bytes);
+  const runtime = await createTestRuntime();
   const source = await EsbtDocument.create({
     runtime, siteId: marksSiteToEngine('41'), config: MARKS_DOCUMENT_CONFIG,
   });
@@ -168,9 +160,8 @@ test('presence delivery order hides unavailable identities and retries after dur
   recovered.destroy();
 });
 
-test('Marks Wasm accepts a compact snapshot beyond the retired 4 MiB split', async () => {
-  const bytes = await readFile(wasmPath);
-  const runtime = await EsbtRuntime.fromBytes(bytes);
+test('Marks component accepts a compact snapshot beyond the retired 4 MiB split', async () => {
+  const runtime = await createTestRuntime();
   const source = await EsbtDocument.create({
     runtime,
     siteId: marksSiteToEngine('20'),
@@ -194,4 +185,37 @@ test('Marks Wasm accepts a compact snapshot beyond the retired 4 MiB split', asy
   assert.equal(restored.getText().length, 350_000);
   source.destroy();
   restored.destroy();
+});
+
+test('WIT visible edits preserve a single edit larger than one million UTF-16 units', async () => {
+  const runtime = await createTestRuntime();
+  const document = await EsbtDocument.create({
+    runtime,
+    siteId: marksSiteToEngine('45'),
+    config: {
+      ...MARKS_DOCUMENT_CONFIG,
+      limits: {
+        ...MARKS_DOCUMENT_CONFIG.limits,
+        maxMessageBytes: 128 * 1024 * 1024,
+        maxOperationsPerUpdate: 1_100_000,
+        maxSnapshotItems: 1_100_000,
+        maxDocumentUnits: 1_100_000,
+        maxRetainedOperations: 1_100_000,
+      },
+    },
+  });
+  const inserted = 'x'.repeat(1_000_001);
+  const changes: TextEdit[][] = [];
+  document.onChange((change) => changes.push(change.edits));
+
+  const update = document.insert(0, inserted);
+
+  assert.ok(update && update.byteLength > inserted.length);
+  assert.equal(document.length, 1_000_001);
+  assert.equal(document.getText(), inserted);
+  assert.equal(changes.length, 1);
+  assert.deepEqual(changes[0]?.map(({ from, to, insert }) => [from, to, insert.length]), [
+    [0, 0, 1_000_001],
+  ]);
+  document.destroy();
 });

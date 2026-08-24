@@ -87,7 +87,7 @@ async fn verified_backup_restores_database_authority_and_asset_bytes() {
     let manifest = marks_server::backup::verify(published.clone())
         .await
         .expect("verify published backup");
-    assert_eq!(manifest.schema, "marks-backup.v1");
+    assert_eq!(manifest.schema, "marks-backup.v2");
     assert_eq!(manifest.assets.len(), 1);
 
     server.stop().await;
