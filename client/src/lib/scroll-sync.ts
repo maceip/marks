@@ -18,7 +18,7 @@ export class ScrollSync {
   private editor: EditorView | null = null;
   private preview: HTMLElement | null = null;
   private applying = false;
-  private enabled = true;
+  private follow: 'off' | 'both' | 'preview' = 'off';
 
   private index: BlockOffset[] = [];
   private indexedChildren = -1;
@@ -34,13 +34,21 @@ export class ScrollSync {
   }
 
   setEnabled(enabled: boolean): void {
-    this.enabled = enabled;
+    this.follow = enabled ? 'both' : 'off';
+  }
+
+  /**
+   * `both` is desktop/fold split. `preview` lets the phone ghost follow the
+   * caret without letting the overlay scroll the editor.
+   */
+  setFollow(follow: 'off' | 'both' | 'preview'): void {
+    this.follow = follow;
   }
 
   /** Preview follows the editor. */
   fromEditor(): void {
     const { editor, preview } = this;
-    if (!this.enabled || this.applying || !editor || !preview) return;
+    if (this.follow === 'off' || this.applying || !editor || !preview) return;
 
     this.guard(() => {
       const line = this.topVisibleEditorLine(editor);
@@ -49,10 +57,20 @@ export class ScrollSync {
     });
   }
 
+  /** Preview follows a source line (0-based), used by the phone ghost caret. */
+  followPreviewToLine(line: number): void {
+    const { preview } = this;
+    if (this.follow === 'off' || this.applying || !preview) return;
+    this.guard(() => {
+      const target = this.previewOffsetForLine(line);
+      if (target !== null) preview.scrollTop = target;
+    });
+  }
+
   /** Editor follows the preview. */
   fromPreview(): void {
     const { editor, preview } = this;
-    if (!this.enabled || this.applying || !editor || !preview) return;
+    if (this.follow !== 'both' || this.applying || !editor || !preview) return;
 
     this.guard(() => {
       const line = this.topVisiblePreviewLine(preview);

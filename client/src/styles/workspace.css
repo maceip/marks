@@ -84,3 +84,39 @@
 .workspace.dragging .splitter {
   background: var(--color-action);
 }
+
+/* Phone Write ghost: full-measure preview, clipped to a right-hand viewfinder. */
+:root[data-shell='phone'] .workspace.mode-edit.phone-ghost {
+  position: relative;
+  touch-action: pan-y;
+  overscroll-behavior-x: none;
+  --phone-ghost-shift: 50%;
+}
+
+:root[data-shell='phone'] .workspace.mode-edit.phone-ghost .preview-pane {
+  display: flex;
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden auto;
+  border: 0;
+  background: transparent;
+  opacity: var(--opacity-ghost);
+  clip-path: inset(0 0 0 50%);
+  -webkit-clip-path: inset(0 0 0 50%);
+  -webkit-mask-image: linear-gradient(to right, transparent 50%, #000 54%);
+  mask-image: linear-gradient(to right, transparent 50%, #000 54%);
+}
+
+:root[data-shell='phone'] .workspace.mode-edit.phone-ghost .preview-pane,
+:root[data-shell='phone'] .workspace.mode-edit.phone-ghost .preview-pane * {
+  pointer-events: none;
+}
+
+:root[data-shell='phone'] .workspace.mode-edit.phone-ghost .marks-preview {
+  transform: translateX(var(--phone-ghost-shift));
+}
+
+:root[data-shell='phone'] .workspace.mode-edit.phone-ghost:not(.phone-ghost-dragging) .marks-preview {
+  transition: transform var(--duration-fast) var(--ease-standard);
+}

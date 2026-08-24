@@ -85,7 +85,8 @@ people to expect:
 - **Adaptive command ribbon** — File, Home, Insert, Draw, AI, Review, and View
   decks plus contextual Picture / Table / Shape tools; 3D folded-glass glyphs;
   a phone composer and a thinner unfolded view rail with a full-width ribbon
-  instead of squeezed breakpoints
+  instead of squeezed breakpoints. On phones, Write keeps a full-width editor
+  with a two-finger-shifted ghost of the rendered page in the right half.
 - **Local comments and version history** — complete interaction scaffolding
   behind replaceable review/session adapters
 - **Live outline** built from the document's headings (`Ctrl`/`Cmd` + `Shift` + `O`)

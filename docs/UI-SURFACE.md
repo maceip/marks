@@ -189,7 +189,11 @@ fallback when those signals are absent. Shared fallback widths live in
 - **phone** — a distinct composer: swipe between Write and Preview, chip
   formatting, and bottom-sheet Insert / AI / More grids. Not a squeezed
   desktop ribbon. Virtual-keyboard inset parks chrome above the keyboard and
-  pauses liquid-glass shaders.
+  pauses liquid-glass shaders. Write mode keeps a full-width editor and paints
+  a low-opacity ghost of the full-measure preview in a right-hand viewfinder
+  (never crossing the midline). Two-finger horizontal pan snaps the ghost
+  between the left and right halves of that page; pinch-zoom is not stolen.
+  Foldable unfolded shells keep a real split and never use the ghost.
 - **studio** — tablet mid-width: compact top ribbon, modal document drawer.
 - **desktop** — persistent document rail, full ribbon, selection mini-toolbar,
   and the floating liquid dock.

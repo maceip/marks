@@ -12,6 +12,7 @@ interface PreviewPaneProps {
   onHeadings: (headings: Heading[]) => void;
   onScroll: () => void;
   renderedOnly?: boolean;
+  ghost?: boolean;
 }
 
 export function PreviewPane({
@@ -21,6 +22,7 @@ export function PreviewPane({
   onHeadings,
   onScroll,
   renderedOnly = false,
+  ghost = false,
 }: PreviewPaneProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -40,7 +42,7 @@ export function PreviewPane({
   useEffect(() => {
     const scroll = scrollRef.current;
     const content = contentRef.current;
-    if (!scroll || !content || display === 'off') { setOverlay([]); return; }
+    if (!scroll || !content || display === 'off' || ghost) { setOverlay([]); return; }
     let frame = 0;
     const measure = () => {
       cancelAnimationFrame(frame);
@@ -74,7 +76,7 @@ export function PreviewPane({
     document.fonts?.ready.then(measure);
     measure();
     return () => { cancelAnimationFrame(frame); off(); resize.disconnect(); mutation.disconnect(); scroll.removeEventListener('scroll', measure); content.removeEventListener('load', measure, true); };
-  }, [display, session]);
+  }, [display, ghost, session]);
 
   useEffect(() => {
     const content = contentRef.current;
@@ -153,20 +155,24 @@ export function PreviewPane({
 
   return (
     <section
-      className="pane preview-pane"
-      aria-label="Preview"
+      className={`pane preview-pane${ghost ? ' preview-ghost' : ''}`}
+      aria-label={ghost ? undefined : 'Preview'}
+      aria-hidden={ghost || undefined}
+      inert={ghost || undefined}
       ref={scrollRef}
-      tabIndex={0}
+      tabIndex={ghost ? -1 : 0}
       onScroll={() => handlers.current.onScroll()}
     >
-      <div className="marks-preview" ref={contentRef} onClick={handleClick} />
-      <div className="preview-presence-overlay" aria-label="Collaborator locations">
-        {overlay.map((item, index) => (
-          <button key={item.id} type="button" className={`preview-presence ${item.exact ? 'exact' : 'section'} marks-user${item.color}`} style={{ top: item.top, left: item.left + (item.exact ? index * 3 : 0), height: item.height }} title={item.name} aria-label={`Scroll to ${item.name}`} onClick={() => contentRef.current?.querySelector<HTMLElement>(`.marks-block[data-source-start="${session.peers().find((peer) => peer.id === item.id)?.presence?.location?.blockStart}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>
-            <span>{item.name}</span>
-          </button>
-        ))}
-      </div>
+      <div className="marks-preview" ref={contentRef} onClick={ghost ? undefined : handleClick} />
+      {ghost ? null : (
+        <div className="preview-presence-overlay" aria-label="Collaborator locations">
+          {overlay.map((item, index) => (
+            <button key={item.id} type="button" className={`preview-presence ${item.exact ? 'exact' : 'section'} marks-user${item.color}`} style={{ top: item.top, left: item.left + (item.exact ? index * 3 : 0), height: item.height }} title={item.name} aria-label={`Scroll to ${item.name}`} onClick={() => contentRef.current?.querySelector<HTMLElement>(`.marks-block[data-source-start="${session.peers().find((peer) => peer.id === item.id)?.presence?.location?.blockStart}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>
+              <span>{item.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
     </section>
   );
 }

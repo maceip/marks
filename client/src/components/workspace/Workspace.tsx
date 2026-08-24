@@ -5,6 +5,12 @@ import type { EditorView } from '@codemirror/view';
 import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type { CollabSession } from '../../collab/types';
 import type { Posture } from '../../lib/posture';
+import {
+  GHOST_SHIFT_START_PERCENT,
+  bindPhoneGhostControls,
+  formatGhostPercent,
+  type GhostShift,
+} from '../../lib/phone-ghost';
 import type { UiActionId } from '../../lib/ui-actions';
 import type { ScrollSync } from '../../lib/scroll-sync';
 import type { PreviewStats } from '../../markdown/preview';
@@ -65,14 +71,18 @@ function WorkspaceView({
   const rootRef = useRef<HTMLDivElement>(null);
   const [split, setSplit] = useState(loadSplit);
   const [dragging, setDragging] = useState(false);
+  const phoneGhost = posture.shell === 'phone' && mode === 'edit';
   const [previewWarm, setPreviewWarm] = useState(
-    () => mode !== 'edit' || Boolean(previewRequested),
+    () => mode !== 'edit' || Boolean(previewRequested) || (posture.shell === 'phone' && mode === 'edit'),
   );
   const showEditor = mode !== 'preview';
+  const ghostPercentRef = useRef(GHOST_SHIFT_START_PERCENT);
+  const ghostShiftRef = useRef<GhostShift>('start');
+  const suppressSwipeRef = useRef(false);
 
   useEffect(() => {
-    if (mode !== 'edit' || previewRequested) setPreviewWarm(true);
-  }, [mode, previewRequested]);
+    if (mode !== 'edit' || previewRequested || phoneGhost) setPreviewWarm(true);
+  }, [mode, phoneGhost, previewRequested]);
 
   useEffect(() => {
     if (posture.shell !== 'phone' || !onModeChange) return;
@@ -85,6 +95,7 @@ function WorkspaceView({
       startY = event.clientY;
     };
     const onUp = (event: PointerEvent) => {
+      if (suppressSwipeRef.current) return;
       const dx = event.clientX - startX;
       const dy = event.clientY - startY;
       if (Math.abs(dx) < 72 || Math.abs(dx) < Math.abs(dy)) return;
@@ -97,6 +108,29 @@ function WorkspaceView({
       root.removeEventListener('pointerup', onUp);
     };
   }, [onModeChange, posture.shell]);
+
+  useEffect(() => {
+    if (!phoneGhost) return;
+    const root = rootRef.current;
+    if (!root) return;
+    ghostPercentRef.current = GHOST_SHIFT_START_PERCENT;
+    ghostShiftRef.current = 'start';
+    root.style.setProperty('--phone-ghost-shift', formatGhostPercent(GHOST_SHIFT_START_PERCENT));
+    root.dataset.ghostShift = 'start';
+    return bindPhoneGhostControls(root, {
+      getPercent: () => ghostPercentRef.current,
+      setPercent: (percent) => {
+        ghostPercentRef.current = percent;
+      },
+      setDragging: () => undefined,
+      setShift: (shift) => {
+        ghostShiftRef.current = shift;
+      },
+      onSuppressSwipe: (suppress) => {
+        suppressSwipeRef.current = suppress;
+      },
+    });
+  }, [phoneGhost]);
 
   const handleView = useCallback(
     (view: EditorView | null) => {
@@ -114,9 +148,17 @@ function WorkspaceView({
     [scrollSync, onPreview],
   );
 
+  const handleCursor = useCallback(
+    (info: CursorInfo) => {
+      onCursor(info);
+      if (phoneGhost) scrollSync.followPreviewToLine(info.line - 1);
+    },
+    [onCursor, phoneGhost, scrollSync],
+  );
+
   useEffect(() => {
-    scrollSync.setEnabled(mode === 'split');
-  }, [mode, scrollSync]);
+    scrollSync.setFollow(mode === 'split' ? 'both' : phoneGhost ? 'preview' : 'off');
+  }, [mode, phoneGhost, scrollSync]);
 
   useEffect(() => {
     if (!dragging) return;
@@ -143,7 +185,7 @@ function WorkspaceView({
 
   return (
     <div
-      className={`workspace mode-${mode}${dragging ? ' dragging' : ''}`}
+      className={`workspace mode-${mode}${dragging ? ' dragging' : ''}${phoneGhost ? ' phone-ghost' : ''}`}
       ref={rootRef}
       style={{ '--split': `${split}%` } as React.CSSProperties}
     >
@@ -164,7 +206,7 @@ function WorkspaceView({
             session={session}
             onView={handleView}
             onScroll={() => scrollSync.fromEditor()}
-            onCursor={onCursor}
+            onCursor={handleCursor}
             onAssetError={onAssetError}
           />
         </Suspense>
@@ -198,6 +240,7 @@ function WorkspaceView({
           <PreviewPane
             session={session}
             renderedOnly={mode === 'preview'}
+            ghost={phoneGhost}
             onContainer={handleContainer}
             onStats={onStats}
             onHeadings={onHeadings}

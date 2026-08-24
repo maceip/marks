@@ -304,6 +304,8 @@ export async function runSurface(session, { check }) {
   check('book fold ribbon spans its chrome container',
     bookChrome.ribbonWidth > 0 && Math.abs(bookChrome.ribbonWidth - bookChrome.headerWidth) <= 2,
     JSON.stringify(bookChrome));
+  check('book fold split does not use the phone ghost overlay',
+    (await session.count('.workspace.phone-ghost, .preview-ghost')) === 0);
 
   await session.click('.preview-pane');
   await session.wait(100);
@@ -346,6 +348,8 @@ export async function runSurface(session, { check }) {
     (await session.count('.app-rail [data-command-id]')) === 3 &&
     (await session.count('.ribbon-body')) === 1 &&
     (await session.count('.fold-ribbon')) === 0);
+  check('laptop fold split does not use the phone ghost overlay',
+    (await session.count('.workspace.phone-ghost, .preview-ghost')) === 0);
   if (ribbonWildEnabled) {
     await session.evaluate(() => {
       const all = document.querySelector('.ribbon-profile-toggle');
@@ -367,6 +371,96 @@ export async function runSurface(session, { check }) {
   await session.waitForSelector('.phone-nav', { timeout: 20_000 });
   check('phone uses a focused composer instead of desktop ribbon',
     (await session.count('.phone-nav')) === 1 && (await session.count('.ribbon-body')) === 0);
+  await session.waitForSelector('.workspace.phone-ghost .marks-preview .marks-block', { timeout: 20_000 });
+  const phoneGhost = await session.evaluate(() => {
+    const root = document.querySelector('.workspace');
+    const preview = document.querySelector('.preview-pane');
+    const editor = document.querySelector('.editor-pane');
+    if (!(root instanceof HTMLElement) || !(preview instanceof HTMLElement) || !(editor instanceof HTMLElement)) {
+      return null;
+    }
+    const rect = root.getBoundingClientRect();
+    const y = rect.top + Math.min(96, Math.max(24, rect.height / 3));
+    const rightHit = document.elementFromPoint(rect.left + rect.width * 0.75, y);
+    const styles = getComputedStyle(preview);
+    return {
+      ghost: root.classList.contains('phone-ghost'),
+      shift: root.dataset.ghostShift ?? '',
+      editor: Boolean(document.querySelector('.editor-pane .cm-content')),
+      previewGhost: preview.classList.contains('preview-ghost'),
+      clip: `${styles.clipPath} ${styles.webkitClipPath}`,
+      opacity: Number(styles.opacity),
+      pointerEvents: styles.pointerEvents,
+      rightHitEditor: Boolean(rightHit?.closest('.editor-pane')),
+      rightHitPreview: Boolean(rightHit?.closest('.preview-pane')),
+    };
+  });
+  check('phone write keeps a full-width editor under a right-hand ghost preview',
+    Boolean(phoneGhost?.ghost && phoneGhost.editor && phoneGhost.previewGhost && phoneGhost.shift === 'start'),
+    JSON.stringify(phoneGhost));
+  check('phone ghost viewfinder is clipped and pointer-transparent',
+    Boolean(
+      phoneGhost &&
+      phoneGhost.clip.includes('50%') &&
+      phoneGhost.opacity > 0 &&
+      phoneGhost.opacity < 1 &&
+      phoneGhost.pointerEvents === 'none' &&
+      phoneGhost.rightHitEditor &&
+      !phoneGhost.rightHitPreview,
+    ),
+    JSON.stringify(phoneGhost));
+  const ghostPan = await session.evaluate(() => {
+    const root = document.querySelector('.workspace.phone-ghost');
+    if (!(root instanceof HTMLElement)) return { ok: false };
+    const rect = root.getBoundingClientRect();
+    const y = rect.top + Math.min(120, Math.max(40, rect.height / 2));
+    const fire = (type, id, x) => {
+      root.dispatchEvent(new PointerEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        pointerId: id,
+        pointerType: 'touch',
+        isPrimary: id === 1,
+        clientX: x,
+        clientY: y,
+      }));
+    };
+    const x1 = rect.left + rect.width * 0.62;
+    const x2 = rect.left + rect.width * 0.78;
+    fire('pointerdown', 1, x1);
+    fire('pointerdown', 2, x2);
+    fire('pointermove', 1, x1 - rect.width * 0.5);
+    fire('pointermove', 2, x2 - rect.width * 0.5);
+    fire('pointerup', 1, x1 - rect.width * 0.5);
+    fire('pointerup', 2, x2 - rect.width * 0.5);
+    return {
+      ok: true,
+      shift: root.dataset.ghostShift ?? '',
+      translate: root.style.getPropertyValue('--phone-ghost-shift'),
+    };
+  });
+  check('phone two-finger pan snaps the ghost to the other page half',
+    ghostPan.ok && ghostPan.shift === 'end',
+    JSON.stringify(ghostPan));
+  await session.evaluate(() => {
+    const preview = [...document.querySelectorAll('.phone-nav > button')]
+      .find((button) => button.textContent?.includes('Preview'));
+    if (!(preview instanceof HTMLButtonElement)) throw new Error('phone Preview command not found');
+    preview.click();
+  });
+  await session.wait(250);
+  check('phone preview mode removes the ghost overlay',
+    (await session.count('.workspace.phone-ghost, .preview-ghost')) === 0 &&
+    (await session.isVisible('.preview-pane')) &&
+    !(await session.isVisible('.editor-pane')));
+  await session.evaluate(() => {
+    const write = [...document.querySelectorAll('.phone-nav > button')]
+      .find((button) => button.textContent?.includes('Write'));
+    if (!(write instanceof HTMLButtonElement)) throw new Error('phone Write command not found');
+    write.click();
+  });
+  await session.waitForSelector('.workspace.phone-ghost', { timeout: 10_000 });
   await session.click('.phone-nav > button:last-child');
   await session.wait(150);
   const dataMode = await session.evaluate(() => document.documentElement.dataset.marksMode ?? 'local');
@@ -435,14 +529,20 @@ export const SURFACE_CHECK_NAMES = [
   'book fold uses a view rail and a full-width ribbon',
   'unfolded app rail is thinner than the Material 3 80dp rail',
   'book fold ribbon spans its chrome container',
+  'book fold split does not use the phone ghost overlay',
   'book fold split keeps compose until the app rail changes the view',
   'book fold preview rail shows inspect commands',
   'disabled ribbon-wild stays absent from foldable command libraries',
   'book fold command library exposes all five possibility tools',
   'possibility layer respects the unfolded book posture',
   'laptop fold uses a view rail and a full-width ribbon',
+  'laptop fold split does not use the phone ghost overlay',
   'possibility layer respects the unfolded laptop posture',
   'phone uses a focused composer instead of desktop ribbon',
+  'phone write keeps a full-width editor under a right-hand ghost preview',
+  'phone ghost viewfinder is clipped and pointer-transparent',
+  'phone two-finger pan snaps the ghost to the other page half',
+  'phone preview mode removes the ghost overlay',
   'phone page sheet applies phone-confirmation eligibility',
   'disabled ribbon-wild stays absent from the phone review sheet',
   'disabled ribbon-wild requests no lazy code or style assets',
