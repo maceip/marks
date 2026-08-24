@@ -7,8 +7,17 @@
  *
  * Updates install in the background and take over on the next navigation.
  * We never prompt the user to refresh.
+ *
+ * VERSION is stamped by the client build from a digest of the entry
+ * documents and the ESBT component manifest. Any release that changes the
+ * shell or the stable-path component artifacts changes this file
+ * byte-for-byte, which is what makes the browser install the new worker;
+ * activation then drops every cache from the previous namespace, so a
+ * cache-first stable URL can never keep serving a prior release's
+ * component. 'dev' appears only when the unstamped public/ copy is served
+ * directly.
  */
-const VERSION = 'v5';
+const VERSION = 'dev';
 const SHELL = `marks-shell-${VERSION}`;
 const ASSETS = `marks-assets-${VERSION}`;
 const CURRENT_CACHES = new Set([SHELL, ASSETS]);
