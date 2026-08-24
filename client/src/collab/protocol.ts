@@ -19,17 +19,11 @@ const PROTOCOL_VERSION = 1;
 const MUTATION_HEADER_BYTES = 26;
 const COMMITTED_HEADER_BYTES = 33;
 
-/**
- * Selection presence v1 offsets are accepted only during the rolling upgrade
- * from the August 2026 client. Remove this decoder after every supported
- * client has emitted v2 for one full presence TTL/deployment window.
- */
-export const MAX_LEGACY_SELECTION_OFFSET = 2_000_000;
 export const MAX_SELECTION_ANCHOR_BYTES = 4_096;
 
 export type SelectionDirection = 'forward' | 'backward';
 
-export interface SelectionPresenceV2 {
+export interface SelectionPresence {
   version: 2;
   anchor: Uint8Array;
   head: Uint8Array;
@@ -37,14 +31,7 @@ export interface SelectionPresenceV2 {
   sequence: number;
 }
 
-export interface LegacySelectionPresenceV1 {
-  version: 1;
-  anchorOffset: number;
-  headOffset: number;
-  direction: SelectionDirection;
-}
-
-interface SelectionPresenceV2Wire {
+interface SelectionPresenceWire {
   v: 2;
   anchor: string;
   head: string;
@@ -52,7 +39,7 @@ interface SelectionPresenceV2Wire {
   sequence: number;
 }
 
-export function encodeSelectionPresence(value: SelectionPresenceV2): SelectionPresenceV2Wire {
+export function encodeSelectionPresence(value: SelectionPresence): SelectionPresenceWire {
   validateAnchor(value.anchor);
   validateAnchor(value.head);
   validateSequence(value.sequence);
@@ -69,7 +56,7 @@ export function encodeSelectionPresence(value: SelectionPresenceV2): SelectionPr
 /** Decode untrusted ephemeral JSON, bounding anchor allocation before Wasm sees it. */
 export function decodeSelectionPresence(
   value: unknown,
-): SelectionPresenceV2 | LegacySelectionPresenceV1 | null {
+): SelectionPresence | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const wire = value as Record<string, unknown>;
   if (wire.v === 2) {
@@ -81,16 +68,6 @@ export function decodeSelectionPresence(
     return { version: 2, anchor, head, direction: wire.direction, sequence: wire.sequence };
   }
 
-  // Bounded compatibility with the former `{from,to}` selection value.
-  if (isLegacyOffset(wire.from) && isLegacyOffset(wire.to)) {
-    const direction = wire.from <= wire.to ? 'forward' : 'backward';
-    return {
-      version: 1,
-      anchorOffset: wire.from,
-      headOffset: wire.to,
-      direction,
-    };
-  }
   return null;
 }
 
@@ -103,7 +80,9 @@ function fromBase64Url(value: string): Uint8Array | null {
       + '='.repeat((4 - value.length % 4) % 4);
     const binary = atob(padded);
     if (binary.length === 0 || binary.length > MAX_SELECTION_ANCHOR_BYTES) return null;
-    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const decoded = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    if (toBase64Url(decoded) !== value) return null;
+    return decoded;
   } catch {
     return null;
   }
@@ -132,11 +111,6 @@ function validateSequence(value: unknown): asserts value is number {
   if (!isSequence(value)) throw new RangeError('marks: invalid selection sequence');
 }
 
-function isLegacyOffset(value: unknown): value is number {
-  return Number.isInteger(value) && (value as number) >= 0
-    && (value as number) <= MAX_LEGACY_SELECTION_OFFSET;
-}
-
 export type MutationKind = 'update' | 'snapshot';
 
 export interface CommittedReceipt {
@@ -145,7 +119,7 @@ export interface CommittedReceipt {
   version: Uint8Array;
 }
 
-export function frame(tag: number, payload: Uint8Array): Uint8Array {
+export function frame(tag: number, payload: Uint8Array): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(payload.length + 1);
   out[0] = tag;
   out.set(payload, 1);

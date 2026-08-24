@@ -2,20 +2,23 @@ import { EsbtError } from './esbt-document.ts';
 export { MARKS_DOCUMENT_CONFIG } from '../profile.ts';
 
 export {
-  DEFAULT_LIMITS,
-  ESBT_WASM_URL,
+  ESBT_COMPONENT_MANIFEST_URL,
   EsbtDocument,
   EsbtError,
   EsbtRuntime,
-  encodeDocumentConfig,
-  envelopeTag,
+  isEsbtComponentManifest,
   normalizeSiteId,
+  verifyComponentArtifact,
 } from './esbt-document.ts';
 export type {
   ApplyReceipt,
+  CaretAffinity,
   ChangeEvent,
+  ComponentArtifactDescriptor,
   CreateDocumentOptions,
   DocumentConfigInput,
+  EsbtComponentManifest,
+  PresencePositionPair,
   SnapshotReceipt,
   TransactOptions,
 } from './esbt-document.ts';

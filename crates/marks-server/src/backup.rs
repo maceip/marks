@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-const BACKUP_SCHEMA: &str = "marks-backup.v1";
+const BACKUP_SCHEMA: &str = "marks-backup.v2";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -30,7 +30,7 @@ pub struct BackupManifest {
     pub database_sha256: String,
     pub build_revision: String,
     pub server_engine_revision: String,
-    pub wasm_sha256: String,
+    pub component_sha256: String,
     pub assets: Vec<BackupAsset>,
 }
 
@@ -139,7 +139,7 @@ fn create_blocking(
             database_sha256: file_sha256(&database)?,
             build_revision: artifact.build_revision.to_owned(),
             server_engine_revision: artifact.server_engine_revision.to_owned(),
-            wasm_sha256: artifact.wasm_sha256.clone(),
+            component_sha256: artifact.component_sha256.clone(),
             assets: rows,
         };
         let manifest_path = partial.join("manifest.json");

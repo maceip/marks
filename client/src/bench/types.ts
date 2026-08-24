@@ -10,7 +10,7 @@ export interface BenchOptions {
 
 export interface BenchTrial {
   trial: number;
-  /** Instantiating and ABI-checking an already fetched Wasm artifact. */
+  /** Instantiating the WIT binding from already fetched and verified core modules. */
   instantiateMs: number;
   /** Applying every trace edit as its own local transaction. */
   localMs: number;
@@ -24,7 +24,6 @@ export interface BenchTrial {
   updateBytes: number;
   mergeBytes: number;
   emittedUpdates: number;
-  wasmMemoryBytes: number;
   chars: number;
   converged: boolean;
 }
@@ -46,16 +45,24 @@ export interface BenchSummary {
 }
 
 export interface BenchReceipt {
-  format: 2;
+  format: 3;
   createdAt: string;
-  engine: 'esbt-rust-wasm';
+  engine: 'esbt-rust-component';
   artifact: {
-    wasmSha256: string;
-    wasmBytes: number;
+    componentSha256: string;
+    componentBytes: number;
+    wrapperSha256: string;
+    wrapperBytes: number;
+    coreModules: Array<{ path: string; sha256: string; bytes: number }>;
+    coreModuleBytes: number;
     engineRevision: string;
     sourceSha256: string;
     sourceDirty: boolean;
-    abiVersion: number;
+    witPackage: 'esbt:document@1.0.0';
+    witSha256: string;
+    wireVersion: number;
+    transpilerPackage: string;
+    transpilerVersion: string;
     compiler: string;
   };
   environment: {
@@ -77,7 +84,6 @@ export interface BenchReceipt {
     snapshotBytes: BenchSummary;
     updateBytes: BenchSummary;
     mergeBytes: BenchSummary;
-    wasmMemoryBytes: BenchSummary;
   };
   outcome: {
     chars: number;

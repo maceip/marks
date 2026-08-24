@@ -48,3 +48,24 @@ test('the current service proof owns the migrated two-browser scenarios', () => 
   assert.match(serviceProof, /browser\.newContext/);
   assert.match(serviceProof, /peerContext\.addInitScript/);
 });
+
+test('incremental CI is conservative, gated, cached, and keeps full browser coverage', () => {
+  const workflow = read('.github/workflows/ci.yml');
+  assert.match(workflow, /^\s*impact:\s*$/m);
+  assert.match(workflow, /node scripts\/ci-impact\.mjs/);
+  assert.match(workflow, /browser: \$\{\{ fromJSON\(needs\.impact\.outputs\.browser_matrix\) \}\}/);
+  assert.match(workflow, /actions\/cache@v6/);
+  assert.match(workflow, /aggregate-current/);
+  assert.match(workflow, /service-current/);
+  assert.match(workflow, /args\+\=\(--skip-collab\)/);
+  assert.match(workflow, /^\s*gate:\s*$/m);
+  assert.match(workflow, /name: CI gate/);
+  assert.match(workflow, /if: always\(\)/);
+  assert.match(workflow, /RUN_AGGREGATE/);
+  assert.match(workflow, /RUN_SERVICE/);
+
+  const classifier = read('scripts/ci-impact.mjs');
+  assert.match(classifier, /unknown-default-full/);
+  assert.match(classifier, /ci-selector-self-check/);
+  assert.match(classifier, /\['chromium', 'firefox', 'webkit'\]/);
+});

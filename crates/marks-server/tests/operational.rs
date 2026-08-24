@@ -163,12 +163,22 @@ async fn artifact_identity_static_mime_and_security_headers_are_process_owned() 
     )
     .unwrap();
     let public = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../client/public");
-    std::fs::copy(public.join("esbt.wasm"), static_dir.join("esbt.wasm")).unwrap();
-    std::fs::copy(
-        public.join("esbt.wasm.manifest.json"),
-        static_dir.join("esbt.wasm.manifest.json"),
+    for name in [
+        "esbt.component.wasm",
+        "esbt.component.manifest.json",
+        "esbt.component.rev",
+        "esbt.wit",
+    ] {
+        std::fs::copy(public.join(name), static_dir.join(name)).unwrap();
+    }
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(public.join("esbt.component.manifest.json")).unwrap(),
     )
     .unwrap();
+    for module in manifest["core_modules"].as_array().unwrap() {
+        let name = module["path"].as_str().unwrap().trim_start_matches('/');
+        std::fs::copy(public.join(name), static_dir.join(name)).unwrap();
+    }
     std::fs::write(static_dir.join("assets/app-abc.js"), b"export default 1").unwrap();
     let server =
         TestServer::spawn_with(db, |config| config.static_dir = Some(static_dir.clone())).await;
@@ -193,7 +203,7 @@ async fn artifact_identity_static_mime_and_security_headers_are_process_owned() 
         .unwrap()
         .to_owned();
     let identity: serde_json::Value = artifact.json().await.unwrap();
-    assert_eq!(identity["schema"], "marks-artifact.v1");
+    assert_eq!(identity["schema"], "marks-artifact.component");
     assert_eq!(identity["serverEngineRevision"], engine_header);
     assert_eq!(identity["staticArtifactVerified"], true);
     assert_eq!(identity["profileCoherent"], true);
@@ -213,13 +223,16 @@ async fn artifact_identity_static_mime_and_security_headers_are_process_owned() 
     );
     assert_eq!(html.headers()["cache-control"], "no-cache, must-revalidate");
 
-    let wasm = http
-        .get(format!("{}/esbt.wasm", server.base))
+    let component = http
+        .get(format!("{}/esbt.component.wasm", server.base))
         .send()
         .await
         .unwrap();
-    assert_eq!(wasm.headers()["content-type"], "application/wasm");
-    assert_eq!(wasm.headers()["cache-control"], "no-cache, must-revalidate");
+    assert_eq!(component.headers()["content-type"], "application/wasm");
+    assert_eq!(
+        component.headers()["cache-control"],
+        "no-cache, must-revalidate"
+    );
 
     let script = http
         .get(format!("{}/assets/app-abc.js", server.base))

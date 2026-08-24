@@ -1,0 +1,327 @@
+# Privileged production orchestration is deliberately separate from the
+# pull-request-capable CI workflow. It executes repository code only after a
+# successful same-repository push run of CI on main, or from an explicit
+# workflow_dispatch on main.
+name: Production deploy and rollback
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Production operation
+        required: true
+        default: rollback
+        type: choice
+        options:
+          - rollback
+          - deploy
+          - status
+          - releases
+      release_id:
+        description: Optional retained release id for rollback; empty selects previous
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# Deployment and rollback both mutate the same current/previous release links.
+# Never interrupt a running remote operation; a second request waits here and
+# the remote flock remains the final serialization boundary.
+concurrency:
+  group: marks-production
+  cancel-in-progress: false
+
+jobs:
+  production:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    environment:
+      name: Production
+      url: https://marks.secure.build
+
+    steps:
+      - name: Check out the trusted production revision
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Resolve and validate the production request
+        id: request
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REQUESTED_OPERATION: ${{ inputs.operation }}
+          REQUESTED_RELEASE_ID: ${{ inputs.release_id }}
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
+          TESTED_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == workflow_run ]]; then
+            operation=deploy
+            release_id=""
+            [[ "$TESTED_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+              echo "CI supplied an invalid tested revision" >&2
+              exit 1
+            }
+            [[ "$(git rev-parse HEAD)" == "$TESTED_SHA" ]] || {
+              echo "checkout does not match the successful CI revision" >&2
+              exit 1
+            }
+          else
+            operation=$REQUESTED_OPERATION
+            release_id=$REQUESTED_RELEASE_ID
+            case "$operation" in
+              deploy|rollback|status|releases) ;;
+              *)
+                echo "unsupported production operation: $operation" >&2
+                exit 2
+                ;;
+            esac
+            if [[ -n "$release_id" && ! "$release_id" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo "release_id may contain only letters, numbers, dot, underscore, and dash" >&2
+              exit 2
+            fi
+            if [[ -n "$release_id" && "$operation" != rollback ]]; then
+              echo "release_id is valid only for rollback" >&2
+              exit 2
+            fi
+          fi
+
+          {
+            printf 'operation=%s\n' "$operation"
+            printf 'release_id=%s\n' "$release_id"
+            printf 'revision=%s\n' "$(git rev-parse HEAD)"
+            printf 'ci_run_id=%s\n' "$TESTED_RUN_ID"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js v24
+        if: steps.request.outputs.operation == 'deploy'
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Configure pinned deployment SSH identity
+        shell: bash
+        env:
+          DEPLOY_PRIVATE_KEY: ${{ secrets.MARKS_DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.MARKS_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          [[ -n "$DEPLOY_PRIVATE_KEY" ]] || {
+            echo "MARKS_DEPLOY_SSH_KEY is not configured" >&2
+            exit 1
+          }
+          [[ -n "$DEPLOY_KNOWN_HOSTS" ]] || {
+            echo "MARKS_DEPLOY_KNOWN_HOSTS is not configured" >&2
+            exit 1
+          }
+
+          install -d -m 0700 "$HOME/.ssh"
+          key_path="$RUNNER_TEMP/marks-deploy-ed25519"
+          public_key_path="$RUNNER_TEMP/marks-deploy-ed25519.pub"
+          known_hosts_path="$HOME/.ssh/known_hosts"
+          config_path="$HOME/.ssh/config"
+          umask 077
+          printf '%s\n' "$DEPLOY_PRIVATE_KEY" > "$key_path"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$known_hosts_path"
+          ssh-keygen -y -P '' -f "$key_path" > "$public_key_path" || {
+            echo "MARKS_DEPLOY_SSH_KEY must be a valid passphrase-free OpenSSH private key" >&2
+            exit 1
+          }
+          ssh-keygen -F secure.build -f "$known_hosts_path" >/dev/null || {
+            echo "MARKS_DEPLOY_KNOWN_HOSTS does not pin secure.build" >&2
+            exit 1
+          }
+          {
+            echo 'Host secure.build'
+            echo '  HostName secure.build'
+            echo '  User marks-deploy'
+            echo "  IdentityFile $public_key_path"
+            echo '  IdentitiesOnly yes'
+            echo '  BatchMode yes'
+            echo '  StrictHostKeyChecking yes'
+            echo '  ClearAllForwardings yes'
+            echo '  RequestTTY no'
+            echo "  UserKnownHostsFile $known_hosts_path"
+          } > "$config_path"
+          chmod 0600 "$config_path" "$known_hosts_path" "$key_path" "$public_key_path"
+          eval "$(ssh-agent -s)"
+          ssh-add "$key_path"
+          rm -f -- "$key_path"
+          printf 'SSH_AUTH_SOCK=%s\n' "$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          printf 'SSH_AGENT_PID=%s\n' "$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          ssh -o ConnectTimeout=15 secure.build probe
+
+      - name: Determine deployed-to-head runtime impact
+        id: impact
+        if: steps.request.outputs.operation == 'deploy'
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REVISION: ${{ steps.request.outputs.revision }}
+        run: |
+          set -euo pipefail
+          status_receipt=$(ssh secure.build status)
+          printf '%s\n' "$status_receipt"
+          current=$(awk '$1 == "current:" { print $2 }' <<< "$status_receipt")
+          [[ -n "$current" ]] || {
+            echo "restricted status did not report the current release" >&2
+            exit 1
+          }
+
+          profile=manual-full
+          runtime_changed=true
+          should_deploy=true
+          reasons=manual-deploy
+          if [[ "$EVENT_NAME" == workflow_run ]]; then
+            if [[ "$current" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "${current}^{commit}"; then
+              impact_output="$RUNNER_TEMP/marks-production-impact-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+              : > "$impact_output"
+              node scripts/ci-impact.mjs \
+                --base "$current" \
+                --head "$REVISION" \
+                --github-output "$impact_output"
+              profile=$(awk -F= '$1 == "profile" { print substr($0, index($0, "=") + 1) }' "$impact_output")
+              runtime_changed=$(awk -F= '$1 == "runtime_changed" { print $2 }' "$impact_output")
+              reasons=$(awk -F= '$1 == "reasons" { print substr($0, index($0, "=") + 1) }' "$impact_output")
+              rm -f -- "$impact_output"
+              [[ "$runtime_changed" == true || "$runtime_changed" == false ]]
+              if [[ "$runtime_changed" == false ]]; then
+                should_deploy=false
+              fi
+            elif [[ "$current" == legacy-* ]]; then
+              profile=first-release
+              reasons=legacy-current
+            else
+              echo "current release is neither a reachable Git revision nor legacy: $current" >&2
+              exit 1
+            fi
+          fi
+
+          {
+            printf 'current=%s\n' "$current"
+            printf 'profile=%s\n' "$profile"
+            printf 'runtime_changed=%s\n' "$runtime_changed"
+            printf 'should_deploy=%s\n' "$should_deploy"
+            printf 'reasons=%s\n' "$reasons"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install pinned Rust toolchain for a manual full deploy
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          steps.request.outputs.operation == 'deploy' &&
+          steps.impact.outputs.should_deploy == 'true'
+        uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: clippy, rustfmt
+
+      - name: Deploy the exact successful CI revision without a duplicate local gate
+        if: >-
+          github.event_name == 'workflow_run' &&
+          steps.request.outputs.operation == 'deploy' &&
+          steps.impact.outputs.should_deploy == 'true'
+        shell: bash
+        env:
+          MARKS_CI_VERIFIED_SHA: ${{ steps.request.outputs.revision }}
+          MARKS_CI_RUN_ID: ${{ steps.request.outputs.ci_run_id }}
+        run: bash scripts/deploy-secure-build.sh deploy-verified "$MARKS_CI_VERIFIED_SHA"
+
+      - name: Run the complete gate for a manual deploy
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          steps.request.outputs.operation == 'deploy' &&
+          steps.impact.outputs.should_deploy == 'true'
+        run: npm run deploy:secure-build
+
+      - name: Skip application deployment when no runtime artifact changed
+        if: >-
+          steps.request.outputs.operation == 'deploy' &&
+          steps.impact.outputs.should_deploy == 'false'
+        shell: bash
+        run: |
+          echo "CI passed, but ${{ steps.impact.outputs.current }}..${{ steps.request.outputs.revision }} contains no runtime change."
+          echo "Production remains on ${{ steps.impact.outputs.current }}."
+
+      - name: Fast rollback to previous or a retained release
+        if: steps.request.outputs.operation == 'rollback'
+        shell: bash
+        env:
+          RELEASE_ID: ${{ steps.request.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$RELEASE_ID" ]]; then
+            bash scripts/deploy-secure-build.sh rollback "$RELEASE_ID"
+          else
+            bash scripts/deploy-secure-build.sh rollback
+          fi
+
+      - name: Show production status
+        if: steps.request.outputs.operation == 'status'
+        run: bash scripts/deploy-secure-build.sh status
+
+      - name: List retained releases
+        if: steps.request.outputs.operation == 'releases'
+        run: bash scripts/deploy-secure-build.sh releases
+
+      - name: Verify production after a state change
+        if: >-
+          success() &&
+          ((steps.request.outputs.operation == 'deploy' &&
+            steps.impact.outputs.should_deploy == 'true') ||
+           steps.request.outputs.operation == 'rollback')
+        run: bash scripts/deploy-secure-build.sh status
+
+      - name: Record production receipt
+        if: success()
+        shell: bash
+        env:
+          OPERATION: ${{ steps.request.outputs.operation }}
+          REVISION: ${{ steps.request.outputs.revision }}
+          RELEASE_ID: ${{ steps.request.outputs.release_id }}
+          PREVIOUS_REVISION: ${{ steps.impact.outputs.current }}
+          IMPACT_PROFILE: ${{ steps.impact.outputs.profile }}
+          RUNTIME_CHANGED: ${{ steps.impact.outputs.runtime_changed }}
+          SHOULD_DEPLOY: ${{ steps.impact.outputs.should_deploy }}
+          IMPACT_REASONS: ${{ steps.impact.outputs.reasons }}
+        run: |
+          {
+            echo '### Marks production operation'
+            echo
+            echo "- Operation: \`$OPERATION\`"
+            echo "- Workflow revision: \`$REVISION\`"
+            if [[ "$OPERATION" == deploy ]]; then
+              echo "- Previously deployed: \`$PREVIOUS_REVISION\`"
+              echo "- Impact profile: \`$IMPACT_PROFILE\`"
+              echo "- Runtime changed: \`$RUNTIME_CHANGED\`"
+              echo "- Deployment executed: \`$SHOULD_DEPLOY\`"
+              echo "- Impact reasons: \`$IMPACT_REASONS\`"
+            fi
+            if [[ -n "$RELEASE_ID" ]]; then
+              echo "- Requested release: \`$RELEASE_ID\`"
+            fi
+            echo '- Origin: https://marks.secure.build'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove deployment credentials
+        if: always()
+        shell: bash
+        run: |
+          key_path="$RUNNER_TEMP/marks-deploy-ed25519"
+          public_key_path="$RUNNER_TEMP/marks-deploy-ed25519.pub"
+          if [[ -n "${SSH_AGENT_PID:-}" ]]; then
+            ssh-agent -k >/dev/null 2>&1 || true
+          fi
+          rm -f -- "$key_path" "$public_key_path" "$HOME/.ssh/config" "$HOME/.ssh/known_hosts"

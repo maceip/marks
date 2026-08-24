@@ -2,7 +2,7 @@
 import {
   decodeSelectionPresence,
   type SelectionDirection,
-  type SelectionPresenceV2,
+  type SelectionPresence,
 } from './protocol.ts';
 import type { CaretAffinity, EsbtDocument } from './wasm/esbt-document.ts';
 
@@ -24,7 +24,7 @@ export function captureSelectionPresence(
   anchor: number,
   head: number,
   sequence: number,
-): SelectionPresenceV2 {
+): SelectionPresence {
   const direction: SelectionDirection = anchor <= head ? 'forward' : 'backward';
   // In ESBT, `before` follows text inserted at the exact boundary while
   // `after` stays ahead of it. Carets follow typing; range affinities point
@@ -53,26 +53,19 @@ export function remoteSelections(
     const selection = decodeSelectionPresence(value);
     if (!selection || !document) continue;
 
+    const previous = lastSequences.get(site) ?? -1;
+    if (selection.sequence < previous) continue;
+    lastSequences.set(site, selection.sequence);
     let anchor: number;
     let head: number;
-    if (selection.version === 2) {
-      const previous = lastSequences.get(site) ?? -1;
-      if (selection.sequence < previous) continue;
-      lastSequences.set(site, selection.sequence);
-      try {
-        ({ anchor, head } = document.resolvePresencePosition(selection));
-      } catch {
-        // A durable operation naming this identity may not have arrived yet.
-        // Hide it and retry after the next store/document notification.
-        continue;
-      }
-      if (anchor > document.length || head > document.length) continue;
-    } else {
-      // Temporary bounded v1 rolling-upgrade behavior. Only identity-less v1
-      // offsets are clamped; v2 never guesses an unrelated document offset.
-      anchor = Math.min(selection.anchorOffset, document.length);
-      head = Math.min(selection.headOffset, document.length);
+    try {
+      ({ anchor, head } = document.resolvePresencePosition(selection));
+    } catch {
+      // A durable operation naming this identity may not have arrived yet.
+      // Hide it and retry after the next store/document notification.
+      continue;
     }
+    if (anchor > document.length || head > document.length) continue;
     const user = states[`${site}-cm-user`] as
       | { name?: unknown; colorClassName?: unknown }
       | undefined;

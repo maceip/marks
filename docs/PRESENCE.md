@@ -7,15 +7,15 @@
 Presence is disposable UI state. It may make collaboration easier to see, but
 it must never participate in document convergence, authorization, or the
 meaning of **Saved**. This document deliberately distinguishes what is shipped
-from the rolling-upgrade protocol that is still planned.
+from the richer presence protocol that is still planned.
 
 ## 1. Delivery truth
 
 | Capability | Status | Behavior |
 | --- | --- | --- |
-| Room-scoped `0x02` relay, V1 JSON-value codec, remote source offsets, avatar/caret rendering, 15 s heartbeat, 30 s local expiry | **Delivered** | Works per ESBT site/connection; values are bounded and not persisted. |
+| Room-scoped relay, bounded JSON values, ESBT causal-position anchors, avatar/caret rendering, 15 s heartbeat, 30 s local expiry | **Delivered** | Works per ESBT site/connection; values are bounded and not persisted. Retired raw-offset selection values are rejected. |
 | Missing/malformed/stale presence | **Delivered degraded path** | Editing and durable CRDT sync continue; the bad frame is ignored or the slow peer is evicted. |
-| Authenticated identity aggregation, scratch labels, deterministic colors, activity/visibility state, connection-instance bootstrap/removal, V2 anchors, and preview-follow modes | **Planned** | This document fixes the contract and rollout; UI must not claim these semantics before implementation. |
+| Authenticated identity aggregation, scratch labels, deterministic colors, activity/visibility state, connection-instance bootstrap/removal, and preview-follow modes | **Planned** | This document fixes the contract; UI must not claim these semantics before implementation. |
 
 “Degraded” always means a defined fallback of delivered or planned behavior,
 not evidence that the planned feature has shipped.
@@ -141,7 +141,7 @@ or reject a document mutation because presence is invalid.
 ## 5. Selection and follow modes
 
 Source positions are engine-owned relative-position anchors plus a UTF-16
-association/bias; raw offsets are permitted only in the legacy V1 decoder.
+association/bias. Identity-less raw-offset selections are not accepted.
 Ranges are normalized after resolving against the receiver's current replica.
 An unresolvable anchor suppresses that caret/range until a later complete
 replacement; it never guesses a source offset.
@@ -181,25 +181,9 @@ without a highlight. Following never changes the follower's local selection.
 
 ## 7. Interoperability and rollout
 
-| Reader / writer | V1 offset writer | V2 anchor writer |
-| --- | --- | --- |
-| V1 reader | Full legacy behavior | Ignores unknown V2 payload; document sync continues |
-| Dual V1+V2 reader | Legacy source exact only; preview exact degrades to section/off | Full V2 behavior |
-| V2-only reader | Ignores V1 after the retirement gate | Full V2 behavior |
-
-During the compatibility window, new writers send V2 and may additionally
-send V1 only when server-negotiated room capabilities report a V1 reader.
-Dual readers deduplicate by authoritative connection/site binding and prefer
-V2. The server never translates raw offsets into anchors.
-
-Roll out in this non-negotiable order:
-
-1. Deploy protocol readers that accept V1 and V2 and safely ignore unknown
-   versions.
-2. Deploy server bootstrap/removal, authoritative enrichment, validation,
-   capability negotiation, limits, and V2 fan-out.
-3. Enable V2 writers, then the aggregation and preview-follow UI, with metrics
-   based only on counts/reason codes.
-4. Remove V1 **offset decoding last**, only after the maximum supported client
-   lifetime plus 30 days shows no V1 readers/writers. Removal does not alter
-   the outer `0x02` tag or durable document protocol.
+There is no legacy selection-presence compatibility window. Writers emit the
+anchor form, readers accept only that form, and malformed or retired raw-offset
+values are ignored without affecting document sync. Future presence work must
+deploy the server validator and readers before enabling a new writer, but it
+must not add a second selection representation merely for rolling upgrades in
+this pre-production system.

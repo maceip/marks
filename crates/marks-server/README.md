@@ -77,15 +77,15 @@ are recorded in
 ## Rooms
 
 `GET /collab/esbt/{id}` upgrades only with the subprotocol offer
-`marks.esbt.v1, marks.ticket.v1.<ticketId>.<secret>`; the server echoes only
-`marks.esbt.v1` and consumes the ticket atomically during the upgrade,
+`marks.esbt.v2, marks.ticket.v1.<ticketId>.<secret>`; the server echoes only
+`marks.esbt.v2` and consumes the ticket atomically during the upgrade,
 binding an immutable `RoomActor`. `?vv=` carries the replica's version vector
 (base64url of the engine encoding); credentials never ride the URL.
 
 Frames are one tag byte plus payload — `0x01` update, `0x02` ephemeral
 presence relay, `0x03` server version vector, `0x04` snapshot, `0x05` synced —
-where update/snapshot payloads are the ESBT core's canonical `ESBM`/`ESBF`
-encodings. A client update is role-checked before any CRDT decoding, applied
+where update/snapshot payloads are the ESBT core's canonical unified `ESBT`
+artifacts. A client update is role-checked before any CRDT decoding, applied
 to the staged room replica, journaled in one transaction (which re-checks the
 document's liveness and authorization epoch), and only then broadcast.
 Duplicate updates commit and broadcast nothing. Snapshot compaction is

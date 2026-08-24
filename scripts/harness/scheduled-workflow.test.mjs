@@ -21,6 +21,8 @@ test('scheduled proof uses the current service boundary and explicit rendering b
   assert.match(workflow, /--budget-p95 300/);
   assert.match(workflow, /--budget-dirty 2/);
   assert.match(workflow, /--budget-dom 6/);
+  assert.match(workflow, /actions\/cache@v6/);
+  assert.match(workflow, /release-current/);
   assert.doesNotMatch(workflow, /npm run smoke(?:\s|$)/m);
 });
 
@@ -28,6 +30,7 @@ test('GitHub JavaScript actions use their supported Node 24 runtime releases', (
   const workflows = [
     readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8'),
     readFileSync(scheduledPath, 'utf8'),
+    readFileSync(resolve(root, '.github/workflows/production.yml'), 'utf8'),
   ].join('\n');
 
   assert.doesNotMatch(workflows, /actions\/(?:checkout|setup-node)@v4/);

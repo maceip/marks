@@ -1,6 +1,6 @@
 # ESBT integration contract
 
-**Status:** production Rust/native + Rust/Wasm path
+**Status:** production Rust/native + WIT WebAssembly Component path
 
 **Last updated:** 2026-08-23
 
@@ -17,7 +17,8 @@ document engine, one byte protocol, and one place for each policy.
 | Concern | Owner | Source of truth |
 | --- | --- | --- |
 | Character identity, ordering, causal delivery, convergence, snapshots, history floor, undo | Rust ESBT | `ESBT-web/src/` |
-| Browser C ABI | ESBT | `ESBT-web/abi/esbt-wasm-v1.json` |
+| Browser host ABI | ESBT | `ESBT-web/wit/esbt.wit` |
+| Durable/transmitted CRDT bytes | ESBT | `ESBT-web/docs/esbt-codec.md` and `ESBT-web/src/wire.rs` |
 | Product resource/compaction profile | Marks | `engine-profile.json` |
 | IndexedDB durability, reconnect, room transport, editor bridge | Marks client | `client/src/collab/` |
 | Admission, authorization, durable revisions, retry receipts | Marks server | `crates/marks-server/src/room/` |
@@ -25,44 +26,53 @@ document engine, one byte protocol, and one place for each policy.
 
 There is no TypeScript CRDT, native/Wasm transcoder, Node room server, or
 second undo implementation. Presence is lossy product state, not an ESBT data
-type. The delivered codec is the V1 JSON-value/UTF-16-offset baseline. The V2
-engine-anchor codec, identity aggregation, preview mappings, validation, and
-rolling upgrade are **planned** in [`PRESENCE.md`](PRESENCE.md). A missing or
-invalid presence frame is a degraded presence experience, never an ESBT error.
+type. Selection presence uses ESBT causal-position artifacts; the retired
+identity-less offset shape is rejected. Identity aggregation, preview mappings,
+and richer server validation remain **planned** in [`PRESENCE.md`](PRESENCE.md).
+A missing or invalid presence frame is a degraded presence experience, never an
+ESBT document error.
 
-## 2. One source identity and generated ABI
+## 2. One source identity and generated WIT component
 
 `crates/marks-server/Cargo.toml` pins ESBT-web by a full Git revision. The
-server links that crate natively. `scripts/build-esbt-wasm.sh` checks out (or is
-given) the same source, builds `wasm32-unknown-unknown`, and generates
-`client/src/collab/wasm/esbt-abi.generated.ts` from the engine-owned ABI IDL.
+server links that crate natively. `scripts/build-esbt-component.sh` checks out
+(or is given) the same source, builds the `esbt:document@1.0.0` component, and
+runs the exactly pinned official Jco transpiler library to generate the browser
+TypeScript/JavaScript binding and its core Wasm modules. The numeric WIT package
+and wire versions identify
+the only current contracts; there is no older ABI or codec reader to maintain.
 
-The IDL is also embedded verbatim in the Wasm custom section `esbt.abi`.
-`EsbtRuntime` refuses an artifact when any of these differ:
+The checked-in artifact set is:
 
-- embedded IDL versus generated binding;
-- declared versus actual memory export;
-- declared versus actual engine function names or arities;
-- expected empty import surface versus host imports.
+- `client/public/esbt.component.wasm`, the canonical component binary;
+- `client/public/esbt.wit`, the reviewed source contract;
+- `client/public/esbt.core*.wasm`, the Jco-generated browser modules;
+- `client/src/collab/wasm/generated/`, the generated binding and types;
+- `client/public/esbt.component.manifest.json`, the bounded provenance record;
+- `client/public/esbt.component.rev`, the exact engine revision stamp.
 
-`client/public/esbt.wasm.manifest.json` binds the engine revision, dirty/clean
-source state, content fingerprint, ABI hash/version, product-profile hash,
-Wasm hash, compiler, and target. `npm run verify:esbt` is the strict release
-gate and rejects dirty source or a server/artifact revision mismatch.
-`npm run verify:esbt:dev` permits dirty source for coordinated local work but
-retains every other check.
+The manifest binds the engine revision and source fingerprint, clean/dirty
+state, product profile, WIT hash/package, codec format, exact transpiler,
+component and generated-wrapper hashes, every core module hash/length, compiler,
+and target. `npm run verify:esbt` rejects dirty source, revision drift, malformed
+component/core headers, undeclared or corrupt modules, WIT drift, profile drift,
+generated TypeScript value-type drift, and a component whose WIT export—read
+back from the binary by the same transpiler library—does not contain the engine
+interface.
+`npm run verify:esbt:dev` relaxes only the dirty-source release condition.
 
-The production `EsbtRuntime.load` fetches that manifest beside the Wasm and
-SHA-256 checks the received bytes before it exposes a runtime. Compilation may
-run concurrently through `instantiateStreaming` for latency, but a compiled
-module is discarded when the manifest, digest, embedded IDL, import surface,
-or generated export contract differs.
+The production `EsbtRuntime.load` validates the manifest before allocation,
+fetches only declared core modules, checks each byte length and SHA-256 digest,
+compiles it with the browser's standard `WebAssembly` API, and instantiates the
+generated Jco binding. Browsers do not need native Component Model or WIT
+support; Jco lowers the component to ordinary core Wasm modules plus JavaScript.
 
-The Rust process independently compares `MARKS_STATIC_DIR`'s manifest to the
-manifest bound into its binary and stream-hashes the deployed `esbt.wasm` at
-startup. A mismatched binary/static pair refuses startup. `/v1/artifact`
-reports `staticArtifactVerified` and `profileCoherent`; `releaseReady` also
-requires both physical checks, clean source receipts, and a real build revision.
+The Rust process independently compares `MARKS_STATIC_DIR` with the manifest
+bound into its binary and stream-hashes the deployed component, WIT, and every
+core module at startup. A mismatched binary/static set refuses startup.
+`/v1/artifact` reports physical verification and profile/engine coherence;
+`releaseReady` additionally requires clean source receipts and a real build
+revision.
 
 ## 3. Browser document surface
 
@@ -96,11 +106,11 @@ interface TextEdit {
 }
 ```
 
-The per-handle ABI call `esbt_doc_visible_edits(handle)` returns those edits.
-The wrapper checks that the receipt's `visibleChanged` bit agrees with the
-edit list. Remote edits are queued to a microtask and dispatched to CodeMirror
-in sequence. Editor-originated edits are already painted and are not echoed.
-A full-string reconciliation exists only when an offset invariant fails.
+WIT returns those edits as `list<visible-edit>` in typed local-change and apply
+receipts. The wrapper checks that `visibleChanged` agrees with the edit list.
+Remote edits are queued to a microtask and dispatched to CodeMirror in sequence.
+Editor-originated edits are already painted and are not echoed. A full-string
+reconciliation exists only when an offset invariant fails.
 
 The same deltas feed the markdown worker. The worker owns its current source
 and patches it before incremental block parsing, so neither the editor bridge
@@ -129,13 +139,13 @@ Every WebSocket binary message is one tag byte plus a payload:
 
 | Tag | Direction | Payload |
 | ---: | --- | --- |
-| `0x01` update | server → client / legacy relay | canonical ESBT update |
-| `0x02` presence | both | bounded Marks presence bytes; delivered V1 and planned V2 are specified in [`PRESENCE.md`](PRESENCE.md); never persisted |
-| `0x03` server version | server → client | canonical ESBT version |
-| `0x04` snapshot | server → client | canonical compact/full ESBT snapshot |
+| `0x01` update | server → client | canonical ESBT Update artifact |
+| `0x02` presence | both | bounded Marks presence bytes specified in [`PRESENCE.md`](PRESENCE.md); never persisted |
+| `0x03` server version | server → client | canonical ESBT Version artifact |
+| `0x04` snapshot | server → client | canonical compact/full ESBT Snapshot artifact |
 | `0x05` synced | server → client | empty initial-sync boundary |
-| `0x06` mutation | client → server | `MKMT` v1 ID + kind + canonical bytes |
-| `0x07` committed | server → client | `MKCM` v1 ID + durable revision + version |
+| `0x06` mutation | client → server | `MKMT` format byte 1 + ID + kind + canonical artifact |
+| `0x07` committed | server → client | `MKCM` format byte 1 + ID + durable revision + Version artifact |
 
 The socket negotiates `marks.esbt.v2` alongside its one-use admission ticket.
 The server authorizes before decoding document bytes. Consecutive mutations in
@@ -175,8 +185,8 @@ does not rename the catalog record.
 ## 9. Required evidence
 
 - ESBT native unit, adverse-network, identifier-size, and large-snapshot tests;
-- generated ABI freshness and compiled-artifact verification;
-- Marks Wasm two-replica/delta/large-snapshot tests;
+- generated WIT/Jco binding freshness and compiled-component verification;
+- Marks component two-replica/delta/large-edit/large-snapshot tests;
 - IndexedDB concurrent append/checkpoint/retry tests;
 - server crash/retry, batching, compaction, restart, capacity, and rate tests;
 - real-browser two-peer/offline/reconnect smoke before release.

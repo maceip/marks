@@ -1,0 +1,42 @@
+{
+  "schema": "esbt.component-artifact",
+  "format": 1,
+  "engine_revision": "40a1771343a08d8d74a7e2007b0233a6878f4fa1",
+  "source_dirty": false,
+  "source_sha256": "0a993852228e8694b1ee876991455eb5b991202bd031d0c4630bb24b96ea10f8",
+  "profile_sha256": "1024302965e5aeb4f36010946dfe005a398fc2dd9ca3d77fc9aff6ac86e66f41",
+  "wit_package": "esbt:document@1.0.0",
+  "wit_sha256": "f14501836e4e6cbf6d89bc391bb52c5776c45d56e82a571d5f85c92fe0537af6",
+  "wire_version": 1,
+  "transpiler_package": "@bytecodealliance/jco-transpile",
+  "transpiler_version": "0.12.1",
+  "component": {
+    "path": "/esbt.component.wasm",
+    "bytes": 450782,
+    "sha256": "6c36c0bd52b26fef47f65a1748fc2d82eed84151751c71fb13534a15620087ff"
+  },
+  "wrapper": {
+    "path": "client:collab/wasm/generated/esbt.js",
+    "bytes": 250425,
+    "sha256": "0f2743495137d2c0c4aff8746819a63831561fdff132e9c6ee03989d7a6ac871"
+  },
+  "core_modules": [
+    {
+      "path": "/esbt.core.wasm",
+      "bytes": 430277,
+      "sha256": "f291e47d8686275802d6ca5b74cc979e4040fff2650ed4b8aaab6ec73a66aeae"
+    },
+    {
+      "path": "/esbt.core2.wasm",
+      "bytes": 106,
+      "sha256": "3871cb9899e02849abf1b27392fc342f7a79ac15046158fcec43399c97f17d8d"
+    },
+    {
+      "path": "/esbt.core3.wasm",
+      "bytes": 96,
+      "sha256": "15b71ad6dd0bbc280229817f84bf6a0a7b766964dd77b174e4449e30b75788e5"
+    }
+  ],
+  "compiler": "rustc 1.95.0 (59807616e 2026-04-14)",
+  "target": "wasm32-unknown-unknown"
+}

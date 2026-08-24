@@ -114,11 +114,12 @@ client/                     Vite + React + TypeScript
   auth/                     scratch/device primitives and room admission
   data/                     one document adapter; local workspace or Rust /v1
   browser/                  clipboard, context menu, voice, tab sync, cache
-  collab/                   CollabSession, Wasm ESBT document, journal,
+  collab/                   CollabSession, WIT ESBT component, journal,
                             presence decorations for CodeMirror
   markdown/                 markdown-it setup, incremental block parse, DOM patch
   workers/                  markdown.worker.ts, bench.worker.ts
-  public/esbt.wasm          Rust core + embedded, generated ABI contract
+  public/esbt.component.*   component, WIT, manifest, revision receipt
+  public/esbt.core*.wasm    Jco browser core modules declared by the manifest
   editor/                   CodeMirror 6 setup, commands, theme
   pages/                    route screens: Home, Benchmark
   content/                  canonical documents (About opens in the editor)
@@ -134,17 +135,18 @@ crates/marks-auth/          identity/authorization validators
 crates/marks-server/        the only HTTP/WebSocket process
 ```
 
-Rebuild the Wasm artifact and generated TypeScript binding from the pinned
-ESBT-web revision with `scripts/build-esbt-wasm.sh`; verify its revision,
-content hashes, embedded ABI, import surface, and export signatures with
-`npm run verify:esbt`.
+Rebuild the WebAssembly Component, generated Jco TypeScript binding, core
+modules, WIT source, and provenance manifest from the pinned ESBT-web revision
+with `scripts/build-esbt-component.sh`. `npm run verify:esbt` verifies their
+revision, hashes, Wasm value types, generated TypeScript types, and the WIT
+interface extracted from the actual component.
 
 `marks-server` is one Rust process owning HTTP, sessions, ACLs, durable
 document rooms, and the native ESBT replica (the pinned
 [maceip/ESBT-web](https://github.com/maceip/ESBT-web) core). There is
-intentionally no Node server or compatibility layer: room payloads are the
-Rust core's canonical `ESBM`/`ESBS`/`ESBF` encodings, which the browser
-speaks through the same core compiled to Wasm.
+intentionally no Node server or compatibility layer. Durable room payloads use
+the one canonical `ESBT` artifact envelope and one of its six kinds; the
+browser speaks it through the same Rust core exposed as a WIT component.
 
 ### The rendering path
 
@@ -171,8 +173,11 @@ Documents are stored in **ESBT** (Mechaoui & Imine,
 orders characters by weighted identifiers — Stern–Brocot fractions with an
 integer ladder and a sequence path behind them — so deletes remove state
 instead of leaving tombstones. The browser runs the Rust core through the
-`esbt_doc_*` Wasm ABI (`client/src/collab/wasm`), the same crate
-`marks-server` uses natively. Per-replica undo, transaction batching, and an
+generated `esbt:document/engine` WIT component binding
+(`client/src/collab/wasm`), while `marks-server` uses the same crate natively.
+Typed config, receipts, edits, errors, and document resources cross WIT; bytes
+cross only for the six canonical ESBT artifacts. Per-replica undo,
+transaction batching, and an
 IndexedDB full-snapshot + update journal live on the Marks side of that
 boundary; the engine does not schedule its own compaction or persistence.
 Transient presence is a small Marks-owned, bounded, non-persistent protocol;
@@ -180,11 +185,12 @@ there is no second TypeScript document engine. Comments and version history
 are fully usable in local mode. Remote
 comment storage, commenter authorization, and cross-user history are still
 absent until the authenticated metadata service lands. The binding and release
-boundary is [docs/V1-SCOPE.md](docs/V1-SCOPE.md).
+boundary is [docs/ESBT-INTEGRATION.md](docs/ESBT-INTEGRATION.md).
 
-Presence is intentionally outside durable sync. Its delivered V1 offset path,
-defined degraded behavior, planned V2 anchor path, privacy invariants, and
-reader-first rollout are tracked separately in [docs/PRESENCE.md](docs/PRESENCE.md);
+Presence is intentionally outside durable sync. Selection positions are ESBT
+causal anchors; the retired raw-offset shape is rejected. Defined degraded
+behavior, privacy invariants, and richer planned presence work are tracked
+separately in [docs/PRESENCE.md](docs/PRESENCE.md);
 the avatar/cursor bullet above must not be read as claiming those planned
 semantics.
 
@@ -229,11 +235,11 @@ size, IndexedDB journal saved-ness, and the encoded size of the document.
 ## Tests
 
 ```bash
-npm run verify:esbt      # strict artifact revision/hash/ABI/provenance gate
+npm run verify:esbt      # strict component/WIT/codec/provenance gate
 npm run test:bench       # deterministic trace and median/p95 receipt policy
 npm run test:browser     # clipboard, context-menu, select-all, tab isolation
 npm run test:markdown    # document-global preview invalidation and incremental parse
-npm run test:wasm        # Wasm adapter, site conversion, journal, reconnect fallbacks
+npm run test:component   # WIT adapter, large edits, journal, reconnect fallbacks
 npm run test:auth        # browser/Rust canonical auth wire and scratch helpers
 npm run test:harness     # helper units only: chrome discovery, budget parsers, wait-for-server
 cargo test --workspace   # marks-auth validators plus marks-server HTTP/room integration
@@ -244,25 +250,50 @@ npm run smoke:platforms  # portable glass checks on Playwright, Puppeteer, agent
 npm run measure          # latency on a large generated document
 ```
 
-GitHub Actions (`.github/workflows/ci.yml`) has two required jobs on the Rust
-version in `rust-toolchain.toml` (the same pin as
-`workspace.package.rust-version`):
+GitHub Actions (`.github/workflows/ci.yml`) classifies the complete base-to-head
+diff before scheduling expensive work. The classifier is checked-in code with
+unit tests; unknown paths and changes to CI selection itself fail toward full
+coverage.
 
-- `test` — format, clippy, workspace tests (including in-process
-  `room_collab`), strict Wasm identity/ABI verification, Node unit suites
-  including `test:wasm`, and the default local client build.
-- `service-collab` — builds `marks-server` plus `VITE_MARKS_DATA_MODE=service`,
-  boots the binary, drives first-paint `/v1` from Playwright, proves two
-  isolated browser replicas through separately minted room tickets, then runs
-  two native ESBT peers against the UI-created document (`npm run ci:service`).
+| Profile | Aggregate checks | Live service browsers | Production runtime |
+| --- | --- | --- | --- |
+| `docs` | none | none | unchanged |
+| `infra` | workflow/shell/deploy harness | none | unchanged |
+| `web-unit` | TypeScript, web units, ESBT provenance, client build/budgets | none | changed |
+| `web-chromium` | web aggregate | Chromium | changed |
+| `server-chromium` | Rust format/test/clippy/room proof | Chromium | changed |
+| `full` | complete Rust + web + harness aggregate | Chromium, Firefox, WebKit | changed only when runtime paths changed |
 
-A green workflow is proof of current service admission, isolated-browser
-convergence, remote caret/presence rendering, per-peer undo, preview writeback,
-native multi-peer convergence, and the Wasm client plumbing tests. The separate
-`scheduled-service-smoke.yml` workflow runs daily, manually, and whenever its
-own contract changes: it builds the release-shaped service client/server,
-repeats the Chromium browser/native-peer proof, then enforces large-document
-first-render, p50/p95, dirty-block, and DOM-operation budgets.
+Browser/auth/editor/rendering-surface/service-worker/collaboration/WIT/Wasm/
+codec, dependency, toolchain, test, selector, mixed server-plus-web, and unknown
+changes all select `full`. Other mixed changes union their requirements, so an
+infrastructure plus web change cannot drop either harness. Firefox and WebKit
+prove the service UI; the browser-independent native ESBT peer is run once with
+Chromium. Bounded Rust caches are keyed by OS,
+the pinned toolchain, `Cargo.lock`, and build profile so later commits reuse
+dependencies while Cargo still validates every changed source. An always-run
+`CI gate` fails unless exactly the classified aggregate and service jobs pass.
+
+A green full workflow is proof of current service admission,
+isolated-browser convergence, remote caret/presence rendering, per-peer undo,
+preview writeback, native multi-peer convergence, and Wasm client plumbing.
+The separate `scheduled-service-smoke.yml` workflow remains an unconditional
+daily/manual release-shape Chromium and performance proof, regardless of which
+incremental profiles recent commits selected.
+
+A successful same-repository `CI` push run on `main` then triggers the separate,
+privileged `production.yml` workflow. It checks out the exact tested revision,
+compares it with the currently deployed Git revision, and skips application
+deployment when the accumulated diff contains no runtime artifact change. For
+a runtime change, the successful exact-SHA CI receipt removes only the duplicate
+GitHub-side test pass; the forced-command `marks-deploy@secure.build` protocol
+still rebuilds from the exact Git archive, verifies it, canaries it, and
+atomically activates it. A manually requested deploy still runs the complete
+local gate. The key cannot open a shell, forward ports, invoke arbitrary
+sudo/Docker commands, read production data, or address an unrelated service.
+Manual dispatch defaults to the no-build fast rollback path. Required SSH
+secrets and the rollback procedure are documented in
+[deploy/README.md](deploy/README.md).
 
 `npm run smoke:platforms` runs the same document-glass checks (rendering,
 select-all, context menu, honest voice availability, theme, and connectivity

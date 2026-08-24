@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
-import { encodeDocumentConfig, verifyWasmArtifact } from './esbt-document.ts';
+import { verifyComponentArtifact } from './esbt-document.ts';
+import { createTestRuntime } from './test-runtime.ts';
 import {
   ESBT_ERROR,
   EsbtError,
@@ -21,20 +22,23 @@ test('marks sites widen to the 128-bit engine form and back', () => {
   assert.throws(() => marksSiteToEngine('site_1234'));
 });
 
-test('production config encodes adaptive Dmax and the browser ceilings', () => {
-  const bytes = encodeDocumentConfig(MARKS_DOCUMENT_CONFIG);
-  assert.equal(bytes[0], 1);
-  assert.equal(bytes[1], 0);
-  assert.equal(bytes[2] & 0b01, 0b01);
-  assert.ok(bytes.byteLength > 16);
+test('production config crosses WIT as typed adaptive Dmax and resource ceilings', async () => {
+  const runtime = await createTestRuntime();
+  const config = runtime.resolveConfig(MARKS_DOCUMENT_CONFIG);
+  assert.equal(config.strategy.kind, 'midpoint');
+  assert.equal(config.adaptiveDmax?.floor, 16);
+  assert.equal(config.adaptiveDmax?.ceiling, 2_147_483_648);
+  assert.equal(config.limits.maxDocumentUnits, 1_000_000);
+  assert.equal(config.limits.maxMessageBytes, 64 * 1024 * 1024);
 });
 
-test('runtime artifact bytes must match the provenance manifest', async () => {
+test('component core bytes must match their provenance descriptor', async () => {
   const bytes = Uint8Array.from([1, 2, 3, 4]);
-  const wasm_sha256 = createHash('sha256').update(bytes).digest('hex');
-  await verifyWasmArtifact(bytes.buffer, { format: 2, wasm_sha256 });
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  const descriptor = { path: '/dummy.wasm', bytes: bytes.byteLength, sha256 };
+  await verifyComponentArtifact(bytes, descriptor);
   await assert.rejects(
-    verifyWasmArtifact(bytes.buffer, { format: 2, wasm_sha256: '0'.repeat(64) }),
+    verifyComponentArtifact(bytes, { ...descriptor, sha256: '0'.repeat(64) }),
     /do not match/,
   );
 });

@@ -100,7 +100,7 @@ overlapping annotations, and Peritext's problem does not arise.
 
 | Project | Version checked | Verdict |
 | --- | --- | --- |
-| [ESBT-web](https://github.com/maceip/ESBT-web) | pinned Rust revision + Wasm ABI v1 | **Current engine.** One Rust source for browser and server. |
+| [ESBT-web](https://github.com/maceip/ESBT-web) | pinned Rust revision + WIT component + canonical ESBT codec | **Current engine.** One Rust source for browser and server; no raw ABI compatibility path. |
 | [loro-crdt](https://github.com/loro-dev/loro) | 1.14.1, published 2026-08-10 | **Survey default, then removed.** Fugue over an Eg-walker style event graph. |
 | [loro-codemirror](https://github.com/loro-dev/loro-codemirror) | 0.3.3 | **Survey, then removed.** Cursor layers were kept until the ESBT presence layer replaced them. |
 | [Yjs](https://github.com/yjs/yjs) | 13.6.32 | **Survey alternate, then removed.** |
