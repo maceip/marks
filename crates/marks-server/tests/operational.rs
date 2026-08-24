@@ -301,6 +301,28 @@ async fn artifact_identity_static_mime_and_security_headers_are_process_owned() 
         .await
         .unwrap();
     assert_eq!(legacy_navigation.status(), 200);
+
+    // Firefox does not preserve `Sec-Fetch-Mode: navigate` on a navigation
+    // its service worker passes through with fetch(event.request); the
+    // Accept preference must be sufficient on its own or every reload of a
+    // deep link under the worker becomes an empty-response error page.
+    let forwarded_navigation = http
+        .get(format!("{}/documents/2f9d1c", server.base))
+        .header(
+            "accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        )
+        .header("sec-fetch-mode", "same-origin")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(forwarded_navigation.status(), 200);
+    assert!(
+        forwarded_navigation.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/html")
+    );
     assert!(
         legacy_navigation.headers()["content-type"]
             .to_str()

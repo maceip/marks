@@ -314,8 +314,12 @@ async fn serve_static(directory: PathBuf, request: Request) -> Response {
 
 /// A navigation is a top-level document request: GET or HEAD, outside the
 /// hashed-asset namespace, that a browser marks `Sec-Fetch-Mode: navigate`
-/// or that prefers HTML. Module imports, fetch(), workers, and asset
-/// lookups never qualify, so they receive honest 404s.
+/// or `Sec-Fetch-Dest: document`, or that prefers HTML. The signals are a
+/// union, never a gate: Firefox does not preserve `navigate` on a fetch a
+/// service worker passes through, so a navigation must still be
+/// recognizable by its Accept preference alone. Module imports, worker
+/// scripts, and Wasm/JSON fetches send neither signal, so they receive
+/// honest 404s.
 fn is_navigation(request: &Request) -> bool {
     if request.method() != Method::GET && request.method() != Method::HEAD {
         return false;
@@ -323,12 +327,17 @@ fn is_navigation(request: &Request) -> bool {
     if request.uri().path().starts_with("/assets/") {
         return false;
     }
-    if let Some(mode) = request.headers().get("sec-fetch-mode") {
-        return mode.as_bytes() == b"navigate";
-    }
-    request
-        .headers()
-        .get(header::ACCEPT)
-        .and_then(|accept| accept.to_str().ok())
-        .is_some_and(|accept| accept.contains("text/html"))
+    let header_is = |name: &str, value: &[u8]| {
+        request
+            .headers()
+            .get(name)
+            .is_some_and(|header| header.as_bytes() == value)
+    };
+    header_is("sec-fetch-mode", b"navigate")
+        || header_is("sec-fetch-dest", b"document")
+        || request
+            .headers()
+            .get(header::ACCEPT)
+            .and_then(|accept| accept.to_str().ok())
+            .is_some_and(|accept| accept.contains("text/html"))
 }
