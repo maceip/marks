@@ -269,6 +269,16 @@ own contract changes: it builds the release-shaped service client/server,
 repeats the Chromium browser/native-peer proof, then enforces large-document
 first-render, p50/p95, dirty-block, and DOM-operation budgets.
 
+A successful same-repository `CI` push run on `main` then triggers the separate,
+privileged `production.yml` workflow. It checks out the exact tested revision,
+runs the additional deployment gate, and uses the forced-command
+`marks-deploy@secure.build` protocol to build, canary, and atomically activate
+Linux server and web artifacts. The key cannot open a shell, forward ports,
+invoke arbitrary sudo/Docker commands, read production data, or address an
+unrelated service. Manual dispatch defaults to the no-build fast rollback path.
+Required SSH secrets and the rollback procedure are documented in
+[deploy/README.md](deploy/README.md).
+
 `npm run smoke:platforms` runs the same document-glass checks (rendering,
 select-all, context menu, honest voice availability, theme, and connectivity
 copy) on all three local platforms. How each platform is found, and which Chrome binary they

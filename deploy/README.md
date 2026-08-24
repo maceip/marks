@@ -1,8 +1,9 @@
 # Deploy marks.secure.build
 
-Production host is `devuser@secure.build` (`vectorheart`). Caddy terminates
-TLS for the subdomain; Knot is authoritative for `secure.build.`; systemd
-runs the one Rust process.
+Production runs on `secure.build` (`vectorheart`). Deployments authenticate as
+the dedicated `marks-deploy` Unix identity; the application continues to run
+as `devuser`. Caddy terminates TLS for the subdomain, Knot is authoritative for
+`secure.build.`, and systemd runs the one Rust process.
 
 | Piece | Location |
 | --- | --- |
@@ -15,12 +16,42 @@ runs the one Rust process.
 | DNS | Knot zone `secure.build.` → `marks` A `142.248.222.1` |
 | Listen | `127.0.0.1:5192` |
 | Origin | `https://marks.secure.build` |
+| Restricted SSH endpoint | `marks-deploy@secure.build` |
+| Forced-command protocol | `/etc/marks/deploy-protocol.md` on `secure.build` |
 
 ## Deploy
+
+Every successful same-repository `CI` push run on `main` triggers
+`.github/workflows/production.yml`. The privileged workflow checks out the
+exact tested revision and invokes the same deployment command documented
+below. Pull requests, fork runs, failed CI, non-`main` runs, and manually
+selected non-`main` refs cannot reach the production job.
+
+GitHub Actions needs two repository or `production` environment secrets:
+
+| Secret | Value |
+| --- | --- |
+| `MARKS_DEPLOY_SSH_KEY` | Dedicated passphrase-free OpenSSH private key whose public half is forced-command authorized for `marks-deploy@secure.build` |
+| `MARKS_DEPLOY_KNOWN_HOSTS` | Trusted `secure.build ssh-ed25519 ...` host-key line |
+
+The workflow requires strict host-key checking and only the supplied identity;
+it never learns a host key from the deployment connection. Its SSH
+configuration disables forwarding and PTYs. Production deploys and rollbacks
+share the `marks-production` concurrency group, while the remote release lock
+remains the final serialization boundary.
+
+The operator command remains available from a clean published checkout:
 
 ```bash
 ./scripts/deploy-secure-build.sh deploy
 # or: npm run deploy:secure-build
+```
+
+For a local operator invocation, select the dedicated private key explicitly:
+
+```bash
+MARKS_DEPLOY_IDENTITY_FILE=/absolute/path/to/marks_github_actions \
+  ./scripts/deploy-secure-build.sh status
 ```
 
 Deployment only accepts a clean commit that exactly matches the freshly
@@ -31,10 +62,14 @@ client build and UI budgets, then a live Chromium workflow with a native
 second ESBT peer. There is no `--skip-tests` or dirty-release option.
 
 The exact commit is sent with `git archive`; ignored files and the local
-working tree are not uploaded. Because the development checkout is macOS
-arm64 and production is Linux x86_64, the host builds both Rust binaries in
-the digest-pinned `rust:1.88.0-bookworm` container. The host uses Node 22 and
-`npm ci` to rebuild the service-mode static UI from the same archive.
+working tree are not uploaded. The client can issue only the fixed
+`probe/upload/cleanup/deploy/rollback/status/releases` grammar. It cannot run
+a shell, create arbitrary remote paths, inject environment variables, invoke
+Docker or sudo, stream a privileged script, or select a systemd unit. Because
+the development checkout is macOS arm64 and production is Linux x86_64, the
+root-owned Marks helper builds both Rust binaries in a digest-pinned
+`rust:1.88.0-bookworm` container. The unprivileged build sandbox uses locked
+Node dependencies to rebuild the service-mode static UI from the same archive.
 
 Before production changes, the candidate binary and its static directory are
 started on an isolated loopback port with a temporary database. `/readyz` and
@@ -50,16 +85,26 @@ and its unit automatically. The first run preserves the existing direct
 `/opt/marks/marks-server` + `static/` installation as a `legacy-*` release, so
 the migration itself has a rollback target.
 
-The host prerequisites currently verified by the script are Linux x86_64,
-Docker, Node/npm 22 or newer, rsync, flock, curl, Python 3, sha256sum,
-`systemd-analyze`, noninteractive sudo, and SSH access as
-`devuser@secure.build`.
+The client verifies the installed boundary with the read-only `probe` command.
+Toolchain, container, staging, release ownership, canary, and service checks
+are server-owned policy; the deployment key has no general shell, Docker group,
+or sudo access. Uploaded source is confined to `/var/lib/marks-deploy`, sealed
+releases are root-owned under `/opt/marks/releases`, and the deployment account
+cannot read `/var/lib/marks` or touch unrelated services and configuration.
 
 ## Fast rollback
 
 Rollback never rebuilds and does not rerun the deployment gate. It verifies
 the retained release's checksums, stops the service, switches the local
 symlink and unit, restarts, then checks the public service:
+
+From GitHub, open **Actions → Production deploy and rollback → Run workflow**,
+leave the default `rollback` operation selected, and leave `release_id` empty
+to activate `previous`. Enter a retained release id to select it explicitly.
+The same workflow exposes read-only `status` and `releases` operations, plus a
+manual idempotent `deploy` of the current `main` revision. GitHub rollback uses
+the fast path below: it does not install toolchains, run tests, rebuild, or
+upload source.
 
 ```bash
 ./scripts/deploy-secure-build.sh status
@@ -69,8 +114,9 @@ symlink and unit, restarts, then checks the public service:
 # Select an older retained release explicitly:
 ./scripts/deploy-secure-build.sh rollback <release-id>
 
-# Emergency host-side form (installed by the first successful deployment):
-ssh devuser@secure.build 'bash /opt/marks/deploy/remote-release.sh rollback'
+# Direct restricted-protocol form:
+ssh -i /absolute/path/to/marks_github_actions \
+  -o IdentitiesOnly=yes marks-deploy@secure.build rollback
 ```
 
 A successful rollback swaps `current` and `previous`, so running the default

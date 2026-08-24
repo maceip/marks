@@ -1,16 +1,30 @@
 #!/usr/bin/env bash
-# Build, prove, and atomically deploy one clean Marks commit to secure.build.
-# The release is built on the Linux host so a macOS checkout cannot
-# accidentally upload a Darwin binary. See deploy/README.md for the release
-# layout and rollback contract.
+# Build, prove, and atomically deploy one clean Marks commit through the
+# restricted secure.build deployment protocol. The release is built on the
+# Linux host so a macOS checkout cannot accidentally upload a Darwin binary.
+# See deploy/README.md for the release layout and rollback contract.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-HOST=${MARKS_DEPLOY_HOST:-devuser@secure.build}
-PUBLIC_ORIGIN=${MARKS_PUBLIC_ORIGIN:-https://marks.secure.build}
-OBSERVE_SECONDS=${MARKS_OBSERVE_SECONDS:-30}
+HOST=marks-deploy@secure.build
 DEPLOY_BRANCH=${MARKS_DEPLOY_BRANCH:-main}
-REMOTE_UPLOAD=""
+IDENTITY_FILE=${MARKS_DEPLOY_IDENTITY_FILE:-}
+STAGED_REVISION=""
+SSH=(
+  ssh
+  -o BatchMode=yes
+  -o IdentitiesOnly=yes
+  -o StrictHostKeyChecking=yes
+  -o ConnectTimeout=15
+  -o ClearAllForwardings=yes
+  -o RequestTTY=no
+)
+
+if [[ -n "$IDENTITY_FILE" ]]; then
+  [[ -f "$IDENTITY_FILE" ]] \
+    || { echo "deploy: MARKS_DEPLOY_IDENTITY_FILE is not a file: $IDENTITY_FILE" >&2; exit 1; }
+  SSH+=(-i "$IDENTITY_FILE")
+fi
 
 usage() {
   cat <<'EOF'
@@ -22,8 +36,9 @@ Usage:
 
 Commands:
   deploy       Require a clean commit, run the complete local gate, build that
-               commit for Linux on devuser@secure.build, canary it, atomically
-               activate it, and automatically roll back failed health checks.
+               commit through the restricted secure.build protocol, canary it,
+               atomically activate it, and automatically restore a failed
+               activation.
   rollback     Atomically activate `previous`, or the named retained release.
                A successful rollback swaps `current` and `previous`, so the
                command can be used again to undo the rollback.
@@ -31,13 +46,13 @@ Commands:
   releases     List retained versioned releases on the host.
 
 Environment:
-  MARKS_DEPLOY_HOST       SSH target (default: devuser@secure.build)
-  MARKS_PUBLIC_ORIGIN     Public origin (default: https://marks.secure.build)
-  MARKS_OBSERVE_SECONDS   Post-start health observation, 5-600 (default: 30)
-  MARKS_DEPLOY_BRANCH     Required origin branch (default: main)
+  MARKS_DEPLOY_BRANCH         Required origin branch (default: main)
+  MARKS_DEPLOY_IDENTITY_FILE  Optional private-key path for a local invocation;
+                              GitHub uses its ephemeral SSH agent instead.
 
 Deployment intentionally has no skip-tests or dirty-tree switch. Rollback and
-status do not build and do not run the pre-deploy suite.
+status do not build and do not run the pre-deploy suite. The SSH target and
+remote command grammar are fixed rather than supplied by the environment.
 EOF
 }
 
@@ -53,22 +68,14 @@ require_command() {
 cleanup() {
   local status=$?
   trap - EXIT INT TERM
-  if [[ -n "$REMOTE_UPLOAD" ]]; then
-    if [[ "$REMOTE_UPLOAD" =~ ^/tmp/marks-deploy\.[A-Za-z0-9]+$ ]]; then
-      ssh -o BatchMode=yes "$HOST" "rm -rf -- '$REMOTE_UPLOAD'" >/dev/null 2>&1 || true
-    fi
+  if [[ "$STAGED_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+    restricted_command cleanup "$STAGED_REVISION" >/dev/null 2>&1 || true
   fi
   exit "$status"
 }
 trap cleanup EXIT INT TERM
 
-validate_common_config() {
-  [[ "$PUBLIC_ORIGIN" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] \
-    || die "MARKS_PUBLIC_ORIGIN must be one HTTP(S) origin without a path"
-  [[ "$OBSERVE_SECONDS" =~ ^[0-9]+$ ]] \
-    || die "MARKS_OBSERVE_SECONDS must be an integer"
-  (( OBSERVE_SECONDS >= 5 && OBSERVE_SECONDS <= 600 )) \
-    || die "MARKS_OBSERVE_SECONDS must be between 5 and 600"
+validate_deploy_config() {
   [[ "$DEPLOY_BRANCH" =~ ^[A-Za-z0-9._/-]+$ \
     && "$DEPLOY_BRANCH" != /* \
     && "$DEPLOY_BRANCH" != */ \
@@ -76,40 +83,27 @@ validate_common_config() {
     || die "MARKS_DEPLOY_BRANCH is not a safe branch name"
 }
 
-remote_command() {
+restricted_command() {
   local command=$1
   shift
-  local quoted_args=""
+  case "$command" in
+    probe|upload|cleanup|deploy|rollback|status|releases) ;;
+    *) die "unsupported restricted command: $command" ;;
+  esac
+
+  local request=$command
   local argument
   for argument in "$@"; do
     [[ "$argument" =~ ^[A-Za-z0-9._-]+$ ]] \
       || die "unsafe remote argument: $argument"
-    quoted_args+=" '$argument'"
+    request+=" $argument"
   done
-  ssh -o BatchMode=yes "$HOST" \
-    "MARKS_PUBLIC_ORIGIN='$PUBLIC_ORIGIN' MARKS_OBSERVE_SECONDS='$OBSERVE_SECONDS' bash -s -- '$command'$quoted_args" \
-    < "$ROOT/deploy/remote-release.sh"
+  "${SSH[@]}" "$HOST" "$request"
 }
 
-check_remote_build_prerequisites() {
-  echo "==> checking deployment host prerequisites"
-  ssh -o BatchMode=yes "$HOST" '
-    set -eu
-    test "$(uname -s)" = Linux
-    test "$(uname -m)" = x86_64
-    for command in docker npm rsync flock curl python3 sha256sum tar systemd-analyze; do
-      command -v "$command" >/dev/null 2>&1 || {
-        echo "missing remote command: $command" >&2
-        exit 1
-      }
-    done
-    sudo -n true
-    docker info >/dev/null
-    node -e "
-      const [major, minor] = process.versions.node.split(\".\").map(Number);
-      if (major < 22 || (major === 22 && minor < 12)) process.exit(1);
-    "
-  '
+check_remote_protocol() {
+  echo "==> checking restricted deployment protocol"
+  restricted_command probe
 }
 
 assert_clean_commit() {
@@ -195,7 +189,11 @@ run_local_gate() {
   )
 
   echo "==> live Chromium workflow plus native multi-peer convergence"
-  (cd "$ROOT" && npx playwright install chromium)
+  if [[ "$(uname -s)" == Linux ]]; then
+    (cd "$ROOT" && npx playwright install --with-deps chromium)
+  else
+    (cd "$ROOT" && npx playwright install chromium)
+  fi
   (
     cd "$ROOT"
     export MARKS_REQUIRE_RELEASE=1
@@ -214,30 +212,24 @@ run_local_gate() {
 }
 
 deploy() {
-  validate_common_config
+  validate_deploy_config
   assert_clean_commit
   assert_published_commit
-  check_remote_build_prerequisites
 
   local revision
   revision=$(git -C "$ROOT" rev-parse HEAD)
   [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || die "HEAD is not one full Git revision"
 
+  check_remote_protocol
   run_local_gate "$revision"
 
   echo "==> uploading exact commit $revision"
-  REMOTE_UPLOAD=$(
-    ssh -o BatchMode=yes "$HOST" 'mktemp -d /tmp/marks-deploy.XXXXXXXX' | tail -n 1
-  )
-  [[ "$REMOTE_UPLOAD" =~ ^/tmp/marks-deploy\.[A-Za-z0-9]+$ ]] \
-    || die "host returned an unexpected staging path: $REMOTE_UPLOAD"
-  ssh -o BatchMode=yes "$HOST" "mkdir -p '$REMOTE_UPLOAD/source'"
+  STAGED_REVISION=$revision
   git -C "$ROOT" archive --format=tar "$revision" \
-    | ssh -o BatchMode=yes "$HOST" "tar -xf - -C '$REMOTE_UPLOAD/source'"
+    | restricted_command upload "$revision"
 
   echo "==> building, canarying, and activating $revision on $HOST"
-  ssh -o BatchMode=yes "$HOST" \
-    "MARKS_PUBLIC_ORIGIN='$PUBLIC_ORIGIN' MARKS_OBSERVE_SECONDS='$OBSERVE_SECONDS' bash '$REMOTE_UPLOAD/source/deploy/remote-release.sh' deploy '$REMOTE_UPLOAD/source' '$revision' '$REMOTE_UPLOAD/source/deploy/systemd/marks.service'"
+  restricted_command deploy "$revision"
 }
 
 main() {
@@ -249,22 +241,19 @@ main() {
       ;;
     rollback)
       [[ $# -le 2 ]] || die "rollback accepts at most one release id"
-      validate_common_config
       if [[ $# -eq 2 ]]; then
-        remote_command rollback "$2"
+        restricted_command rollback "$2"
       else
-        remote_command rollback
+        restricted_command rollback
       fi
       ;;
     status)
       [[ $# -eq 1 ]] || die "status accepts no arguments"
-      validate_common_config
-      remote_command status
+      restricted_command status
       ;;
     releases)
       [[ $# -eq 1 ]] || die "releases accepts no arguments"
-      validate_common_config
-      remote_command releases
+      restricted_command releases
       ;;
     help|--help|-h)
       usage

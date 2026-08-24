@@ -28,6 +28,7 @@ test('GitHub JavaScript actions use their supported Node 24 runtime releases', (
   const workflows = [
     readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8'),
     readFileSync(scheduledPath, 'utf8'),
+    readFileSync(resolve(root, '.github/workflows/production.yml'), 'utf8'),
   ].join('\n');
 
   assert.doesNotMatch(workflows, /actions\/(?:checkout|setup-node)@v4/);
