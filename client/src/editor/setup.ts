@@ -14,7 +14,9 @@ import {
   placeholder,
   rectangularSelection,
 } from '@codemirror/view';
+import { formatPreviewExtension } from './format-preview';
 import type { CollabSession } from '../collab/types';
+import { handleImageTransfer } from './actions';
 import { handleEditorCopy, handleEditorCut, handleEditorPaste, markdownKeymap } from './commands';
 import { editorTheme, markdownHighlighting } from './theme';
 
@@ -39,12 +41,14 @@ export interface EditorSetupOptions {
   session: CollabSession;
   onScroll?: (view: EditorView) => void;
   onSelectionChange?: (view: EditorView) => void;
+  onAssetError?: (error: Error) => void;
 }
 
 export function createEditorExtensions({
   session,
   onScroll,
   onSelectionChange,
+  onAssetError,
 }: EditorSetupOptions): Extension[] {
   return [
     exceptionSink,
@@ -80,7 +84,9 @@ export function createEditorExtensions({
       translate: 'no',
     }),
     EditorView.domEventHandlers({
-      paste: (event, view) => handleEditorPaste(event, view),
+      paste: (event, view) =>
+        handleImageTransfer(event, view, session, onAssetError) || handleEditorPaste(event, view),
+      drop: (event, view) => handleImageTransfer(event, view, session, onAssetError),
       copy: (event, view) => handleEditorCopy(event, view),
       cut: (event, view) => handleEditorCut(event, view),
       contextmenu: (event) => {
@@ -97,6 +103,7 @@ export function createEditorExtensions({
     EditorView.updateListener.of((update) => {
       if (update.selectionSet || update.docChanged) onSelectionChange?.(update.view);
     }),
+    formatPreviewExtension,
     // The CRDT binding goes last so its plugins see a fully configured editor.
     session.extension,
   ];

@@ -1,5 +1,5 @@
-import type { DocumentConfigInput } from './esbt-document.ts';
 import { EsbtError } from './esbt-document.ts';
+export { MARKS_DOCUMENT_CONFIG } from '../profile.ts';
 
 export {
   DEFAULT_LIMITS,
@@ -27,6 +27,7 @@ export const ESBT_ERROR = {
   UnsupportedFormatVersion: 5,
   NonCanonicalEncoding: 6,
   MessageTooLarge: 7,
+  TooManyOperations: 8,
   IdentifierTooDeep: 9,
   DocumentTooLarge: 15,
   SnapshotHasSequenceGaps: 18,
@@ -35,16 +36,6 @@ export const ESBT_ERROR = {
   TransactionAlreadyActive: 22,
   NoActiveTransaction: 23,
 } as const;
-
-/** Browser document policy from docs/marks-client-plumbing.md. */
-export const MARKS_DOCUMENT_CONFIG: DocumentConfigInput = {
-  strategy: { kind: 'midpoint' },
-  adaptiveDmax: { floor: 16, ceiling: 2_147_483_648, window: 256, holdoffWindows: 4 },
-  limits: {
-    maxDocumentUnits: 1_000_000,
-    maxMessageBytes: 4 * 1024 * 1024,
-  },
-};
 
 const MARKS_SITE_MAX = 0xffff_ffff;
 

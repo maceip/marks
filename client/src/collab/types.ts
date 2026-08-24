@@ -1,4 +1,6 @@
 import type { Extension } from '@codemirror/state';
+import type { TextEdit } from '../text/change';
+export type { TextEdit } from '../text/change';
 
 /**
  * The CRDT engine documents are stored in. ESBT is the only engine; the
@@ -6,7 +8,18 @@ import type { Extension } from '@codemirror/state';
  */
 export type EngineName = 'esbt';
 
-export type ConnectionStatus = 'connecting' | 'connected' | 'offline';
+export type DocumentRole = 'owner' | 'editor' | 'commenter' | 'viewer';
+
+export interface DocumentCapabilities {
+  /** Null while a service admission has not resolved yet. */
+  role: DocumentRole | 'scratch' | 'local' | null;
+  edit: boolean;
+  comment: boolean;
+  saveVersion: boolean;
+  manageShares: boolean;
+}
+
+export type ConnectionStatus = 'connecting' | 'saving' | 'connected' | 'offline';
 
 export interface Peer {
   id: string;
@@ -27,6 +40,9 @@ export interface RoomTicket {
   ticketSecret: string;
   /** Room-allocated u32 site, decimal string. Persist and reuse. */
   siteId: string;
+  /** Validated server role; null only for scratch authority. */
+  role: DocumentRole | null;
+  authority: 'session' | 'scratch';
 }
 
 export interface DocumentAccessProvider {
@@ -55,6 +71,37 @@ export interface EngineStats {
   localSaved: boolean;
 }
 
+export interface DocumentChange {
+  edits: readonly TextEdit[];
+  origin?: string;
+  local: boolean;
+}
+
+/** An engine-owned range that survives edits while an asynchronous task runs. */
+export interface StableTextRange {
+  start: Uint8Array;
+  end: Uint8Array;
+  startOffset: number;
+  endOffset: number;
+}
+
+/** A review range persisted outside the CRDT as two stable ESBT anchors. */
+export interface ReviewAnchorRange extends StableTextRange {
+  /** Selected UTF-16 source at creation time, used when both identities vanish. */
+  quote: string;
+  /** Last-known UTF-16 offsets provide a bounded tie-breaker for quote fallback. */
+}
+
+export interface ResolvedTextRange {
+  from: number;
+  to: number;
+}
+
+export interface ResolvedReviewRange extends ResolvedTextRange {
+  /** True when the live text at the anchored range still equals the quote. */
+  exact: boolean;
+}
+
 /**
  * A live editing session for one document.
  *
@@ -69,6 +116,7 @@ export interface CollabSession {
   readonly extension: Extension;
 
   getText(): string;
+  length(): number;
   /** Replace the whole document — used by import, never by typing. */
   setText(markdown: string): void;
   /**
@@ -78,11 +126,28 @@ export interface CollabSession {
    */
   replaceRange(from: number, to: number, insert: string): void;
 
+  /** Capture explicit UTF-16 offsets for an async insert/upload operation. */
+  captureTextRange(from: number, to: number): StableTextRange;
+  /** Resolve a previously captured engine-owned range against current text. */
+  resolveTextRange(range: StableTextRange): ResolvedTextRange;
+
+  /** Capture the focused editor selection as stable engine-owned positions. */
+  captureReviewRange(): ReviewAnchorRange;
+  /** Resolve anchors, falling back to quoted source near its old offset. */
+  resolveReviewRange(range: ReviewAnchorRange): ResolvedReviewRange;
+  /** Focus and reveal a resolved review range when an editor surface exists. */
+  revealReviewRange(range: ReviewAnchorRange): ResolvedReviewRange;
+
+  /** Resolve only after every edit made before this call is durably committed. */
+  whenDurable(timeoutMs?: number): Promise<void>;
+
   status(): ConnectionStatus;
+  capabilities(): DocumentCapabilities;
   peers(): Peer[];
   stats(): EngineStats;
 
-  onTextChange(listener: (text: string) => void): () => void;
+  /** Subscribe to exact replacements; hot edits never copy the full source. */
+  onChange(listener: (change: DocumentChange) => void): () => void;
   onStatusChange(listener: (status: ConnectionStatus) => void): () => void;
   onPeersChange(listener: (peers: Peer[]) => void): () => void;
   onError?(listener: (error: EngineErrorNotice) => void): () => void;

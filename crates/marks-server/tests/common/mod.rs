@@ -27,13 +27,32 @@ pub struct TestServer {
 
 impl TestServer {
     pub async fn spawn(db_path: PathBuf) -> TestServer {
+        Self::spawn_with(db_path, |_| {}).await
+    }
+
+    pub async fn spawn_with(db_path: PathBuf, configure: impl FnOnce(&mut Config)) -> TestServer {
+        Self::spawn_with_provider(db_path, configure, None).await
+    }
+
+    pub async fn spawn_with_provider(
+        db_path: PathBuf,
+        configure: impl FnOnce(&mut Config),
+        provider: Option<Arc<dyn marks_server::agent::AgentProvider>>,
+    ) -> TestServer {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind test listener");
         let addr = listener.local_addr().expect("local addr");
-        let config = Config {
+        let mut config = Config {
             listen: addr,
             database: db_path.clone(),
+            asset_dir: db_path.with_extension("assets"),
+            max_asset_bytes: 10 * 1024 * 1024,
+            max_asset_bytes_per_document: 128 * 1024 * 1024,
+            max_concurrent_bundle_exports: 4,
+            backup_dir: None,
+            backup_interval_ms: 24 * 60 * 60 * 1000,
+            backup_retain: 14,
             origin: format!("http://{addr}"),
             static_dir: None,
             dbsc_enabled: true,
@@ -47,9 +66,25 @@ impl TestServer {
             pairing_ttl_ms: 2 * 60 * 1000,
             challenge_ttl_ms: 2 * 60 * 1000,
             compact_every_updates: 4,
-            max_frame_bytes: 4 * 1024 * 1024,
+            compact_every_operations: marks_server::engine_profile::get()
+                .unwrap()
+                .server_compact_operations,
+            commit_batch_delay_ms: 10,
+            commit_batch_max: 64,
+            room_idle_ms: 1_000,
+            max_resident_rooms: 64,
+            max_connections_per_room: 16,
+            max_mutations_per_second: 10_000,
+            max_mutation_bytes_per_second: 256 * 1024 * 1024,
+            websocket_ping_ms: 1_000,
+            websocket_idle_ms: 5_000,
+            database_heartbeat_ms: 1_000,
+            database_heartbeat_stale_ms: 5_000,
+            max_frame_bytes: marks_server::engine_profile::get().unwrap().max_frame_bytes,
+            agent: Default::default(),
         };
-        let app = App::new(config).expect("build app");
+        configure(&mut config);
+        let app = App::new_with_agent_provider(config, provider).expect("build app");
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let serve_app = app.clone();
         let task = tokio::spawn(async move {
@@ -75,6 +110,16 @@ impl TestServer {
             let _ = shutdown.send(());
         }
         if let Some(task) = self.task.take() {
+            let _ = task.await;
+        }
+        self.db_path.clone()
+    }
+
+    /// Abrupt process loss: no room shutdown hook or final compaction runs.
+    pub async fn crash(mut self) -> PathBuf {
+        self.shutdown.take();
+        if let Some(task) = self.task.take() {
+            task.abort();
             let _ = task.await;
         }
         self.db_path.clone()

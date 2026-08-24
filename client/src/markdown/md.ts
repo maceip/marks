@@ -1,5 +1,5 @@
 import MarkdownIt from 'markdown-it';
-import type { MarkdownIt as MarkdownItInstance, StateCore, Token } from 'markdown-it';
+import type { MarkdownIt as MarkdownItInstance, StateBlock, StateCore, Token } from 'markdown-it';
 import abbr from 'markdown-it-abbr';
 import anchor from 'markdown-it-anchor';
 import container from 'markdown-it-container';
@@ -11,6 +11,7 @@ import mark from 'markdown-it-mark';
 import multimdTable from 'markdown-it-multimd-table';
 import sub from 'markdown-it-sub';
 import sup from 'markdown-it-sup';
+import { localAssetId } from '../lib/asset-links.ts';
 
 type MarkdownPlugin = Parameters<MarkdownItInstance['use']>[0];
 
@@ -88,6 +89,32 @@ function taskLists(md: MarkdownItInstance): void {
   });
 }
 
+/** Portable transclusion syntax: ![[document-id#Optional heading|Label]]. */
+function crossDocumentBlocks(md: MarkdownItInstance): void {
+  md.block.ruler.before('paragraph', 'marks-cross-document-block', (state: StateBlock, startLine: number, _endLine: number, silent: boolean) => {
+    const from = state.bMarks[startLine] + state.tShift[startLine];
+    const to = state.eMarks[startLine];
+    const source = state.src.slice(from, to).trim();
+    const match = /^!\[\[([A-Za-z0-9_-]{1,160})(?:#([^\]|\n]{1,200}))?(?:\|([^\]\n]{1,200}))?\]\]$/.exec(source);
+    if (!match) return false;
+    if (!silent) {
+      const token = state.push('marks_cross_document_block', 'aside', 0);
+      token.meta = { documentId: match[1], heading: match[2]?.trim() ?? '', label: match[3]?.trim() ?? '' };
+      token.block = true;
+      token.map = [startLine, startLine + 1];
+    }
+    state.line = startLine + 1;
+    return true;
+  }, { alt: ['paragraph', 'reference', 'blockquote', 'list'] });
+  md.renderer.rules.marks_cross_document_block = (tokens, index) => {
+    const meta = tokens[index].meta as { documentId: string; heading: string; label: string };
+    const id = escapeHtml(meta.documentId);
+    const heading = escapeHtml(meta.heading);
+    const label = escapeHtml(meta.label || meta.heading || 'Linked document');
+    return `<aside class="marks-document-block" data-marks-document-block="${id}" data-marks-heading="${heading}"><header><a href="/d/${encodeURIComponent(meta.documentId)}">${label}</a><span>live block</span></header><div class="marks-document-block-content" aria-live="polite">Loading linked section…</div></aside>`;
+  };
+}
+
 export function createMarkdownIt(features: MarkdownRendererFeatures = {}): MarkdownItInstance {
   const md = new MarkdownIt({
     html: true, // sanitised downstream by DOMPurify
@@ -122,6 +149,7 @@ export function createMarkdownIt(features: MarkdownRendererFeatures = {}): Markd
     .use(interop(ins))
     .use(interop(emoji))
     .use(taskLists)
+    .use(crossDocumentBlocks)
     .use(interop(multimdTable), { multiline: true, rowspan: true, headerless: true });
 
   if (features.katex) {
@@ -161,6 +189,22 @@ export function createMarkdownIt(features: MarkdownRendererFeatures = {}): Markd
       tokens[index].attrSet('rel', 'noopener noreferrer');
     }
     return defaultLinkOpen(tokens, index, options, env, self);
+  };
+
+  // Browser-local binary assets are not embedded as multi-megabyte data URLs
+  // in CRDT text. Preserve a normal Markdown destination, but withhold `src`
+  // until the main thread resolves the IndexedDB blob to an object URL.
+  const defaultImage = md.renderer.rules.image;
+  md.renderer.rules.image = (tokens, index, options, env, self) => {
+    const token = tokens[index];
+    const id = localAssetId(String(token.attrGet('src') ?? ''));
+    if (id) {
+      token.attrs = (token.attrs ?? []).filter(([name]) => name !== 'src');
+      token.attrSet('data-marks-local-asset', id);
+    }
+    return defaultImage
+      ? defaultImage(tokens, index, options, env, self)
+      : self.renderToken(tokens, index, options);
   };
 
   return md;

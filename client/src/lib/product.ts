@@ -2,8 +2,8 @@ export const PRODUCT_NAME = 'marks';
 
 /** Latest deterministic level-9 gzip receipt from `npm run check:ui-budgets`. */
 export const UI_PERFORMANCE_RECEIPT = {
-  appCriticalKb: '99.49',
-  marketingCriticalKb: '0.57',
+  appCriticalKb: '97.87',
+  marketingCriticalKb: '0.55',
 } as const;
 
 /**
@@ -12,7 +12,7 @@ export const UI_PERFORMANCE_RECEIPT = {
  * metadata, admission, and persistence again.
  */
 export const UI_DATA_MODE =
-  import.meta.env.VITE_MARKS_DATA_MODE === 'service' ? ('service' as const) : ('local' as const);
+  import.meta.env?.VITE_MARKS_DATA_MODE === 'service' ? ('service' as const) : ('local' as const);
 
 export const ENGINE = {
   id: 'esbt' as const,

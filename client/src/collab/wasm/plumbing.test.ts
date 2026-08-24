@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
-import { encodeDocumentConfig } from './esbt-document.ts';
+import { encodeDocumentConfig, verifyWasmArtifact } from './esbt-document.ts';
 import {
   ESBT_ERROR,
   EsbtError,
@@ -26,6 +27,16 @@ test('production config encodes adaptive Dmax and the browser ceilings', () => {
   assert.equal(bytes[1], 0);
   assert.equal(bytes[2] & 0b01, 0b01);
   assert.ok(bytes.byteLength > 16);
+});
+
+test('runtime artifact bytes must match the provenance manifest', async () => {
+  const bytes = Uint8Array.from([1, 2, 3, 4]);
+  const wasm_sha256 = createHash('sha256').update(bytes).digest('hex');
+  await verifyWasmArtifact(bytes.buffer, { format: 2, wasm_sha256 });
+  await assert.rejects(
+    verifyWasmArtifact(bytes.buffer, { format: 2, wasm_sha256: '0'.repeat(64) }),
+    /do not match/,
+  );
 });
 
 test('HistoryUnavailable falls back to a compact snapshot', () => {

@@ -1,4 +1,4 @@
-import type { DocumentAccessProvider, RoomTicket } from '../collab/types';
+import type { DocumentAccessProvider, DocumentRole, RoomTicket } from '../collab/types';
 import { decodeBase64Url, OPAQUE_ID_PATTERN } from './protocol.ts';
 import type { ScratchCredential } from './scratch.ts';
 
@@ -19,6 +19,7 @@ interface TicketResponse {
   ticketId: string;
   ticketSecret: string;
   siteId: string;
+  role: DocumentRole | null;
 }
 
 export class RoomAccessError extends Error {
@@ -90,7 +91,7 @@ export function createMarksDocumentAccess(
         throw new RoomAccessError('room admission response was not JSON', false);
       }
 
-      return validateTicketResponse(body, origin);
+      return validateTicketResponse(body, origin, authority.kind);
     },
   };
 }
@@ -102,7 +103,7 @@ function documentPrefix(authority: RoomAuthority): string {
 export function roomTicketProtocols(ticket: RoomTicket): [string, string] {
   if (!OPAQUE_ID_PATTERN.test(ticket.ticketId)) throw new RoomAccessError('invalid room ticket ID', false);
   assertTicketSecret(ticket.ticketSecret);
-  return ['marks.esbt.v1', `marks.ticket.v1.${ticket.ticketId}.${ticket.ticketSecret}`];
+  return ['marks.esbt.v2', `marks.ticket.v1.${ticket.ticketId}.${ticket.ticketSecret}`];
 }
 
 function authorityHeaders(authority: RoomAuthority): Record<string, string> {
@@ -112,15 +113,23 @@ function authorityHeaders(authority: RoomAuthority): Record<string, string> {
   };
 }
 
-function validateTicketResponse(value: unknown, origin: string): RoomTicket {
+function validateTicketResponse(
+  value: unknown,
+  origin: string,
+  authority: RoomAuthority['kind'],
+): RoomTicket {
   if (!isRecord(value)) throw new RoomAccessError('invalid room admission response', false);
 
-  const { roomUrl, ticketId, ticketSecret, siteId } = value as Partial<TicketResponse>;
+  const { roomUrl, ticketId, ticketSecret, siteId, role } = value as Partial<TicketResponse>;
   if (typeof roomUrl !== 'string' || typeof ticketId !== 'string' || typeof ticketSecret !== 'string') {
     throw new RoomAccessError('invalid room admission response', false);
   }
   if (typeof siteId !== 'string' || !/^[1-9][0-9]*$/.test(siteId)) {
     throw new RoomAccessError('invalid room site assignment', false);
+  }
+  const validRole = role === 'owner' || role === 'editor' || role === 'commenter' || role === 'viewer';
+  if ((authority === 'session' && !validRole) || (authority === 'scratch' && role !== null)) {
+    throw new RoomAccessError('invalid room role', false);
   }
   if (!OPAQUE_ID_PATTERN.test(ticketId)) throw new RoomAccessError('invalid room ticket ID', false);
   assertTicketSecret(ticketSecret);
@@ -149,7 +158,14 @@ function validateTicketResponse(value: unknown, origin: string): RoomTicket {
     throw new RoomAccessError('room URL is outside the Marks transport boundary', false);
   }
 
-  return { roomUrl: resolved.href, ticketId, ticketSecret, siteId };
+  return {
+    roomUrl: resolved.href,
+    ticketId,
+    ticketSecret,
+    siteId,
+    role: validRole ? role : null,
+    authority,
+  };
 }
 
 function assertTicketSecret(value: string): void {

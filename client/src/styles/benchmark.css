@@ -82,6 +82,32 @@
   font-size: 13px;
 }
 
+.benchmark-warning {
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warning) 9%, var(--surface));
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.benchmark-receipt-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.benchmark-receipt-meta span {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
 .benchmark-table {
   display: block;
   width: 100%;
@@ -128,6 +154,67 @@
   font-size: 11.5px;
   font-weight: 400;
   line-height: 1.45;
+}
+
+.benchmark-size-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.benchmark-size-grid > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+
+.benchmark-size-grid span {
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.benchmark-size-grid strong {
+  color: var(--text);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.benchmark-receipt-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.benchmark-receipt-actions details {
+  min-width: 0;
+  flex: 1;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.benchmark-receipt-actions summary {
+  padding: 7px 0;
+  cursor: pointer;
+}
+
+.benchmark-receipt-actions pre {
+  max-height: 320px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.5;
 }
 
 .benchmark-notes {
@@ -190,5 +277,14 @@
 
   .benchmark-table tbody th {
     min-width: 190px;
+  }
+
+  .benchmark-size-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .benchmark-receipt-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 }

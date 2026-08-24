@@ -17,8 +17,9 @@ use marks_auth::{
     AuthenticatedSession, DocumentAction, DocumentId, DocumentOwner, DocumentRole, EsbtSiteId,
     LinkGrantRecord, PrincipalId, ScratchId, TicketId, authorize_document_action,
     authorize_link_grant_role, bearer_secret_hash, encode_bearer_secret, issue_document_ticket,
-    issue_scratch_document_ticket, owner_acl_row, redeem_link_grant, require_principal_document,
-    require_scratch_document, resolve_document_role,
+    issue_scratch_document_ticket, owner_acl_row, redeem_link_grant,
+    require_deleted_document_owner, require_principal_document, require_scratch_document,
+    resolve_document_role,
 };
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
@@ -27,12 +28,12 @@ use std::sync::Arc;
 
 /// The caller's document authority: a rotating principal session or a live
 /// scratch capability. They are different kinds of authority, never merged.
-pub enum Caller {
+pub(crate) enum Caller {
     Principal(AuthenticatedSession),
     Scratch(ScratchId),
 }
 
-fn caller(app: &App, headers: &HeaderMap) -> ApiResult<Caller> {
+pub(crate) fn caller(app: &App, headers: &HeaderMap) -> ApiResult<Caller> {
     // Protocol: session cookies are checked before any durable principal
     // operation. A leftover MarksScratch header from the UI first-paint
     // path must not hide a live rotating session.
@@ -54,7 +55,11 @@ struct DocumentMeta {
     chars: u64,
     created_at: u64,
     updated_at: u64,
+    deleted_at: Option<u64>,
+    purge_at: Option<u64>,
 }
+
+const TRASH_RETENTION_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
 
 fn meta(row: &store::DocumentMetaRow) -> DocumentMeta {
     DocumentMeta {
@@ -64,11 +69,16 @@ fn meta(row: &store::DocumentMetaRow) -> DocumentMeta {
         chars: row.chars,
         created_at: row.created_at_ms,
         updated_at: row.updated_at_ms,
+        deleted_at: row.record.deleted_at_ms,
+        purge_at: row
+            .record
+            .deleted_at_ms
+            .map(|deleted| deleted.saturating_add(TRASH_RETENTION_MS)),
     }
 }
 
 /// Resolve the caller's role on a live document, failing closed to 404.
-fn resolve_caller_role(
+pub(crate) fn resolve_caller_role(
     conn: &Connection,
     caller: &Caller,
     row: &store::DocumentMetaRow,
@@ -88,7 +98,7 @@ fn resolve_caller_role(
     }
 }
 
-fn load_live_document(
+pub(crate) fn load_live_document(
     conn: &Connection,
     document_id: &DocumentId,
 ) -> ApiResult<store::DocumentMetaRow> {
@@ -97,6 +107,25 @@ fn load_live_document(
         return Err(ApiError::not_found());
     }
     Ok(row)
+}
+
+fn load_deleted_document(
+    conn: &Connection,
+    document_id: &DocumentId,
+) -> ApiResult<store::DocumentMetaRow> {
+    let row = store::load_document(conn, document_id)?.ok_or_else(ApiError::not_found)?;
+    if row.record.deleted_at_ms.is_none() {
+        return Err(ApiError::not_found());
+    }
+    Ok(row)
+}
+
+fn require_recovery_owner(caller: &Caller, row: &store::DocumentMetaRow) -> ApiResult<()> {
+    let expected = match caller {
+        Caller::Principal(session) => DocumentOwner::Principal(session.principal_id().clone()),
+        Caller::Scratch(scratch) => DocumentOwner::Scratch(scratch.clone()),
+    };
+    require_deleted_document_owner(&row.record, &expected).map_err(|_| ApiError::not_found())
 }
 
 pub async fn list(State(app): State<Arc<App>>, headers: HeaderMap) -> ApiResult<Response> {
@@ -135,9 +164,52 @@ pub async fn list(State(app): State<Arc<App>>, headers: HeaderMap) -> ApiResult<
     Ok(Json(json!({ "documents": documents })).into_response())
 }
 
+/// Owner-only trash. Shared documents disappear from a collaborator's list as
+/// soon as the owner deletes them; they never leak into that collaborator's
+/// recovery surface.
+pub async fn trash_list(State(app): State<Arc<App>>, headers: HeaderMap) -> ApiResult<Response> {
+    let caller = caller(&app, &headers)?;
+    let documents = app.db.read(|conn| {
+        let (sql, key) = match &caller {
+            Caller::Scratch(scratch) => (
+                "SELECT id FROM documents
+                 WHERE scratch_id = ?1 AND deleted_at IS NOT NULL ORDER BY deleted_at DESC",
+                scratch.as_str(),
+            ),
+            Caller::Principal(session) => (
+                "SELECT id FROM documents
+                 WHERE owner_principal_id = ?1 AND deleted_at IS NOT NULL ORDER BY deleted_at DESC",
+                session.principal_id().as_str(),
+            ),
+        };
+        let mut statement = conn.prepare(sql)?;
+        let ids = statement
+            .query_map(params![key], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut documents = Vec::with_capacity(ids.len());
+        for id in ids {
+            let id = DocumentId::new(id).map_err(|_| ApiError::internal())?;
+            let row = load_deleted_document(conn, &id)?;
+            require_recovery_owner(&caller, &row)?;
+            documents.push(meta(&row));
+        }
+        Ok(documents)
+    })?;
+    Ok(Json(json!({
+        "documents": documents,
+        "retentionMs": TRASH_RETENTION_MS,
+    }))
+    .into_response())
+}
+
 #[derive(Deserialize, Default)]
 pub struct CreateBody {
     pub title: Option<String>,
+    /// Optional canonical Markdown used to initialize a document atomically.
+    /// Templates must not create an empty catalog row and fill it later: that
+    /// would expose a transient blank document to collaborators and make a
+    /// failed second request indistinguishable from a blank template.
+    pub markdown: Option<String>,
 }
 
 pub async fn create(
@@ -149,7 +221,45 @@ pub async fn create(
     if matches!(caller, Caller::Principal(_)) {
         guard::require_same_origin(&app, &headers)?;
     }
-    let title = body.and_then(|Json(body)| body.title);
+    let body = body.map(|Json(body)| body).unwrap_or_default();
+    let title = body.title.as_deref().map(str::trim);
+    if title.is_some_and(|title| title.is_empty() || title.len() > 512) {
+        return Err(ApiError::bad_request("invalid title"));
+    }
+    let markdown = body.markdown.unwrap_or_default();
+    let chars = markdown.encode_utf16().count();
+    if chars > app.limits.max_document_units {
+        return Err(ApiError::bad_request("document is too large"));
+    }
+
+    // Construct the initial state before opening the SQLite transaction. The
+    // transaction then publishes metadata and the causally closed snapshot as
+    // one unit; there is never a remotely observable blank intermediary.
+    let (snapshot, initial_operations) = if markdown.is_empty() {
+        (None, Vec::new())
+    } else {
+        let mut seed = esbt::Document::new(
+            EsbtSiteId::SERVER.to_engine_site(),
+            esbt::ReplicaConfig::default(),
+            app.limits.clone(),
+        )
+        .map_err(|_| ApiError::internal())?;
+        let update = seed
+            .insert(0, &markdown, None)
+            .map_err(|_| ApiError::bad_request("document is too large"))?
+            .ok_or_else(ApiError::internal)?;
+        let operations = update
+            .update
+            .operations()
+            .iter()
+            .map(|operation| (operation.origin.to_string(), operation.seq))
+            .collect();
+        let snapshot = seed
+            .export_compact_snapshot()
+            .or_else(|_| seed.export_full_snapshot())
+            .map_err(|_| ApiError::internal())?;
+        (Some(snapshot), operations)
+    };
     let now = now_ms();
     let id = new_id("document");
     let row = app.db.tx(|conn| {
@@ -160,15 +270,17 @@ pub async fn create(
         conn.execute(
             "INSERT INTO documents
                 (id, scratch_id, owner_principal_id, title, title_explicit, engine, chars,
-                 auth_epoch, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'esbt', 0, 1, ?6, ?6)",
+                 auth_epoch, snapshot, snapshot_revision, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'esbt', ?6, 1, ?7, 0, ?8, ?8)",
             params![
                 id,
                 scratch_id,
                 owner_id,
-                title.as_deref().unwrap_or("Untitled"),
+                title.unwrap_or("Untitled"),
                 i64::from(title.is_some()),
-                store::ms(now),
+                store::ms(chars as u64),
+                snapshot,
+                store::ms(now)
             ],
         )?;
         let id = DocumentId::new(id.clone()).map_err(|_| ApiError::internal())?;
@@ -181,6 +293,30 @@ pub async fn create(
                     acl.document_id.as_str(),
                     acl.principal_id.as_str(),
                     store::role_to_str(acl.role),
+                    store::ms(now),
+                ],
+            )?;
+        }
+        let (actor_kind, actor_id, session_id) = match &caller {
+            Caller::Scratch(scratch) => ("scratch", scratch.as_str(), None),
+            Caller::Principal(session) => (
+                "principal",
+                session.principal_id().as_str(),
+                Some(session.id().as_str()),
+            ),
+        };
+        for (site, sequence) in &initial_operations {
+            conn.execute(
+                "INSERT INTO op_authors
+                    (document_id, site, seq, actor_kind, actor_id, session_id, received_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    id.as_str(),
+                    site,
+                    store::ms(*sequence),
+                    actor_kind,
+                    actor_id,
+                    session_id,
                     store::ms(now),
                 ],
             )?;
@@ -369,10 +505,141 @@ pub async fn delete(
     Ok(Json(json!({ "deleted": true })).into_response())
 }
 
+pub async fn restore(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let caller = caller(&app, &headers)?;
+    if matches!(caller, Caller::Principal(_)) {
+        guard::require_same_origin(&app, &headers)?;
+    }
+    let document_id = DocumentId::new(id).map_err(|_| ApiError::not_found())?;
+    let row = app.db.tx(|conn| {
+        let row = load_deleted_document(conn, &document_id)?;
+        require_recovery_owner(&caller, &row)?;
+        conn.execute(
+            "UPDATE documents
+             SET deleted_at = NULL, updated_at = ?2, auth_epoch = auth_epoch + 1
+             WHERE id = ?1 AND deleted_at IS NOT NULL",
+            params![document_id.as_str(), store::ms(now_ms())],
+        )?;
+        load_live_document(conn, &document_id)
+    })?;
+    Ok(Json(json!({ "document": meta(&row) })).into_response())
+}
+
+/// Physically reclaim a tombstone only after its advertised retention window.
+/// The transaction removes dependents in FK order, so an interrupted purge is
+/// either wholly visible or not visible at all.
+pub async fn purge(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let caller = caller(&app, &headers)?;
+    if matches!(caller, Caller::Principal(_)) {
+        guard::require_same_origin(&app, &headers)?;
+    }
+    let document_id = DocumentId::new(id).map_err(|_| ApiError::not_found())?;
+    let _asset_mutation_guard = app.assets.mutation_guard().await;
+    let reclaim_assets = app.db.tx(|conn| {
+        let row = load_deleted_document(conn, &document_id)?;
+        require_recovery_owner(&caller, &row)?;
+        let purge_at = row
+            .record
+            .deleted_at_ms
+            .unwrap_or_default()
+            .saturating_add(TRASH_RETENTION_MS);
+        if now_ms() < purge_at {
+            return Err(ApiError::conflict());
+        }
+        let id = document_id.as_str();
+        let asset_hashes = {
+            let mut statement =
+                conn.prepare("SELECT content_hash FROM document_assets WHERE document_id = ?1")?;
+            statement
+                .query_map(params![id], |row| row.get::<_, Vec<u8>>(0))?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        conn.execute(
+            "DELETE FROM document_comment_replies
+             WHERE comment_id IN (SELECT id FROM document_comments WHERE document_id = ?1)",
+            params![id],
+        )?;
+        conn.execute(
+            "DELETE FROM document_assets WHERE document_id = ?1",
+            params![id],
+        )?;
+        for table in [
+            "document_comments",
+            "document_versions",
+            "document_version_blobs",
+            "document_commits",
+            "document_updates",
+            "document_tickets",
+            "document_sites",
+            "link_grants",
+            "document_acl",
+            "op_authors",
+            "op_author_ranges",
+        ] {
+            conn.execute(
+                &format!("DELETE FROM {table} WHERE document_id = ?1"),
+                params![id],
+            )?;
+        }
+        let mut reclaim = Vec::new();
+        for hash in asset_hashes {
+            let removed = conn.execute(
+                "DELETE FROM asset_blobs WHERE content_hash = ?1
+                   AND NOT EXISTS(SELECT 1 FROM document_assets WHERE content_hash = ?1)",
+                params![hash],
+            )?;
+            if removed == 1 {
+                reclaim.push(store::hash32(hash)?);
+            }
+        }
+        conn.execute("DELETE FROM documents WHERE id = ?1", params![id])?;
+        Ok(reclaim)
+    })?;
+    for hash in reclaim_assets {
+        let _content_guard = app.assets.content_guard(hash).await;
+        let referenced = app.db.read(|conn| {
+            let referenced = conn.query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM document_assets WHERE content_hash = ?1
+                 )",
+                params![hash.as_slice()],
+                |row| row.get::<_, bool>(0),
+            )?;
+            Ok(referenced)
+        });
+        if matches!(referenced.as_ref(), Ok(true)) {
+            continue;
+        }
+        if let Err(error) = &referenced {
+            tracing::warn!(target: "marks_server::assets", ?error, "could not recheck reclaimed asset reference");
+            continue;
+        }
+        if let Err(error) = app.assets.remove(hash).await {
+            // The authorization graph is already gone. A leftover unreferenced
+            // content hash is safe and can be swept; failing the idempotent
+            // purge response here would falsely imply the document survived.
+            tracing::warn!(target: "marks_server::assets", ?error, "could not reclaim orphaned asset bytes");
+        }
+    }
+    Ok(Json(json!({ "purged": true })).into_response())
+}
+
 /// The exact current text: from the live room when resident (the room
 /// journals before acknowledging, so this includes the freshest committed
 /// edits), otherwise from durable snapshot + journal replay.
-async fn document_text(app: &App, caller: &Caller, document_id: &DocumentId) -> ApiResult<String> {
+pub(crate) async fn document_text(
+    app: &App,
+    caller: &Caller,
+    document_id: &DocumentId,
+) -> ApiResult<String> {
     app.db.read(|conn| {
         let row = load_live_document(conn, document_id)?;
         let role = resolve_caller_role(conn, caller, &row)?;

@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "max_frame_bytes": 67108928,
+  "server_compact_operations": 32768,
+  "client_prune_operations": 32768,
+  "editor_chunk_units": 4096,
+  "limits": {
+    "max_message_bytes": 67108864,
+    "max_operations_per_update": 32768,
+    "max_identifier_depth": 2048,
+    "max_version_sites": 4096,
+    "max_sparse_receipts": 262144,
+    "max_snapshot_items": 1250000,
+    "max_pending_operations": 65536,
+    "max_deferred_deletes": 1250000,
+    "max_document_units": 1000000,
+    "max_allocation_attempts": 4096,
+    "max_retained_operations": 131072,
+    "max_undo_transactions": 2000
+  }
+}

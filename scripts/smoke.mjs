@@ -4,7 +4,7 @@
  * Drives two real browsers against a running server and checks the things that
  * are easy to break and hard to notice: convergence between peers, presence,
  * offline editing, per-user undo, incremental preview rendering, and the
- * server's derived titles. Run it against a build:
+ * stable document titles. Run it against a build:
  *
  *   npm run build
  *   # Start the Rust Marks server separately.
@@ -318,7 +318,7 @@ try {
   check('server exports the document as markdown', exported.includes('Second document') && exported.includes('From peer C'));
 
   const meta = await (await fetch(`${BASE}/v1/documents/${docId}`)).json();
-  check('server derives the title from the first heading', meta.document.title === 'Second document', meta.document.title);
+  check('editing a heading does not silently rename the document', meta.document.title === 'Untitled', meta.document.title);
 
   const snapshot = await fetch(`${BASE}/v1/documents/${docId}/snapshot`);
   check('snapshot endpoint serves CRDT state', snapshot.ok && Number(snapshot.headers.get('content-length') ?? 1) !== 0);

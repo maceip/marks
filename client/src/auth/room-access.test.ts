@@ -32,6 +32,8 @@ test('session admission mints a ticket and keeps it out of the room URL', async 
     ticketId: 'ticket_123456',
     ticketSecret,
     siteId: '2',
+    role: 'editor',
+    authority: 'session',
   });
   assert.equal(calls[0].input, '/v1/documents/document_1234/session');
   assert.equal(calls[0].init?.method, 'POST');
@@ -39,7 +41,7 @@ test('session admission mints a ticket and keeps it out of the room URL', async 
   assert.equal(new Headers(calls[0].init?.headers).get('Authorization'), null);
   assert.deepEqual(JSON.parse(String(calls[0].init?.body)), { siteId: '2' });
   assert.deepEqual(roomTicketProtocols(ticket), [
-    'marks.esbt.v1',
+    'marks.esbt.v2',
     `marks.ticket.v1.ticket_123456.${ticketSecret}`,
   ]);
   assert.doesNotMatch(ticket.roomUrl, /ticket|secret/iu);
@@ -66,6 +68,7 @@ test('scratch authority is explicit on snapshot and admission requests', async (
         roomUrl: '/collab/esbt/document_1234',
         ticketId: 'ticket_123456',
         ticketSecret,
+        role: null,
         siteId: '3',
       });
     },
@@ -94,7 +97,7 @@ test('room admission rejects credential-bearing and cross-origin URLs', async ()
     const access = createMarksDocumentAccess({
       authority: () => ({ kind: 'session' }),
       origin: 'https://marks.example',
-      fetch: async () => Response.json({ roomUrl, ticketId: 'ticket_123456', ticketSecret, siteId: '2' }),
+      fetch: async () => Response.json({ roomUrl, ticketId: 'ticket_123456', ticketSecret, role: 'viewer', siteId: '2' }),
     });
     await assert.rejects(
       access.admit('document_1234', '2', new AbortController().signal),
@@ -114,6 +117,7 @@ test('admission omits siteId when the replica has not been assigned one', async 
         roomUrl: '/collab/esbt/document_1234',
         ticketId: 'ticket_123456',
         ticketSecret,
+        role: 'owner',
         siteId: '4',
       });
     },
@@ -121,6 +125,38 @@ test('admission omits siteId when the replica has not been assigned one', async 
   const ticket = await access.admit('document_1234', undefined, new AbortController().signal);
   assert.deepEqual(JSON.parse(String(calls[0].init?.body)), {});
   assert.equal(ticket.siteId, '4');
+});
+
+test('admission rejects missing, unknown, or authority-incompatible roles', async () => {
+  for (const [authority, role] of [
+    [{ kind: 'session' } as const, null],
+    [{ kind: 'session' } as const, 'admin'],
+    [{
+      kind: 'scratch' as const,
+      credential: {
+        version: 1 as const,
+        scratchId: 'scratch_123456',
+        capability: encodeBase64Url(new Uint8Array(32).fill(7)),
+        expiresAtMs: 50_000,
+      },
+    }, 'editor'],
+  ] as const) {
+    const access = createMarksDocumentAccess({
+      authority: () => authority,
+      origin: 'https://marks.example',
+      fetch: async () => Response.json({
+        roomUrl: '/collab/esbt/document_1234',
+        ticketId: 'ticket_123456',
+        ticketSecret,
+        role,
+        siteId: '2',
+      }),
+    });
+    await assert.rejects(
+      access.admit('document_1234', undefined, new AbortController().signal),
+      (error: unknown) => error instanceof RoomAccessError && error.message === 'invalid room role',
+    );
+  }
 });
 
 test('only transient admission failures are retryable', async () => {

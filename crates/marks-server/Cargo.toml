@@ -10,13 +10,18 @@ rust-version.workspace = true
 marks-auth = { path = "../marks-auth" }
 # The authoritative ESBT sequence CRDT (Mechaoui & Imine, arXiv:2607.28101).
 # Pinned to an exact revision: wire formats are part of the trust boundary.
-esbt = { git = "https://github.com/maceip/ESBT-web", rev = "6de13dd1c84fca3f33d51658ed86d5502b288284" }
+esbt = { git = "https://github.com/maceip/ESBT-web", rev = "3d11890684d6c23bf3c23131ac6197055175a601" }
 
 axum = { version = "0.8", features = ["ws"] }
+aho-corasick = "1"
+async-trait = "0.1"
+bytes = "1"
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io", "rt"] }
 tower-http = { version = "0.6", features = ["fs"] }
 futures-util = "0.3"
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.37", features = ["backup", "bundled"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 
 base64ct.workspace = true
 rand_core.workspace = true
@@ -26,8 +31,9 @@ sha2.workspace = true
 thiserror.workspace = true
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+zstd = "0.13"
+zip = { version = "4", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 p256.workspace = true
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
 tokio-tungstenite = "0.28"

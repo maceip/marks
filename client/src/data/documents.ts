@@ -5,21 +5,26 @@ import {
   duplicateLocalDocument,
   getLocalDocument,
   loadLocalDocuments,
+  loadLocalTrash,
+  purgeLocalDocument,
   renameLocalDocument,
+  restoreLocalDocument,
   seedAboutDocumentText,
   WORKSPACE_EVENT,
   type LocalDocumentDraft,
 } from '../demo/workspace';
-import {
-  createDocument as createRemoteDocument,
-  deleteDocument,
-  duplicateDocument,
-  getDocument,
-  listDocuments,
-  renameDocument,
-  type DocumentMeta,
-} from '../lib/api';
+import type { DocumentMeta } from '../lib/api';
 import { UI_DATA_MODE } from '../lib/product';
+import { ServiceError } from '../lib/service-errors';
+import { loadServiceApi } from '../lib/service-api.ts';
+import { purgeLocalReviewMetadata } from './review';
+import { purgeLocalDocumentAssets } from './assets';
+
+const DOCUMENT_REPOSITORY_EVENT = 'marks:document-repository-change';
+
+export function signalDocumentRepositoryChange(): void {
+  window.dispatchEvent(new CustomEvent(DOCUMENT_REPOSITORY_EVENT));
+}
 
 export type { LocalDocumentDraft };
 
@@ -31,6 +36,9 @@ export interface DocumentRepository {
   rename(id: string, title: string): Promise<DocumentMeta | null>;
   duplicate(id: string, markdown?: string): Promise<DocumentMeta | null>;
   remove(id: string): Promise<void>;
+  listTrash(): Promise<DocumentMeta[]>;
+  restore(id: string): Promise<DocumentMeta | null>;
+  purge(id: string): Promise<void>;
   subscribe(listener: () => void): () => void;
 }
 
@@ -58,7 +66,19 @@ function createDocumentRepository(): DocumentRepository {
         return duplicateLocalDocument(id, markdown);
       },
       async remove(id) {
+        if (isAboutDocument(id)) throw new Error('the built-in About document cannot be trashed');
         deleteLocalDocument(id);
+      },
+      async listTrash() {
+        return loadLocalTrash();
+      },
+      async restore(id) {
+        return restoreLocalDocument(id);
+      },
+      async purge(id) {
+        await purgeLocalReviewMetadata(id);
+        await purgeLocalDocumentAssets(id);
+        purgeLocalDocument(id);
       },
       subscribe(listener) {
         const onChange = () => listener();
@@ -71,7 +91,7 @@ function createDocumentRepository(): DocumentRepository {
   return {
     mode: 'service',
     async list() {
-      const { documents } = await listDocuments();
+      const { documents } = await (await loadServiceApi()).listDocuments();
       seedAboutDocumentText();
       const about = aboutDocumentMeta();
       return [about, ...documents.filter((document) => !isAboutDocument(document.id))];
@@ -82,37 +102,71 @@ function createDocumentRepository(): DocumentRepository {
         return aboutDocumentMeta();
       }
       try {
-        const { document } = await getDocument(id);
+        const { document } = await (await loadServiceApi()).getDocument(id);
         return document;
-      } catch {
-        return null;
+      } catch (error) {
+        // A server 404 deliberately conflates missing/deleted/unauthorized and
+        // is authoritative. Network and 5xx failures are not absence: let the
+        // metadata hook preserve its IndexedDB proof so the CRDT can open
+        // offline instead of racing a valid cache to `null`.
+        if (error instanceof ServiceError && error.status === 404) return null;
+        throw error;
       }
     },
     async create(draft) {
-      const { document } = await createRemoteDocument({ title: draft?.title });
+      const { document } = await (await loadServiceApi()).createDocument({
+        title: draft?.title,
+        markdown: draft?.content,
+      });
+      signalDocumentRepositoryChange();
       return document;
     },
     async rename(id, title) {
       try {
-        const { document } = await renameDocument(id, title);
+        const { document } = await (await loadServiceApi()).renameDocument(id, title);
+        signalDocumentRepositoryChange();
         return document;
-      } catch {
-        return null;
+      } catch (error) {
+        if (error instanceof ServiceError && error.status === 404) return null;
+        throw error;
       }
     },
     async duplicate(id) {
       try {
-        const { document } = await duplicateDocument(id);
+        const { document } = await (await loadServiceApi()).duplicateDocument(id);
+        signalDocumentRepositoryChange();
         return document;
-      } catch {
-        return null;
+      } catch (error) {
+        if (error instanceof ServiceError && error.status === 404) return null;
+        throw error;
       }
     },
     async remove(id) {
-      await deleteDocument(id);
+      if (isAboutDocument(id)) throw new Error('the built-in About document cannot be trashed');
+      await (await loadServiceApi()).deleteDocument(id);
+      signalDocumentRepositoryChange();
     },
-    subscribe() {
-      return () => {};
+    async listTrash() {
+      return (await (await loadServiceApi()).listTrash()).documents;
+    },
+    async restore(id) {
+      try {
+        const { document } = await (await loadServiceApi()).restoreDocument(id);
+        signalDocumentRepositoryChange();
+        return document;
+      } catch (error) {
+        if (error instanceof ServiceError && error.status === 404) return null;
+        throw error;
+      }
+    },
+    async purge(id) {
+      await (await loadServiceApi()).purgeDocument(id);
+      signalDocumentRepositoryChange();
+    },
+    subscribe(listener) {
+      const onChange = () => listener();
+      window.addEventListener(DOCUMENT_REPOSITORY_EVENT, onChange);
+      return () => window.removeEventListener(DOCUMENT_REPOSITORY_EVENT, onChange);
     },
   };
 }

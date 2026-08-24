@@ -5,26 +5,25 @@
   "type": "module",
   "description": "Real-time collaborative markdown editor with Google Docs responsiveness, built on ESBT",
   "workspaces": [
-    "client",
-    "esbt"
+    "client"
   ],
   "engines": {
     "node": ">=22.12"
   },
   "scripts": {
-    "predev": "npm run build --workspace=@marks/esbt",
     "dev": "npm run dev --workspace=client",
     "dev:client": "npm run dev --workspace=client",
     "preview": "npm run preview --workspace=client",
-    "build": "npm run build --workspace=@marks/esbt && npm run build --workspace=client",
-    "pretypecheck": "npm run build --workspace=@marks/esbt",
-    "typecheck": "npm run typecheck --workspace=@marks/esbt && npm run typecheck --workspace=client",
-    "clean": "rm -rf client/dist esbt/dist node_modules/.vite",
-    "test:esbt": "npm test --workspace=@marks/esbt",
+    "build": "npm run build --workspace=client",
+    "typecheck": "npm run typecheck --workspace=client",
+    "clean": "rm -rf client/dist node_modules/.vite",
     "test:browser": "node --experimental-strip-types --test client/src/browser/*.test.ts",
-    "test:surface": "node --experimental-strip-types --test client/src/lib/posture.test.ts client/src/lib/ai-compose.test.ts client/src/lib/identity-copy.test.ts client/src/lib/service-errors.test.ts client/src/lib/qr.test.ts client/src/lib/pairing-link.test.ts client/src/editor/*.test.ts client/src/hooks/useRoute.test.ts client/src/content/about.test.ts",
-    "test:markdown": "node --experimental-strip-types --test client/src/markdown/*.test.ts",
+    "test:surface": "node --experimental-strip-types --test client/src/agent/*.test.ts client/src/commands/*.test.ts client/src/content/*.test.ts client/src/data/*.test.ts client/src/editor/*.test.ts client/src/hooks/*.test.ts client/src/intelligence/*.test.ts client/src/lib/*.test.ts",
+    "test:markdown": "node --experimental-strip-types --test client/src/markdown/*.test.ts client/src/text/*.test.ts",
+    "test:bench": "node --experimental-strip-types --test client/src/bench/*.test.ts",
     "test:wasm": "node --experimental-strip-types --test client/src/collab/*.test.ts client/src/collab/wasm/*.test.ts",
+    "verify:esbt": "node scripts/verify-esbt-artifact.mjs",
+    "verify:esbt:dev": "node scripts/verify-esbt-artifact.mjs --allow-dirty-source",
     "test:auth": "node --experimental-strip-types --test client/src/auth/*.test.ts",
     "test:harness": "node --test scripts/harness/*.test.mjs",
     "harness:probe": "node scripts/harness/probe.mjs",

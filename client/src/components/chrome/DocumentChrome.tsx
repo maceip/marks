@@ -1,13 +1,17 @@
 import type { EditorView } from '@codemirror/view';
+import type { CollabSession } from '../../collab/types';
 import type { Posture } from '../../lib/posture';
 import type { UiActionId } from '../../lib/ui-actions';
 import type { ViewMode } from '../shell/TopBar';
 import { DesktopRibbon } from './DesktopRibbon';
+import { FoldableRibbon } from './FoldableRibbon';
 import { MiniToolbar } from './MiniToolbar';
 import { PhoneComposer } from './PhoneComposer';
 import '../../styles/chrome.css';
 
 export interface DocumentChromeProps {
+  documentId: string;
+  session: CollabSession | null;
   posture: Posture;
   documentReady: boolean;
   documentTitle: string;
@@ -23,13 +27,13 @@ export interface DocumentChromeProps {
   onToggleHud: () => void;
   onToggleOutline: () => void;
   onAction: (action: UiActionId) => void;
-  onOpenAi: () => void;
+  onOpenDraftTools: () => void;
   onToggleTheme?: () => void;
   onVoice?: () => void;
   voiceActive?: boolean;
   voiceSupported?: boolean;
   onNotify?: (title: string, detail?: string, tone?: 'neutral' | 'success' | 'danger') => void;
-  localMode?: boolean;
+  temporary?: boolean;
 }
 
 export function DocumentChrome(props: DocumentChromeProps) {
@@ -38,6 +42,8 @@ export function DocumentChrome(props: DocumentChromeProps) {
   if (props.posture.phone) {
     return (
       <PhoneComposer
+        documentId={props.documentId}
+        session={props.session}
         posture={props.posture}
         documentReady={props.documentReady}
         documentTitle={props.documentTitle}
@@ -51,14 +57,25 @@ export function DocumentChrome(props: DocumentChromeProps) {
         voiceActive={props.voiceActive}
         voiceSupported={props.voiceSupported}
         onNotify={props.onNotify}
-        localMode={props.localMode}
+        temporary={props.temporary}
       />
+    );
+  }
+
+  if (props.posture.foldable) {
+    return (
+      <>
+        <FoldableRibbon posture={props.posture} />
+        <MiniToolbar selected={props.selected} disabled={!props.documentReady} getView={props.getView} />
+      </>
     );
   }
 
   return (
     <>
       <DesktopRibbon
+        documentId={props.documentId}
+        session={props.session}
         documentReady={props.documentReady}
         mode={props.mode}
         theme={props.theme}
@@ -73,11 +90,12 @@ export function DocumentChrome(props: DocumentChromeProps) {
         onToggleHud={props.onToggleHud}
         onToggleOutline={props.onToggleOutline}
         onAction={props.onAction}
-        onOpenAi={props.onOpenAi}
+        onOpenDraftTools={props.onOpenDraftTools}
         onToggleTheme={props.onToggleTheme}
         onVoice={props.onVoice}
         voiceActive={props.voiceActive}
         voiceSupported={props.voiceSupported}
+        onNotify={props.onNotify}
       />
       <MiniToolbar selected={props.selected} disabled={!props.documentReady} getView={props.getView} />
     </>
@@ -85,4 +103,4 @@ export function DocumentChrome(props: DocumentChromeProps) {
 }
 
 export { QuickAccess } from './DesktopRibbon';
-export { AiSheet } from './AiSheet';
+export { DraftToolsSheet } from './DraftToolsSheet';

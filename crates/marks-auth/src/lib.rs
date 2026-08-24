@@ -71,8 +71,8 @@ pub use device_session::{
 };
 pub use document::{
     DocumentError, DocumentOwner, DocumentRecord, PrincipalRecord, bump_authorization_epoch,
-    claim_scratch_document, require_active_principal, require_live_document,
-    require_principal_document, require_scratch_document,
+    claim_scratch_document, require_active_principal, require_deleted_document_owner,
+    require_live_document, require_principal_document, require_scratch_document,
 };
 pub use email::{
     AuthorizedEmailPromotion, EmailChallengeRecord, EmailLocator, EmailLocatorError,

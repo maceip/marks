@@ -10,12 +10,12 @@ import '../styles/home.css';
 interface HomeProps {
   documents: DocumentMeta[];
   loading: boolean;
-  /** A rotating session holds this workspace; it is no longer scratch. */
-  kept?: boolean;
+  workspaceKind: 'local' | 'scratch' | 'account';
   onCreate: () => void;
   onCreateFromTemplate: (templateId: TemplateId) => void;
   onOpen: (id: string) => void;
   onOpenTemplates: () => void;
+  onImport: () => void;
   onOpenBenchmark: () => void;
   onOpenPreferences: () => void;
   onKeepWorkspace: () => void;
@@ -24,38 +24,32 @@ interface HomeProps {
 export function Home({
   documents,
   loading,
-  kept = false,
+  workspaceKind,
   onCreate,
   onCreateFromTemplate,
   onOpen,
   onOpenTemplates,
+  onImport,
   onOpenBenchmark,
   onOpenPreferences,
   onKeepWorkspace,
 }: HomeProps) {
   const recent = documents.slice(0, 4);
+  const temporary = workspaceKind === 'scratch';
+  const local = workspaceKind === 'local';
 
   return (
     <div className="home-surface">
       <section className="home-hero surface-material-host">
         <SurfaceMaterial variant="hero" intensity={0.92} />
         <div className="home-hero-copy">
-          <span className="home-kicker">
-            <MarksMark size={16} /> {kept ? 'Kept workspace' : 'Temporary workspace'}
-          </span>
-          <h2>Pick up the thought.<br />The interface is already ready.</h2>
-          {kept ? (
-            <p>
-              This workspace is kept. Documents follow your account key and open on every device
-              you link. Closing this tab loses nothing.
-            </p>
-          ) : (
-            <p>
-              First paint has no registration form. This tab is a scratch workspace. Create, edit,
-              preview, review, and export from a real local document model. Closing the tab before
-              you keep it is unrecoverable.
-            </p>
-          )}
+          <span className="home-kicker"><MarksMark size={16} /> {temporary ? 'Temporary workspace' : local ? 'Local workspace' : 'Your workspace'}</span>
+          <h2>Pick up the thought.<br />The page is ready.</h2>
+          <p>{temporary
+            ? 'First paint has no registration form. This tab has private scratch authority; its documents are durable on the service, but closing the tab before you keep the workspace loses the capability.'
+            : local
+              ? 'Documents, review threads, and versions stay in this browser. The same Rust/Wasm editor runs locally, with no account or remote collaboration implied.'
+              : 'Your durable Marks documents are available through the Rust service, with live collaboration, role-based review, and named versions.'}</p>
           <div className="home-actions">
             <button type="button" className="button primary" onClick={onCreate}>
               <Icon path={icons.plus} /> New document
@@ -63,11 +57,10 @@ export function Home({
             <button type="button" className="button" onClick={onOpenTemplates}>
               <Icon path={icons.template} /> Browse templates
             </button>
-            {!kept && (
-              <button type="button" className="button" onClick={onKeepWorkspace}>
-                Keep this workspace
-              </button>
-            )}
+            <button type="button" className="button" onClick={onImport}>
+              <Icon path={icons.download} /> Import .md
+            </button>
+            {temporary && <button type="button" className="button" onClick={onKeepWorkspace}>Keep this workspace</button>}
           </div>
         </div>
         <div className="home-receipt surface-material-host" aria-label="Performance promise">
@@ -83,7 +76,7 @@ export function Home({
       <section className="home-section" aria-labelledby="recent-title">
         <header className="home-section-head">
           <div><span>Continue</span><h3 id="recent-title">Recent documents</h3></div>
-          <span>{documents.length} on this device</span>
+          <span>{documents.length} {local ? 'in this browser' : 'available'}</span>
         </header>
         <div className="recent-grid">
           {loading && recent.length === 0 && [0, 1, 2].map((item) => <div className="recent-card recent-skeleton" key={item} />)}
@@ -123,7 +116,7 @@ export function Home({
       </section>
 
       <footer className="home-footer-card">
-        <span><Icon path={icons.check} size={14} /> <strong>UI prototype mode</strong> · real local persistence, replaceable data adapters</span>
+        <span><Icon path={icons.check} size={14} /> <strong>{local ? 'Browser-local mode' : temporary ? 'Scratch service mode' : 'Authenticated service mode'}</strong> · {local ? 'local persistence' : 'Rust persistence and ESBT collaboration'}</span>
         <div className="home-footer-actions">
           <button type="button" onClick={() => onOpen(ABOUT_DOCUMENT_ID)}>Google Docs for Markdown</button>
           <button type="button" onClick={onOpenPreferences}><Icon path={icons.settings} size={14} /> Appearance</button>

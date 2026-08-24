@@ -1,5 +1,5 @@
 /**
- * Remote carets and selections, drawn from the ESBT ephemeral store.
+ * Remote carets and selections, drawn from Marks' transient presence store.
  *
  * The store is the transport (`${siteId}-cm-user` for identity,
  * `${siteId}-cm-sel` for the selection, exactly the keys the integration
@@ -19,7 +19,7 @@ import {
   ViewPlugin,
   WidgetType,
 } from '@codemirror/view';
-import type { EphemeralStoreType } from '@marks/esbt';
+import type { PresenceStoreApi } from './presence-store';
 
 export const HEARTBEAT_MS = 15_000;
 
@@ -137,7 +137,7 @@ function buildDecorations(
 export function esbtPresence(
   getSiteId: () => string,
   getLength: () => number,
-  presence: EphemeralStoreType,
+  presence: PresenceStoreApi,
 ): Extension {
   const selectionKeyFor = () => `${getSiteId()}-cm-sel`;
 

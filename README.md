@@ -113,7 +113,7 @@ client/                     Vite + React + TypeScript
                             presence decorations for CodeMirror
   markdown/                 markdown-it setup, incremental block parse, DOM patch
   workers/                  markdown.worker.ts, bench.worker.ts
-  public/esbt.wasm          Rust core, same git rev as marks-server
+  public/esbt.wasm          Rust core + embedded, generated ABI contract
   editor/                   CodeMirror 6 setup, commands, theme
   pages/                    route screens: Home, Benchmark
   content/                  canonical documents (About opens in the editor)
@@ -124,13 +124,15 @@ client/                     Vite + React + TypeScript
   components/identity/      keep-workspace and account sheets
   components/glyphs/        3D folded-glass command icons
   components/ui/            primitives: mark, icons, modal, glass host
-esbt/                       TypeScript presence store + contract tests
+engine-profile.json         shared native/Wasm resource and compaction policy
 crates/marks-auth/          identity/authorization validators
 crates/marks-server/        the only HTTP/WebSocket process
 ```
 
-Rebuild the Wasm artifact from the pinned ESBT-web revision with
-`scripts/build-esbt-wasm.sh`.
+Rebuild the Wasm artifact and generated TypeScript binding from the pinned
+ESBT-web revision with `scripts/build-esbt-wasm.sh`; verify its revision,
+content hashes, embedded ABI, import surface, and export signatures with
+`npm run verify:esbt`.
 
 `marks-server` is one Rust process owning HTTP, sessions, ACLs, durable
 document rooms, and the native ESBT replica (the pinned
@@ -143,10 +145,11 @@ speaks through the same core compiled to Wasm.
 
 1. A keystroke applies to the local CRDT replica and paints in CodeMirror. No
    network, no worker, no wait.
-2. The new text goes to the markdown worker. A one-paragraph edit tokenizes
-   only the dirty source block. Link references, footnotes, abbreviations, and
-   heading-slug collisions still force a full document parse, because those
-   are document-wide.
+2. Exact UTF-16 edit ranges go to the markdown worker; the main thread does not
+   serialize the whole document on every keystroke. A one-paragraph edit
+   tokenizes only the dirty source block. Link references, footnotes,
+   abbreviations, and heading-slug collisions still force a full document
+   parse, because those are document-wide.
 3. The worker returns HTML **only for blocks the main thread does not already
    have**. A one-word edit in a 700-block document ships a few hundred bytes.
 4. The main thread sanitises those blocks and reconciles them into the DOM by
@@ -167,50 +170,40 @@ instead of leaving tombstones. The browser runs the Rust core through the
 `marks-server` uses natively. Per-replica undo, transaction batching, and an
 IndexedDB full-snapshot + update journal live on the Marks side of that
 boundary; the engine does not schedule its own compaction or persistence.
-`@marks/esbt` remains only for ephemeral presence and the TypeScript contract
-suite. Comments and version history are fully usable in local mode. Remote
+Transient presence is a small Marks-owned, bounded, non-persistent protocol;
+there is no second TypeScript document engine. Comments and version history
+are fully usable in local mode. Remote
 comment storage, commenter authorization, and cross-user history are still
 absent until the authenticated metadata service lands. The binding and release
 boundary is [docs/V1-SCOPE.md](docs/V1-SCOPE.md).
 
-**Benchmark engine** in the sidebar runs an editing trace against the Wasm
-core, in a worker, in your browser. One run of the 25,000-edit trace in Node
-on one machine (your numbers will differ):
-
-| | ESBT |
-| --- | --- |
-| Type the trace | 311 ms |
-| Receive updates | 194 ms |
-| Merge two branches | 47 ms |
-| Open from snapshot | 236 ms |
-| Snapshot size | 1.6 MB |
-| Update traffic | 1.4 MB |
-
-Per keystroke that is ~12 µs, far below anything typing can notice. Update
-payloads use format v3: one site dictionary per batch and front-coded
-identifier paths, so bytes-per-operation fall with transaction size. Sequence
-paths stay prefix-delta-coded and HTTP responses gzip well. Further
-identifier compression is engine research, not a Marks wiring gap.
+**Engine performance receipt** in the sidebar runs the checked-in Rust/Wasm
+artifact in a worker. Interactive operations are one transaction and one
+update each; offline branch work is explicitly batched. One warm-up is
+discarded, 3–5 trials are recorded, and the page reports median/p95 plus raw
+samples, artifact/source/ABI hashes, seed, browser, memory, and encoded bytes.
+It deliberately makes no cross-engine claim. Download the JSON receipt if a
+number will be cited; a screenshot or an unpinned one-off result is not
+benchmark evidence.
 
 ### Sync protocol
 
 The room transport is the tag-byte framing in `client/src/collab/protocol.ts`
-(`MSG_UPDATE`, `MSG_EPHEMERAL`, `MSG_SERVER_VV`, `MSG_SNAPSHOT`, `MSG_SYNCED`)
+(`MSG_UPDATE`, `MSG_EPHEMERAL`, `MSG_SERVER_VV`, `MSG_SNAPSHOT`, `MSG_SYNCED`,
+`MSG_MUTATION`, `MSG_COMMITTED`)
 carrying the Rust core's canonical, versioned, bounded encodings — the same
 bytes the Wasm client emits. Admission is a one-use ticket in
 `Sec-WebSocket-Protocol` that binds an exact
 principal/session/device/document/site/role (or scratch/document/site) actor.
-The room validates role policy before decoding CRDT bytes, applies a valid
-update to the staged in-memory replica, commits the exact canonical bytes and
-revision to the durable journal in one transaction, and only then broadcasts.
-Retry safety rides the engine's `(origin, seq)` operation identities: a
-replayed update commits nothing and re-broadcasts nothing, and a crash between
-commit and broadcast is recovered by journal replay plus the version-vector
-reconnect exchange. When a replica has compacted past a peer's version it
-sends a compact snapshot instead of a delta (`HistoryUnavailable`). Snapshots
-are asynchronous compaction and never define whether an edit is saved. This is
-implemented and integration-tested in `crates/marks-server`, and the browser
-session now speaks those encodings through the Wasm binding.
+The room validates role policy before decoding CRDT bytes, applies valid
+mutations to a staged replica, group-commits consecutive mutations and their
+stable 128-bit retry receipts in one FULL-synchronous SQLite transaction, and
+only then acknowledges and broadcasts each independent revision. Retrying the
+same ID and bytes returns its original committed receipt; rebinding an ID is a
+protocol error. The browser says “saving” until that receipt atomically
+checkpoints IndexedDB and removes the matching retry. When a replica has
+compacted past a peer's version it sends a compact snapshot instead of a delta
+(`HistoryUnavailable`).
 
 ## Performance panel
 
@@ -225,7 +218,8 @@ size, IndexedDB journal saved-ness, and the encoded size of the document.
 ## Tests
 
 ```bash
-npm run test:esbt        # 41 CRDT engine contract tests, including fuzzed convergence
+npm run verify:esbt      # strict artifact revision/hash/ABI/provenance gate
+npm run test:bench       # deterministic trace and median/p95 receipt policy
 npm run test:browser     # clipboard, context-menu, select-all, tab isolation
 npm run test:markdown    # document-global preview invalidation and incremental parse
 npm run test:wasm        # Wasm adapter, site conversion, journal, reconnect fallbacks
@@ -244,8 +238,8 @@ version in `rust-toolchain.toml` (the same pin as
 `workspace.package.rust-version`):
 
 - `test` — format, clippy, workspace tests (including in-process
-  `room_collab`), Node unit suites including `test:wasm` against the
-  checked-in `esbt.wasm`, and the default local client build.
+  `room_collab`), strict Wasm identity/ABI verification, Node unit suites
+  including `test:wasm`, and the default local client build.
 - `service-collab` — builds `marks-server` plus `VITE_MARKS_DATA_MODE=service`,
   boots the binary, drives first-paint `/v1` from Playwright, then runs two
   native ESBT peers against the UI-created document (`npm run ci:service`).

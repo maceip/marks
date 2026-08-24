@@ -29,3 +29,10 @@ test('syntax highlighting is opt-in', () => {
   assert.doesNotMatch(plain, /hljs-keyword/);
   assert.match(rich, /hljs-keyword/);
 });
+
+test('local asset links defer their blob URL to the main thread', () => {
+  const id = 'local-asset-12345678-1234-1234-1234-123456789abc';
+  const html = createMarkdownIt().render(`![proof](/__marks_local_asset/${id})`);
+  assert.match(html, new RegExp(`data-marks-local-asset="${id}"`));
+  assert.doesNotMatch(html, /src="\/__marks_local_asset/);
+});

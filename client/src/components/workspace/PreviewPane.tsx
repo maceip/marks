@@ -37,7 +37,7 @@ export function PreviewPane({
     renderer.onHeadings((headings) => handlers.current.onHeadings(headings));
 
     renderer.invalidate(session.getText());
-    const off = session.onTextChange((text) => renderer.update(text));
+    const off = session.onChange((change) => renderer.update(change.edits));
 
     return () => {
       off();

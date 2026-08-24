@@ -1,3 +1,5 @@
+import type { TextEdit } from '../text/change';
+
 /** A top-level markdown block: the unit of caching, diffing and repainting. */
 export interface BlockPatch {
   /** Content hash plus an occurrence counter, stable across edits elsewhere. */
@@ -27,10 +29,12 @@ export interface RenderStats {
   /** Bytes of HTML shipped to the main thread. */
   bytes: number;
   chars: number;
+  words: number;
 }
 
 export type RenderRequest =
   | { type: 'render'; seq: number; text: string }
+  | { type: 'patch'; seq: number; edits: TextEdit[] }
   | { type: 'reset' };
 
 export interface RenderResponse {

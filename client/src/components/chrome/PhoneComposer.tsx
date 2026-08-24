@@ -1,31 +1,17 @@
-import { useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { EditorView } from '@codemirror/view';
-import type { StateCommand } from '@codemirror/state';
-import {
-  insertCallout,
-  insertCodeBlock,
-  insertImage,
-  insertLink,
-  insertMath,
-  insertMermaid,
-  insertShape,
-  insertTable,
-  setHeading,
-  toggleBold,
-  toggleBullet,
-  toggleInlineCode,
-  toggleItalic,
-  toggleTask,
-} from '../../editor/commands';
-import { insertImageFile, openFind } from '../../editor/actions';
+import type { CollabSession } from '../../collab/types';
+import { useCommandCenter } from '../../commands/context';
+import type { ProjectedCommand } from '../../commands/types.ts';
 import type { Posture } from '../../lib/posture';
 import type { UiActionId } from '../../lib/ui-actions';
 import type { ViewMode } from '../shell/TopBar';
-import { Glyph, type GlyphName } from '../glyphs/Glyph';
+import { Glyph } from '../glyphs/Glyph';
 import { SurfaceMaterial } from '../ui/SurfaceMaterial';
-import { AiSheet } from './AiSheet';
 
 interface PhoneComposerProps {
+  documentId: string;
+  session: CollabSession | null;
   posture: Posture;
   documentReady: boolean;
   documentTitle: string;
@@ -39,189 +25,225 @@ interface PhoneComposerProps {
   voiceActive?: boolean;
   voiceSupported?: boolean;
   onNotify?: (title: string, detail?: string, tone?: 'neutral' | 'success' | 'danger') => void;
-  localMode?: boolean;
+  temporary?: boolean;
 }
 
-type PhoneSheet = 'insert' | 'ai' | 'more' | null;
+type PhoneSheet = 'insert' | 'review' | 'more' | null;
 
-const FORMAT: Array<{ glyph: GlyphName; label: string; command: StateCommand }> = [
-  { glyph: 'bold', label: 'Bold', command: toggleBold },
-  { glyph: 'italic', label: 'Italic', command: toggleItalic },
-  { glyph: 'heading', label: 'Heading', command: setHeading(2) },
-  { glyph: 'list', label: 'List', command: toggleBullet },
-  { glyph: 'task', label: 'Task', command: toggleTask },
-  { glyph: 'code', label: 'Code', command: toggleInlineCode },
-];
+const FORMAT_IDS = [
+  'format.bold',
+  'format.italic',
+  'format.heading-2',
+  'paragraph.bullets',
+  'paragraph.tasks',
+  'format.inline-code',
+] as const;
 
-const INSERT: Array<{ glyph: GlyphName; label: string; run: 'command' | 'file' | 'ai' | UiActionId; command?: StateCommand }> = [
-  { glyph: 'image', label: 'Photo', run: 'file' },
-  { glyph: 'link', label: 'Link', run: 'command', command: insertLink },
-  { glyph: 'table', label: 'Table', run: 'command', command: insertTable },
-  { glyph: 'rect', label: 'Shape', run: 'command', command: insertShape('rect') },
-  { glyph: 'callout', label: 'Callout', run: 'command', command: insertCallout('info') },
-  { glyph: 'math', label: 'Math', run: 'command', command: insertMath },
-  { glyph: 'mermaid', label: 'Diagram', run: 'command', command: insertMermaid },
-  { glyph: 'code', label: 'Fence', run: 'command', command: insertCodeBlock },
-  { glyph: 'image', label: 'Image URL', run: 'command', command: insertImage },
-  { glyph: 'comment', label: 'Comment', run: 'comments' },
-];
+const INSERT_IDS = [
+  'insert.picture-file',
+  'insert.picture-url',
+  'insert.link',
+  'insert.table',
+  'insert.shape-rect',
+  'insert.callout-info',
+  'insert.math',
+  'insert.mermaid',
+  'insert.code-block',
+  'review.comments',
+] as const;
 
-const MORE: Array<{ glyph: GlyphName; label: string; action: UiActionId | 'find' | 'outline' }> = [
-  { glyph: 'plus', label: 'New page', action: 'new' },
-  { glyph: 'share', label: 'Keep', action: 'keep-workspace' },
-  { glyph: 'settings', label: 'Account', action: 'account' },
-  { glyph: 'link', label: 'Pairing', action: 'pairing' },
-  { glyph: 'clear', label: 'Sign out', action: 'logout' },
-  { glyph: 'template', label: 'Templates', action: 'templates' },
-  { glyph: 'pencil', label: 'Rename', action: 'rename' },
-  { glyph: 'download', label: 'Export', action: 'download' },
-  { glyph: 'share', label: 'Share', action: 'share' },
-  { glyph: 'find', label: 'Find', action: 'find' },
-  { glyph: 'outline', label: 'Outline', action: 'outline' },
-  { glyph: 'history', label: 'History', action: 'history' },
-  { glyph: 'settings', label: 'Appearance', action: 'preferences' },
-  { glyph: 'trash', label: 'Delete', action: 'delete' },
-];
+const REVIEW_IDS = [
+  'review.document-health',
+  'review.render-diagnostics',
+  'review.accessibility',
+  'review.privacy-exposure',
+  'review.quality-contract',
+  'view.reader-simulation',
+  'review.link-intelligence',
+  'review.citation-ledger',
+  'review.task-decision-ledger',
+  'review.collaboration-console',
+  'document.recovery',
+  'review.version-compare',
+  'tools.front-matter',
+  'document.publish-profile',
+  'tools.structure',
+  'tools.asset-inspector',
+  'tools.paste-intent',
+  'insert.cross-document-block',
+] as const;
+
+const MORE_IDS = [
+  'document.new',
+  'identity.keep',
+  'identity.account',
+  'identity.pairing',
+  'identity.sign-out',
+  'document.templates',
+  'document.import',
+  'document.rename',
+  'document.export-markdown',
+  'document.export-bundle',
+  'document.share',
+  'edit.find',
+  'view.outline',
+  'review.history',
+  'workspace.trash',
+  'view.preferences',
+  'document.delete',
+] as const;
 
 export function PhoneComposer(props: PhoneComposerProps) {
+  const center = useCommandCenter();
   const [sheet, setSheet] = useState<PhoneSheet>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const available = useMemo(
+    () => new Map(center.commands('phone').map((command) => [command.id, command])),
+    [center],
+  );
+  const contextual = [...available.values()].filter((command) => command.contextual);
+  const format = FORMAT_IDS.flatMap((id) => available.get(id) ?? []);
+  const insert = INSERT_IDS.flatMap((id) => available.get(id) ?? []);
+  const review = REVIEW_IDS.flatMap((id) => available.get(id) ?? []);
+  const more = MORE_IDS.flatMap((id) => available.get(id) ?? []);
+  const writing = center.environment.mode !== 'preview';
+  const editMode = available.get('view.editor');
+  const previewMode = available.get('view.preview');
+  const tools = available.get('tools.draft');
+  const sheetTitle = sheet === 'insert'
+    ? 'Insert'
+    : sheet === 'review'
+      ? 'Document intelligence'
+      : 'Page';
 
-  const run = (command: StateCommand) => {
-    const view = props.getView();
-    if (!view || !props.documentReady) return;
-    command(view);
-    view.focus();
-    setSheet(null);
+  const invoke = (command: ProjectedCommand) => {
+    if (!command.enabled) return;
+    void center.invoke(command.id).then(() => setSheet(null));
   };
 
-  const writing = props.mode !== 'preview';
-
   return (
-    <div className={`phone-composer${props.posture.keyboardOpen ? ' keyboard-open' : ''}`}>
-      {props.localMode && (
-        <button type="button" className="phone-identity" onClick={() => props.onAction('keep-workspace')}>
+    <div className={`phone-composer${props.posture.keyboardOpen ? ' keyboard-open' : ''}`} data-command-context={center.environment.context}>
+      {props.temporary && (
+        <button type="button" className="phone-identity" data-command-id="identity.keep" onClick={() => {
+          const keep = available.get('identity.keep');
+          if (keep) invoke(keep);
+        }}>
           <span>Temporary</span>
           Closing this tab is unrecoverable until you keep it.
         </button>
       )}
+
       {writing && (
-        <div className="phone-format-chips" role="toolbar" aria-label="Quick format">
-          {FORMAT.map((item) => (
-            <button
-              key={item.label}
-              type="button"
-              disabled={!props.documentReady}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => run(item.command)}
-            >
-              <Glyph name={item.glyph} size={20} />
-              <span>{item.label}</span>
-            </button>
+        <div className="phone-format-chips" role="toolbar" aria-label={contextual.length ? `${center.environment.context} tools and quick format` : 'Quick format'}>
+          {contextual.map((command) => (
+            <PhoneChip key={command.id} command={command} contextual onInvoke={invoke} />
           ))}
-          <button type="button" onClick={() => setSheet('ai')}>
-            <Glyph name="sparkles" size={20} />
-            <span>AI</span>
-          </button>
-          {props.voiceSupported && (
-            <button type="button" className={props.voiceActive ? 'active' : undefined} onClick={() => props.onVoice?.()}>
-              <Glyph name="mic" size={20} />
-              <span>Speak</span>
-            </button>
-          )}
+          {format.map((command) => (
+            <PhoneChip key={command.id} command={command} onInvoke={invoke} />
+          ))}
+          {tools && <PhoneChip command={tools} onInvoke={invoke} />}
+          {available.get('input.dictate') && <PhoneChip command={available.get('input.dictate')!} onInvoke={invoke} />}
         </div>
       )}
 
       {sheet && (
         <div className="phone-sheet-layer">
           <button type="button" className="phone-sheet-scrim" aria-label="Close sheet" onClick={() => setSheet(null)} />
-          <div className="phone-sheet surface-material-host" role="dialog" aria-label={sheet}>
+          <div className="phone-sheet surface-material-host" role="dialog" aria-label={`${sheetTitle} commands`}>
             <SurfaceMaterial variant="floating" intensity={1.08} />
-            {sheet === 'ai' ? (
-              <AiSheet
-                open
-                embedded
-                documentTitle={props.documentTitle}
-                getView={props.getView}
-                onClose={() => setSheet(null)}
-                onNotify={props.onNotify}
-              />
-            ) : (
-              <>
-                <header>
-                  <h2>{sheet === 'insert' ? 'Insert' : 'Page'}</h2>
-                  <button type="button" className="icon-button" aria-label="Close" onClick={() => setSheet(null)}>
-                    <Glyph name="clear" size={16} interactive={false} />
-                  </button>
-                </header>
-                <div className="phone-sheet-grid">
-                  {(sheet === 'insert' ? INSERT : MORE).map((item) => (
-                    <button
-                      key={item.label}
-                      type="button"
-                      disabled={!props.documentReady && item.label !== 'New page' && item.label !== 'Templates'}
-                      onClick={() => {
-                        if ('command' in item && item.run === 'command' && item.command) run(item.command);
-                        else if ('run' in item && item.run === 'file') fileRef.current?.click();
-                        else if ('run' in item && item.run === 'comments') props.onAction('comments');
-                        else if ('action' in item) {
-                          if (item.action === 'find') {
-                            const view = props.getView();
-                            if (view) openFind(view);
-                          } else if (item.action === 'outline') props.onToggleOutline();
-                          else props.onAction(item.action);
-                          setSheet(null);
-                        }
-                      }}
-                    >
-                      <Glyph name={item.glyph} size={28} />
-                      <span>{item.label}</span>
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
+            <header>
+              <h2>{sheetTitle}</h2>
+              <button type="button" className="icon-button" aria-label="Close" onClick={() => setSheet(null)}>
+                <Glyph name="clear" size={16} interactive={false} />
+              </button>
+            </header>
+            <div className="phone-sheet-grid">
+              {(sheet === 'insert' ? insert : sheet === 'review' ? review : more).map((command) => (
+                <PhoneSheetCommand key={command.id} command={command} onInvoke={invoke} />
+              ))}
+            </div>
           </div>
         </div>
       )}
 
       <nav className="phone-nav surface-material-host" aria-label="Phone composer">
         <SurfaceMaterial variant="chrome" intensity={0.9} />
-        <button type="button" className={writing ? 'active' : undefined} onClick={() => props.onModeChange('edit')}>
-          <Glyph name="pencil" size={22} />
-          <span>Write</span>
-        </button>
-        <button type="button" className={props.mode === 'preview' ? 'active' : undefined} onClick={() => props.onModeChange('preview')}>
-          <Glyph name="eye" size={22} />
-          <span>Preview</span>
-        </button>
-        <button type="button" className={sheet === 'insert' ? 'active' : undefined} onClick={() => setSheet((current) => (current === 'insert' ? null : 'insert'))}>
+        {editMode && (
+          <PhoneNavCommand command={editMode} label="Write" active={writing} onInvoke={invoke} />
+        )}
+        {previewMode && (
+          <PhoneNavCommand command={previewMode} label="Preview" active={!writing} onInvoke={invoke} />
+        )}
+        <button type="button" className={sheet === 'insert' ? 'active' : undefined} onClick={() => setSheet((current) => current === 'insert' ? null : 'insert')}>
           <Glyph name="plus" size={22} />
           <span>Insert</span>
         </button>
-        <button type="button" className={sheet === 'ai' ? 'active' : undefined} onClick={() => setSheet((current) => (current === 'ai' ? null : 'ai'))}>
-          <Glyph name="sparkles" size={22} />
-          <span>AI</span>
+        <button type="button" className={sheet === 'review' ? 'active' : undefined} onClick={() => setSheet((current) => current === 'review' ? null : 'review')}>
+          <Glyph name="gauge" size={22} />
+          <span>Review</span>
         </button>
-        <button type="button" className={sheet === 'more' ? 'active' : undefined} onClick={() => setSheet((current) => (current === 'more' ? null : 'more'))}>
+        <button type="button" className={sheet === 'more' ? 'active' : undefined} onClick={() => setSheet((current) => current === 'more' ? null : 'more')}>
           <Glyph name="more" size={22} />
           <span>More</span>
         </button>
       </nav>
-
-      <input
-        ref={fileRef}
-        type="file"
-        accept="image/*"
-        hidden
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          const view = props.getView();
-          if (file && view) void insertImageFile(view, file);
-          event.currentTarget.value = '';
-          setSheet(null);
-        }}
-      />
     </div>
+  );
+}
+
+function PhoneChip({ command, contextual, onInvoke }: {
+  command: ProjectedCommand;
+  contextual?: boolean;
+  onInvoke: (command: ProjectedCommand) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`${command.pressed ? 'active ' : ''}${contextual ? 'contextual ' : ''}${command.agentRaised ? 'agent-raised' : ''}`.trim() || undefined}
+      data-command-id={command.id}
+      disabled={!command.enabled}
+      title={command.unavailableReason ?? command.description}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => onInvoke(command)}
+    >
+      <Glyph name={command.glyph} size={20} />
+      <span>{command.label.replace('Heading 2', 'Heading').replace('Inline code', 'Code').replace('Draft tools', 'Tools')}</span>
+    </button>
+  );
+}
+
+function PhoneSheetCommand({ command, onInvoke }: { command: ProjectedCommand; onInvoke: (command: ProjectedCommand) => void }) {
+  return (
+    <button
+      type="button"
+      className={command.agentRaised ? 'agent-raised' : undefined}
+      data-command-id={command.id}
+      disabled={!command.enabled}
+      title={command.unavailableReason ?? command.description}
+      onClick={() => onInvoke(command)}
+    >
+      <Glyph name={command.glyph} size={28} />
+      <span>{command.label}</span>
+      {!command.enabled && command.unavailableReason && <small>{command.unavailableReason}</small>}
+    </button>
+  );
+}
+
+function PhoneNavCommand({ command, label, active, onInvoke }: {
+  command: ProjectedCommand;
+  label: string;
+  active: boolean;
+  onInvoke: (command: ProjectedCommand) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`${active ? 'active ' : ''}${command.agentRaised ? 'agent-raised' : ''}`.trim() || undefined}
+      data-command-id={command.id}
+      disabled={!command.enabled}
+      onClick={() => onInvoke(command)}
+    >
+      <Glyph name={command.glyph} size={22} />
+      <span>{label}</span>
+    </button>
   );
 }

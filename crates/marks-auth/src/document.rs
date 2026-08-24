@@ -27,6 +27,8 @@ pub struct PrincipalRecord {
 pub enum DocumentError {
     #[error("document is deleted")]
     Deleted,
+    #[error("document is not deleted")]
+    NotDeleted,
     #[error("document is not owned by this scratch workspace")]
     ScratchMismatch,
     #[error("document is not owned by this principal")]
@@ -44,6 +46,42 @@ pub fn require_live_document(document: &DocumentRecord) -> Result<(), DocumentEr
         Err(DocumentError::Deleted)
     } else {
         Ok(())
+    }
+}
+
+/// Recovery authority is deliberately narrower than normal ACL resolution:
+/// only the immutable document owner may inspect, restore, or purge a
+/// tombstone. This validator does not make a deleted document live.
+pub fn require_deleted_document_owner(
+    document: &DocumentRecord,
+    owner: &DocumentOwner,
+) -> Result<(), DocumentError> {
+    if document.deleted_at_ms.is_none() {
+        return Err(DocumentError::NotDeleted);
+    }
+    match (&document.owner, owner) {
+        (DocumentOwner::Scratch(actual), DocumentOwner::Scratch(expected))
+            if actual == expected =>
+        {
+            Ok(())
+        }
+        (DocumentOwner::Principal(actual), DocumentOwner::Principal(expected))
+            if actual == expected =>
+        {
+            Ok(())
+        }
+        (DocumentOwner::Scratch(_), DocumentOwner::Scratch(_)) => {
+            Err(DocumentError::ScratchMismatch)
+        }
+        (DocumentOwner::Principal(_), DocumentOwner::Principal(_)) => {
+            Err(DocumentError::PrincipalMismatch)
+        }
+        (DocumentOwner::Scratch(_), DocumentOwner::Principal(_)) => {
+            Err(DocumentError::StillScratchOwned)
+        }
+        (DocumentOwner::Principal(_), DocumentOwner::Scratch(_)) => {
+            Err(DocumentError::AlreadyClaimed)
+        }
     }
 }
 
@@ -131,6 +169,22 @@ mod tests {
 
         assert_eq!(claimed.owner, DocumentOwner::Principal(principal));
         assert_eq!(claimed.authorization_epoch, 4);
+    }
+
+    #[test]
+    fn only_the_exact_owner_can_recover_a_tombstone() {
+        let owner = PrincipalId::new("principal_owner").unwrap();
+        let other = PrincipalId::new("principal_other").unwrap();
+        let mut deleted = document(DocumentOwner::Principal(owner.clone()));
+        deleted.deleted_at_ms = Some(7);
+        assert_eq!(
+            require_deleted_document_owner(&deleted, &DocumentOwner::Principal(owner)),
+            Ok(())
+        );
+        assert_eq!(
+            require_deleted_document_owner(&deleted, &DocumentOwner::Principal(other)),
+            Err(DocumentError::PrincipalMismatch)
+        );
     }
 
     #[test]

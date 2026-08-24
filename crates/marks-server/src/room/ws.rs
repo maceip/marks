@@ -2,7 +2,7 @@
 //! atomically during upgrade, binding one immutable `RoomActor` per socket.
 //! A guessed URL is not authority; there is no identity-free fallback.
 
-use super::{CLOSE_UNAUTHORIZED, JoinRefusal, OutMsg, RoomMsg};
+use super::{CLOSE_CAPACITY, CLOSE_UNAUTHORIZED, JoinRefusal, OutMsg, RoomMsg};
 use crate::app::App;
 use crate::error::{ApiError, ApiResult};
 use crate::guard;
@@ -21,6 +21,7 @@ use marks_auth::{
 use rusqlite::params;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 pub async fn collab_esbt(
@@ -37,6 +38,8 @@ pub async fn collab_esbt(
                 Err(_) => return ApiError::not_found().into_response(),
             };
             upgrade
+                .max_frame_size(app.config.max_frame_bytes)
+                .max_message_size(app.config.max_frame_bytes)
                 .protocols([ESBT_SUBPROTOCOL])
                 .on_upgrade(move |socket| {
                     socket_loop(app, rooms_document_id, actor, client_version, socket)
@@ -162,6 +165,7 @@ async fn socket_loop(
             let code = match refusal {
                 JoinRefusal::Gone => super::CLOSE_DOCUMENT_DELETED,
                 JoinRefusal::Stale => CLOSE_UNAUTHORIZED,
+                JoinRefusal::Capacity => CLOSE_CAPACITY,
                 JoinRefusal::Internal => super::CLOSE_INTERNAL,
             };
             let _ = sink
@@ -175,29 +179,41 @@ async fn socket_loop(
     };
 
     // Outbound: room frames and the room-chosen close code.
+    let ping_ms = app.config.websocket_ping_ms;
+    let idle_ms = app.config.websocket_idle_ms;
     let writer = tokio::spawn(async move {
-        while let Some(message) = out_rx.recv().await {
-            match message {
-                OutMsg::Frame(bytes) => {
-                    if sink.send(Message::Binary(bytes.into())).await.is_err() {
-                        break;
-                    }
-                }
-                OutMsg::Close(code) => {
-                    let _ = sink
-                        .send(Message::Close(Some(CloseFrame {
-                            code,
-                            reason: "".into(),
-                        })))
-                        .await;
-                    break;
-                }
+        let mut ping = tokio::time::interval(Duration::from_millis(ping_ms));
+        ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // Interval's first tick is immediate; wait for one full period before
+        // adding transport traffic.
+        ping.tick().await;
+        loop {
+            let outbound = tokio::select! {
+                message = out_rx.recv() => match message {
+                    Some(OutMsg::Frame(bytes)) => Message::Binary(bytes.into()),
+                    Some(OutMsg::Close(code)) => Message::Close(Some(CloseFrame {
+                        code,
+                        reason: "".into(),
+                    })),
+                    None => break,
+                },
+                _ = ping.tick() => Message::Ping(Vec::new().into()),
+            };
+            let closing = matches!(outbound, Message::Close(_));
+            match tokio::time::timeout(Duration::from_millis(idle_ms), sink.send(outbound)).await {
+                Ok(Ok(())) if !closing => {}
+                _ => break,
             }
         }
     });
 
     // Inbound: binary frames go to the room; everything else is transport.
-    while let Some(message) = stream.next().await {
+    loop {
+        let message =
+            match tokio::time::timeout(Duration::from_millis(idle_ms), stream.next()).await {
+                Ok(Some(message)) => message,
+                Ok(None) | Err(_) => break,
+            };
         match message {
             Ok(Message::Binary(data)) => {
                 if joined
@@ -213,6 +229,9 @@ async fn socket_loop(
                 }
             }
             Ok(Message::Close(_)) | Err(_) => break,
+            // Browser and native clients answer server ping automatically.
+            // Receiving pong (or any other transport frame) resets the idle
+            // timeout because the next read starts a fresh deadline.
             Ok(_) => {}
         }
     }

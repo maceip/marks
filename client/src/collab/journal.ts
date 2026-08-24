@@ -1,48 +1,131 @@
-import { get as idbGet, set as idbSet } from 'idb-keyval';
+import { get as idbGet, set as idbSet, update as idbUpdate } from 'idb-keyval';
 import { persistLockName, withPersistLock } from '../browser/persist-lock.ts';
+import type { MutationKind } from './protocol.ts';
+import { JOURNAL_RETAINED_THRESHOLD } from './profile.ts';
+import type { DocumentCapabilities } from './types.ts';
 
-export const JOURNAL_RETAINED_THRESHOLD = 50_000;
+export { JOURNAL_RETAINED_THRESHOLD } from './profile.ts';
 export const JOURNAL_PRUNE_INTERVAL_MS = 10 * 60 * 1000;
 
+export interface JournalMutation {
+  id: string;
+  kind: MutationKind;
+  bytes: Uint8Array;
+  createdAt: number;
+}
+
 export interface ReplicaJournalRecord {
-  version: 1;
+  version: 3;
   siteId: string;
+  /** Last server-authorized role. It permits offline edits locally; the
+   * server still revalidates every pending mutation after reconnect. */
+  role: DocumentCapabilities['role'];
   snapshot: Uint8Array;
-  updates: Uint8Array[];
+  pending: JournalMutation[];
   ackedVersion: Uint8Array | null;
+  committedRevision: string | null;
   lastPruneAt: number;
+}
+
+interface UnknownJournalRecord {
+  version?: unknown;
+  siteId?: unknown;
+  snapshot?: unknown;
+  pending?: unknown;
+  updates?: unknown;
+  ackedVersion?: unknown;
+  committedRevision?: unknown;
+  lastPruneAt?: unknown;
+  role?: unknown;
 }
 
 export function journalCacheKey(docId: string): string {
   return `marks:esbt:journal:${docId}`;
 }
 
+/**
+ * Read and validate a journal. Storage failures deliberately reject: callers
+ * must not turn an unreadable durable copy into an apparently empty document.
+ */
 export async function readReplicaJournal(docId: string): Promise<ReplicaJournalRecord | null> {
-  try {
-    const record = await idbGet<ReplicaJournalRecord>(journalCacheKey(docId));
-    if (!record || record.version !== 1) return null;
-    if (typeof record.siteId !== 'string' || !(record.snapshot instanceof Uint8Array)) return null;
-    return {
-      version: 1,
-      siteId: record.siteId,
-      snapshot: record.snapshot,
-      updates: Array.isArray(record.updates)
-        ? record.updates.filter((update) => update instanceof Uint8Array)
-        : [],
-      ackedVersion: record.ackedVersion instanceof Uint8Array ? record.ackedVersion : null,
-      lastPruneAt: typeof record.lastPruneAt === 'number' ? record.lastPruneAt : 0,
-    };
-  } catch {
-    return null;
-  }
+  return normalizeRecord(await idbGet<unknown>(journalCacheKey(docId)));
 }
 
+/** Replace a journal under the per-document lock (primarily import/tests). */
 export async function writeReplicaJournal(
   docId: string,
   record: ReplicaJournalRecord,
 ): Promise<void> {
   await withPersistLock(persistLockName('esbt', docId), async () => {
-    await idbSet(journalCacheKey(docId), record);
+    await idbSet(journalCacheKey(docId), cloneRecord(record));
+  });
+}
+
+/** Atomically append one retry-stable mutation without a read/write gap. */
+export async function appendPendingMutation(
+  docId: string,
+  fallback: ReplicaJournalRecord,
+  mutation: JournalMutation,
+): Promise<ReplicaJournalRecord> {
+  return updateRecord(docId, fallback, (current) => appendMutation(current, mutation));
+}
+
+/**
+ * Export inside the same lock that replaces the checkpoint. Pending network
+ * mutations are preserved because the snapshot and server commit lifecycle are
+ * independent durability axes.
+ */
+export async function checkpointReplicaJournal(
+  docId: string,
+  fallback: ReplicaJournalRecord,
+  exportSnapshot: () => Uint8Array,
+): Promise<ReplicaJournalRecord> {
+  return withPersistLock(persistLockName('esbt', docId), async () => {
+    const snapshot = exportSnapshot().slice();
+    let written: ReplicaJournalRecord | null = null;
+    await idbUpdate(journalCacheKey(docId), (stored) => {
+      const current = normalizeRecord(stored) ?? cloneRecord(fallback);
+      written = { ...current, snapshot };
+      return written;
+    });
+    return written ?? { ...cloneRecord(fallback), snapshot };
+  });
+}
+
+/**
+ * A server ACK removes its retry payload only in the same local transaction
+ * that checkpoints the now-committed replica state.
+ */
+export async function acknowledgePendingMutation(
+  docId: string,
+  fallback: ReplicaJournalRecord,
+  mutationId: string,
+  acknowledgedVersion: Uint8Array,
+  committedRevision: bigint,
+  exportSnapshot: () => Uint8Array,
+): Promise<ReplicaJournalRecord> {
+  return withPersistLock(persistLockName('esbt', docId), async () => {
+    const snapshot = exportSnapshot().slice();
+    let written: ReplicaJournalRecord | null = null;
+    await idbUpdate(journalCacheKey(docId), (stored) => {
+      const current = normalizeRecord(stored) ?? cloneRecord(fallback);
+      written = {
+        ...current,
+        snapshot,
+        pending: current.pending.filter((mutation) => mutation.id !== mutationId),
+        ackedVersion: acknowledgedVersion.slice(),
+        committedRevision: committedRevision.toString(),
+      };
+      return written;
+    });
+    return (
+      written ?? {
+        ...cloneRecord(fallback),
+        snapshot,
+        ackedVersion: acknowledgedVersion.slice(),
+        committedRevision: committedRevision.toString(),
+      }
+    );
   });
 }
 
@@ -56,10 +139,137 @@ export function shouldPruneHistory(
   return now - lastPruneAt > JOURNAL_PRUNE_INTERVAL_MS;
 }
 
-export function appendJournalUpdate(
+export function appendMutation(
   record: ReplicaJournalRecord,
-  update: Uint8Array,
+  mutation: JournalMutation,
 ): ReplicaJournalRecord {
-  if (update.byteLength === 0) return record;
-  return { ...record, updates: [...record.updates, update.slice()] };
+  if (mutation.bytes.byteLength === 0) return record;
+  const existing = record.pending.find((item) => item.id === mutation.id);
+  if (existing) {
+    if (existing.kind !== mutation.kind || !bytesEqual(existing.bytes, mutation.bytes)) {
+      throw new Error('marks: one mutation id was reused for different bytes');
+    }
+    return record;
+  }
+  return {
+    ...record,
+    pending: [...record.pending, { ...mutation, bytes: mutation.bytes.slice() }],
+  };
+}
+
+async function updateRecord(
+  docId: string,
+  fallback: ReplicaJournalRecord,
+  mutate: (record: ReplicaJournalRecord) => ReplicaJournalRecord,
+): Promise<ReplicaJournalRecord> {
+  return withPersistLock(persistLockName('esbt', docId), async () => {
+    let written: ReplicaJournalRecord | null = null;
+    await idbUpdate(journalCacheKey(docId), (stored) => {
+      written = mutate(normalizeRecord(stored) ?? cloneRecord(fallback));
+      return written;
+    });
+    return written ?? mutate(cloneRecord(fallback));
+  });
+}
+
+function normalizeRecord(value: unknown): ReplicaJournalRecord | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as UnknownJournalRecord;
+  if (typeof record.siteId !== 'string' || !(record.snapshot instanceof Uint8Array)) return null;
+  const ackedVersion = record.ackedVersion instanceof Uint8Array ? record.ackedVersion : null;
+  const lastPruneAt = typeof record.lastPruneAt === 'number' ? record.lastPruneAt : 0;
+
+  if (record.version === 3 || record.version === 2) {
+    const pending = Array.isArray(record.pending)
+      ? record.pending.flatMap((value): JournalMutation[] => {
+          const item = value as Partial<JournalMutation> | null;
+          if (
+            !item ||
+            typeof item.id !== 'string' ||
+            !/^[0-9a-f]{32}$/.test(item.id) ||
+            (item.kind !== 'update' && item.kind !== 'snapshot') ||
+            !(item.bytes instanceof Uint8Array)
+          ) {
+            return [];
+          }
+          return [
+            {
+              id: item.id,
+              kind: item.kind,
+              bytes: item.bytes,
+              createdAt: typeof item.createdAt === 'number' ? item.createdAt : 0,
+            },
+          ];
+        })
+      : [];
+    return {
+      version: 3,
+      siteId: record.siteId,
+      role: record.version === 3 ? persistedRole(record.role) : null,
+      snapshot: record.snapshot,
+      pending,
+      ackedVersion,
+      committedRevision:
+        typeof record.committedRevision === 'string' ? record.committedRevision : null,
+      lastPruneAt,
+    };
+  }
+
+  if (record.version === 1) {
+    const updates = Array.isArray(record.updates)
+      ? record.updates.filter((update): update is Uint8Array => update instanceof Uint8Array)
+      : [];
+    return {
+      version: 3,
+      siteId: record.siteId,
+      role: null,
+      snapshot: record.snapshot,
+      pending: updates.map((bytes, index) => ({
+        id: legacyMutationId(bytes, index),
+        kind: 'update',
+        bytes,
+        createdAt: 0,
+      })),
+      ackedVersion,
+      committedRevision: null,
+      lastPruneAt,
+    };
+  }
+  return null;
+}
+
+function persistedRole(value: unknown): DocumentCapabilities['role'] {
+  return value === 'local'
+    || value === 'scratch'
+    || value === 'owner'
+    || value === 'editor'
+    || value === 'commenter'
+    || value === 'viewer'
+    ? value
+    : null;
+}
+
+function cloneRecord(record: ReplicaJournalRecord): ReplicaJournalRecord {
+  return {
+    ...record,
+    snapshot: record.snapshot.slice(),
+    pending: record.pending.map((mutation) => ({ ...mutation, bytes: mutation.bytes.slice() })),
+    ackedVersion: record.ackedVersion?.slice() ?? null,
+  };
+}
+
+function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
+  return left.byteLength === right.byteLength && left.every((byte, index) => byte === right[index]);
+}
+
+/** Deterministic v1 migration id; ESBT dedup remains the collision backstop. */
+function legacyMutationId(bytes: Uint8Array, index: number): string {
+  let first = 0xcbf29ce484222325n ^ BigInt(index);
+  let second = 0x84222325cbf29ce4n ^ BigInt(bytes.byteLength);
+  for (const byte of bytes) {
+    first = BigInt.asUintN(64, (first ^ BigInt(byte)) * 0x100000001b3n);
+    second = BigInt.asUintN(64, (second ^ BigInt(byte + 1)) * 0x100000001b3n);
+  }
+  if (first === 0n && second === 0n) first = 1n;
+  return first.toString(16).padStart(16, '0') + second.toString(16).padStart(16, '0');
 }

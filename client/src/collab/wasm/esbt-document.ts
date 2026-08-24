@@ -1,9 +1,50 @@
 /** Production browser owner for the Rust `Document` Wasm ABI. */
 
+import type { TextEdit } from '../../text/change';
+import { checkedEsbtExports, type EsbtExports } from './esbt-abi.generated.ts';
+export type { TextEdit } from '../../text/change';
+export type { EsbtExports } from './esbt-abi.generated.ts';
+
 const textDecoder = new TextDecoder();
-const MAX_ABI_BYTES = 16 * 1024 * 1024;
+const MAX_ABI_BYTES = 64 * 1024 * 1024;
 
 export const ESBT_WASM_URL = '/esbt.wasm';
+
+interface WasmArtifactManifest {
+  format: number;
+  wasm_sha256: string;
+}
+
+function manifestUrlFor(wasmUrl: string): string {
+  const suffix = wasmUrl.search(/[?#]/u);
+  return suffix < 0
+    ? `${wasmUrl}.manifest.json`
+    : `${wasmUrl.slice(0, suffix)}.manifest.json${wasmUrl.slice(suffix)}`;
+}
+
+function isWasmArtifactManifest(value: unknown): value is WasmArtifactManifest {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const candidate = value as Partial<WasmArtifactManifest>;
+  return (
+    candidate.format === 2
+    && typeof candidate.wasm_sha256 === 'string'
+    && /^[0-9a-f]{64}$/u.test(candidate.wasm_sha256)
+  );
+}
+
+export async function verifyWasmArtifact(
+  bytes: ArrayBuffer,
+  manifest: unknown,
+): Promise<void> {
+  if (!isWasmArtifactManifest(manifest)) {
+    throw new TypeError('esbt: invalid Wasm provenance manifest');
+  }
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  const actual = [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  if (actual !== manifest.wasm_sha256) {
+    throw new TypeError('esbt: Wasm bytes do not match their provenance manifest');
+  }
+}
 
 export class EsbtError extends Error {
   readonly code: number;
@@ -15,92 +56,46 @@ export class EsbtError extends Error {
   }
 }
 
-export interface EsbtExports {
-  memory: WebAssembly.Memory;
-  esbt_malloc(length: number): number;
-  esbt_free(pointer: number, length: number): void;
-  esbt_last_len(): number;
-  esbt_last_ptr(): number;
-  esbt_doc_last_error_code(): number;
-  esbt_doc_create(a: number, b: number, c: number, d: number): number;
-  esbt_doc_create_configured(
-    a: number,
-    b: number,
-    c: number,
-    d: number,
-    pointer: number,
-    length: number,
-  ): number;
-  esbt_doc_destroy(handle: number): number;
-  esbt_doc_len(handle: number): number;
-  esbt_doc_hash(handle: number): number;
-  esbt_doc_pending(handle: number): number;
-  esbt_doc_text_utf16(handle: number): number;
-  esbt_doc_version(handle: number): number;
-  esbt_doc_begin(handle: number, hasGroup: number, low: number, high: number): number;
-  esbt_doc_commit(handle: number): number;
-  esbt_doc_abort(handle: number): number;
-  esbt_doc_delete(
-    handle: number,
-    index: number,
-    length: number,
-    hasGroup: number,
-    low: number,
-    high: number,
-  ): number;
-  esbt_doc_replace_utf16(
-    handle: number,
-    from: number,
-    to: number,
-    pointer: number,
-    length: number,
-    hasGroup: number,
-    low: number,
-    high: number,
-  ): number;
-  esbt_doc_apply(handle: number, pointer: number, length: number): number;
-  esbt_doc_export_update(handle: number, pointer: number, length: number): number;
-  esbt_doc_export_full_snapshot(handle: number): number;
-  esbt_doc_export_compact_snapshot(handle: number): number;
-  esbt_doc_apply_snapshot(handle: number, pointer: number, length: number): number;
-  esbt_doc_anchor(handle: number, index: number, affinity: number): number;
-  esbt_doc_resolve_anchor(handle: number, pointer: number, length: number): number;
-  esbt_doc_insert_at_anchor_utf16(
-    handle: number,
-    anchorPointer: number,
-    anchorLength: number,
-    textPointer: number,
-    textLength: number,
-    hasGroup: number,
-    low: number,
-    high: number,
-  ): number;
-  esbt_doc_can_undo(handle: number): number;
-  esbt_doc_can_redo(handle: number): number;
-  esbt_doc_undo(handle: number): number;
-  esbt_doc_redo(handle: number): number;
-  esbt_doc_retained_operations(handle: number): number;
-  esbt_doc_history_floor(handle: number): number;
-  esbt_doc_current_dmax(handle: number): number;
-  esbt_doc_prune_history(handle: number, pointer: number, length: number): number;
-}
-
 export class EsbtRuntime {
   readonly exports: EsbtExports;
 
-  constructor(exports: EsbtExports) {
+  private constructor(exports: EsbtExports) {
     this.exports = exports;
   }
 
   static async load(url = ESBT_WASM_URL): Promise<EsbtRuntime> {
-    const response = await fetch(url);
+    const [response, manifestResponse] = await Promise.all([
+      fetch(url),
+      fetch(manifestUrlFor(url)),
+    ]);
     if (!response.ok) throw new Error(`esbt: failed to fetch Wasm (${response.status})`);
-    return EsbtRuntime.fromBytes(await response.arrayBuffer());
+    if (!manifestResponse.ok) {
+      throw new Error(`esbt: failed to fetch Wasm manifest (${manifestResponse.status})`);
+    }
+    const fallback = response.clone();
+    const streaming = typeof WebAssembly.instantiateStreaming === 'function'
+      ? WebAssembly.instantiateStreaming(response, { env: {} }).catch(() => null)
+      : Promise.resolve(null);
+    const [bytes, manifest, instantiated] = await Promise.all([
+      fallback.arrayBuffer(),
+      manifestResponse.json() as Promise<unknown>,
+      streaming,
+    ]);
+    if (bytes.byteLength > MAX_ABI_BYTES) {
+      throw new EsbtError(7, 'esbt: Wasm artifact exceeds the runtime limit');
+    }
+    await verifyWasmArtifact(bytes, manifest);
+    if (instantiated) {
+      return new EsbtRuntime(checkedEsbtExports(instantiated.module, instantiated.instance.exports));
+    }
+    // Local/static servers may not send application/wasm; byte fallback is
+    // still integrity-checked and keeps those environments usable.
+    return EsbtRuntime.fromBytes(bytes);
   }
 
   static async fromBytes(bytes: BufferSource): Promise<EsbtRuntime> {
-    const { instance } = await WebAssembly.instantiate(bytes, { env: {} });
-    return new EsbtRuntime(instance.exports as unknown as EsbtExports);
+    const { module, instance } = await WebAssembly.instantiate(bytes, { env: {} });
+    return new EsbtRuntime(checkedEsbtExports(module, instance.exports));
   }
 
   memory(): Uint8Array {
@@ -120,7 +115,7 @@ export class EsbtRuntime {
   }
 
   withBytes<T>(bytes: Uint8Array, callback: (pointer: number, length: number) => T): T {
-    const input = new Uint8Array(bytes);
+    const input = bytes;
     if (input.length > MAX_ABI_BYTES) {
       throw new EsbtError(7, 'esbt: input exceeds the Wasm message limit');
     }
@@ -254,7 +249,7 @@ export interface TransactOptions {
 }
 
 export interface ChangeEvent {
-  text: string;
+  edits: TextEdit[];
   origin?: string;
   local: boolean;
 }
@@ -268,6 +263,7 @@ export interface ApplyReceipt {
   newlyReadyOperations: Array<{ origin: string; sequence: bigint }>;
   version: Uint8Array;
   journalBytes: Uint8Array | null;
+  visibleEdits: TextEdit[];
 }
 
 export interface SnapshotReceipt {
@@ -275,6 +271,7 @@ export interface SnapshotReceipt {
   visibleChanged: boolean;
   undo: string;
   version: Uint8Array;
+  visibleEdits: TextEdit[];
 }
 
 export class EsbtDocument {
@@ -446,6 +443,25 @@ export class EsbtDocument {
     return this.replaceRange(0, this.length, text, options);
   }
 
+  indexToAnchor(index: number, affinity: 'before' | 'after' = 'after'): Uint8Array {
+    this.assertLive();
+    const encodedAffinity = affinity === 'before' ? 1 : 2;
+    const result = this.runtime.check(
+      this.runtime.exports.esbt_doc_anchor(this.handle, checkedIndex(index), encodedAffinity),
+    );
+    if (result < 1) throw new EsbtError(25, 'esbt: anchor creation returned no bytes');
+    return this.runtime.last();
+  }
+
+  anchorToIndex(anchor: Uint8Array): number {
+    this.assertLive();
+    return this.runtime.withBytes(anchor, (pointer, length) =>
+      this.runtime.check(
+        this.runtime.exports.esbt_doc_resolve_anchor(this.handle, pointer, length),
+      ),
+    );
+  }
+
   applyUpdate(bytes: Uint8Array): ApplyReceipt {
     this.assertLive();
     const receiptBytes = this.runtime.withBytes(bytes, (pointer, length) => {
@@ -453,7 +469,11 @@ export class EsbtDocument {
       return this.runtime.last();
     });
     const receipt = decodeApplyReceipt(receiptBytes);
-    if (receipt.visibleChanged) this.emitChange(undefined, false);
+    receipt.visibleEdits = this.readVisibleEdits();
+    if (receipt.visibleChanged !== (receipt.visibleEdits.length > 0)) {
+      throw new EsbtError(4, 'esbt: apply receipt disagrees with visible edits');
+    }
+    if (receipt.visibleEdits.length > 0) this.emitChange(receipt.visibleEdits, undefined, false);
     return receipt;
   }
 
@@ -466,7 +486,11 @@ export class EsbtDocument {
       return this.runtime.last();
     });
     const receipt = decodeSnapshotReceipt(receiptBytes);
-    if (receipt.visibleChanged) this.emitChange(undefined, false);
+    receipt.visibleEdits = this.readVisibleEdits();
+    if (receipt.visibleChanged !== (receipt.visibleEdits.length > 0)) {
+      throw new EsbtError(4, 'esbt: snapshot receipt disagrees with visible edits');
+    }
+    if (receipt.visibleEdits.length > 0) this.emitChange(receipt.visibleEdits, undefined, false);
     return receipt;
   }
 
@@ -562,11 +586,12 @@ export class EsbtDocument {
   private consumeLocalResult(result: number, origin?: string): Uint8Array | null {
     if (result === 0) return null;
     const update = this.runtime.last();
-    this.emitLocalUpdate(update, origin);
+    const edits = this.readVisibleEdits();
+    this.emitLocalUpdate(update, edits, origin);
     return update;
   }
 
-  private emitLocalUpdate(update: Uint8Array, origin?: string): void {
+  private emitLocalUpdate(update: Uint8Array, edits: TextEdit[], origin?: string): void {
     const stable = update.slice();
     for (const listener of [...this.localUpdateListeners]) {
       try {
@@ -575,12 +600,21 @@ export class EsbtDocument {
         surfaceListenerError(error);
       }
     }
-    this.emitChange(origin, true);
+    if (edits.length > 0) this.emitChange(edits, origin, true);
   }
 
-  private emitChange(origin: string | undefined, local: boolean): void {
+  private readVisibleEdits(): TextEdit[] {
+    this.runtime.check(this.runtime.exports.esbt_doc_visible_edits(this.handle));
+    return decodeVisibleEdits(this.runtime.last());
+  }
+
+  private emitChange(edits: TextEdit[], origin: string | undefined, local: boolean): void {
     if (this.changeListeners.size === 0) return;
-    const event: ChangeEvent = { text: this.getText(), origin, local };
+    const event: ChangeEvent = {
+      edits: edits.map((edit) => ({ ...edit })),
+      origin,
+      local,
+    };
     for (const listener of [...this.changeListeners]) {
       try {
         listener(event);
@@ -682,6 +716,24 @@ function decodeUtf16(bytes: Uint8Array): string {
   return chunks.join('');
 }
 
+function decodeVisibleEdits(bytes: Uint8Array): TextEdit[] {
+  const reader = new ByteReader(bytes);
+  if (reader.u16() !== 1) throw new EsbtError(5, 'esbt: unsupported visible-edit receipt');
+  const count = reader.u32();
+  const edits: TextEdit[] = [];
+  for (let index = 0; index < count; index++) {
+    const from = reader.u32();
+    const to = reader.u32();
+    const units = reader.u32();
+    if (to < from || units > 1_000_000) {
+      throw new EsbtError(4, 'esbt: invalid visible-edit range');
+    }
+    edits.push({ from, to, insert: decodeUtf16(reader.bytes(units * 2)) });
+  }
+  reader.finish();
+  return edits;
+}
+
 export function envelopeTag(bytes: Uint8Array): number {
   if (
     !(bytes instanceof Uint8Array) ||
@@ -723,6 +775,7 @@ function decodeApplyReceipt(bytes: Uint8Array): ApplyReceipt {
     newlyReadyOperations: lists[3],
     version,
     journalBytes: journal.length > 0 ? journal : null,
+    visibleEdits: [],
   };
 }
 
@@ -735,7 +788,7 @@ function decodeSnapshotReceipt(bytes: Uint8Array): SnapshotReceipt {
   if (!undo) throw new EsbtError(4, 'esbt: invalid snapshot undo disposition');
   const version = reader.bytes(reader.u32());
   reader.finish();
-  return { kind, visibleChanged, undo, version };
+  return { kind, visibleChanged, undo, version, visibleEdits: [] };
 }
 
 class ByteReader {

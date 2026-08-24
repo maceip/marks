@@ -4,7 +4,7 @@ use thiserror::Error;
 
 pub const SESSION_COOKIE_NAME: &str = "__Host-marks_session";
 pub const SCRATCH_AUTHORIZATION_SCHEME: &str = "MarksScratch";
-pub const ESBT_SUBPROTOCOL: &str = "marks.esbt.v1";
+pub const ESBT_SUBPROTOCOL: &str = "marks.esbt.v2";
 pub const TICKET_SUBPROTOCOL_PREFIX: &str = "marks.ticket.v1.";
 pub const PAIRING_FRAGMENT_PREFIX: &str = "#v1.";
 
@@ -110,7 +110,7 @@ mod tests {
             Err(BearerError::InvalidSecret)
         );
         assert_eq!(
-            parse_ticket_subprotocol("marks.esbt.v1"),
+            parse_ticket_subprotocol("marks.esbt.v2"),
             Err(BearerError::Malformed)
         );
         assert_eq!(

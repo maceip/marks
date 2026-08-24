@@ -70,9 +70,14 @@ export function useDocumentMeta(docId: string | null): DocumentMetaState {
       });
 
     const unsubscribe = documentRepository.subscribe(() => {
-      void documentRepository.get(docId).then((document) => {
-        if (active) setMeta(document);
-      });
+      void documentRepository
+        .get(docId)
+        .then((document) => {
+          if (active) setMeta(document);
+        })
+        .catch(() => {
+          // A refresh transport failure does not invalidate cached identity.
+        });
     });
 
     return () => {

@@ -1,13 +1,6 @@
 import type { EditorView } from '@codemirror/view';
-import type { StateCommand } from '@codemirror/state';
-import {
-  insertLink,
-  toggleBold,
-  toggleHighlight,
-  toggleInlineCode,
-  toggleItalic,
-} from '../../editor/commands';
-import { Glyph, type GlyphName } from '../glyphs/Glyph';
+import { useCommandCenter } from '../../commands/context';
+import { Glyph } from '../glyphs/Glyph';
 
 interface MiniToolbarProps {
   selected: number;
@@ -15,37 +8,27 @@ interface MiniToolbarProps {
   getView: () => EditorView | null;
 }
 
-const ACTIONS: Array<{ glyph: GlyphName; label: string; command: StateCommand }> = [
-  { glyph: 'bold', label: 'Bold', command: toggleBold },
-  { glyph: 'italic', label: 'Italic', command: toggleItalic },
-  { glyph: 'highlight', label: 'Highlight', command: toggleHighlight },
-  { glyph: 'code', label: 'Inline code', command: toggleInlineCode },
-  { glyph: 'link', label: 'Link', command: insertLink },
-];
-
-export function MiniToolbar({ selected, disabled, getView }: MiniToolbarProps) {
-  if (selected <= 0) return null;
-
-  const run = (command: StateCommand) => {
-    const view = getView();
-    if (!view || disabled) return;
-    command(view);
-    view.focus();
-  };
+export function MiniToolbar({ selected, disabled: _disabled, getView: _getView }: MiniToolbarProps) {
+  const center = useCommandCenter();
+  if (selected <= 0 || center.environment.mode === 'preview') return null;
+  const commands = center.commands('mini');
 
   return (
     <div className="mini-toolbar" role="toolbar" aria-label="Selection formatting">
-      {ACTIONS.map((action) => (
+      {commands.map((command) => (
         <button
-          key={action.label}
+          key={command.id}
           type="button"
-          title={action.label}
-          aria-label={action.label}
-          disabled={disabled}
+          className={`${command.pressed ? 'active ' : ''}${command.agentRaised ? 'agent-raised' : ''}`.trim() || undefined}
+          data-command-id={command.id}
+          title={command.unavailableReason ?? command.description}
+          aria-label={command.label}
+          aria-pressed={command.pressed}
+          disabled={!command.enabled}
           onMouseDown={(event) => event.preventDefault()}
-          onClick={() => run(action.command)}
+          onClick={() => void center.invoke(command.id)}
         >
-          <Glyph name={action.glyph} size={18} />
+          <Glyph name={command.glyph} size={18} />
         </button>
       ))}
       <span>{selected} selected</span>

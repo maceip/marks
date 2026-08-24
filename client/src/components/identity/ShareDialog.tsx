@@ -1,189 +1,218 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import type { DocumentCapabilities } from '../../collab/types';
+import type { DocumentShare } from '../../lib/api';
 import {
   LINK_TTL_OPTIONS,
   ROLE_COPY,
   SHARE_GRANT_LINE,
-  SHARE_LOCAL_LINE,
   type DocumentRole,
 } from '../../lib/identity-copy';
-import { SERVICE_ERROR_COPY } from '../../lib/service-errors';
+import { documentShareUrl } from '../../lib/share-link';
+import { loadServiceApi } from '../../lib/service-api.ts';
+import { ServiceError, copyForUnknownFailure } from '../../lib/service-errors';
 import { Icon, icons } from '../ui/Icon';
 
 type GrantRole = Exclude<DocumentRole, 'owner'>;
 
 interface ShareDialogProps {
+  documentId: string;
   title: string;
+  capabilities: DocumentCapabilities | null;
   onNotify: (title: string, detail?: string, tone?: 'neutral' | 'success' | 'danger') => void;
 }
 
-export function ShareDialog({ title, onNotify }: ShareDialogProps) {
+const TTL_MS: Record<(typeof LINK_TTL_OPTIONS)[number]['id'], number> = {
+  '2m': 2 * 60 * 1000,
+  '1h': 60 * 60 * 1000,
+  '1d': 24 * 60 * 60 * 1000,
+};
+
+export function ShareDialog({ documentId, title, capabilities, onNotify }: ShareDialogProps) {
   const [principal, setPrincipal] = useState('');
   const [role, setRole] = useState<GrantRole>('editor');
-  const [staged, setStaged] = useState<Array<{ principal: string; role: GrantRole }>>([]);
+  const [shares, setShares] = useState<DocumentShare[]>([]);
   const [ttl, setTtl] = useState<(typeof LINK_TTL_OPTIONS)[number]['id']>('1h');
   const [linkRole, setLinkRole] = useState<GrantRole>('viewer');
-  const [link, setLink] = useState<{ role: GrantRole; ttl: string } | null>(null);
-  const [redeem, setRedeem] = useState('');
+  const [link, setLink] = useState<{ url: string; role: GrantRole; expiresAtMs: number } | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  const stageGrant = () => {
+  const serviceOwner = capabilities?.role === 'owner' && capabilities.manageShares;
+  useEffect(() => {
+    if (!serviceOwner) return;
+    let active = true;
+    void loadServiceApi()
+      .then((api) => api.listDocumentShares(documentId))
+      .then(({ shares: next }) => {
+        if (active) setShares(next);
+      })
+      .catch((error) => notifyError(error, onNotify));
+    return () => {
+      active = false;
+    };
+  }, [documentId, onNotify, serviceOwner]);
+
+  const grant = async () => {
     const value = principal.trim();
-    if (!value) return;
+    if (!value || !serviceOwner) return;
     if (value.includes('@')) {
-      onNotify(SERVICE_ERROR_COPY[400].title, 'Shares grant a Marks principal, not an email address.', 'danger');
+      onNotify('That request was not accepted', 'Shares grant a Marks principal ID, not an email address.', 'danger');
       return;
     }
-    setStaged((current) => [...current.filter((entry) => entry.principal !== value), { principal: value, role }]);
-    setPrincipal('');
-    onNotify('Access staged', 'Scratch cannot share. The service will refuse this until a session owner calls it.', 'success');
+    setBusy(true);
+    try {
+      await (await loadServiceApi()).putDocumentShare(documentId, value, role);
+      setShares((current) => [
+        ...current.filter((entry) => entry.principalId !== value),
+        { principalId: value, role },
+      ]);
+      setPrincipal('');
+      onNotify('Access granted', `${value} can now ${ROLE_COPY[role].label.toLowerCase()}.`, 'success');
+    } catch (error) {
+      notifyError(error, onNotify);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revoke = async (principalId: string) => {
+    if (!serviceOwner) return;
+    setBusy(true);
+    try {
+      await (await loadServiceApi()).deleteDocumentShare(documentId, principalId);
+      setShares((current) => current.filter((entry) => entry.principalId !== principalId));
+      onNotify('Access revoked', 'Live sockets for that principal are closed immediately.', 'success');
+    } catch (error) {
+      notifyError(error, onNotify);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const mintLink = async () => {
+    if (!serviceOwner) return;
+    setBusy(true);
+    try {
+      const created = await (await loadServiceApi()).createDocumentLink(
+        documentId,
+        linkRole,
+        TTL_MS[ttl],
+      );
+      const url = documentShareUrl(documentId, created.token);
+      setLink({ url, role: created.role, expiresAtMs: created.expiresAtMs });
+      await navigator.clipboard.writeText(url).catch(() => undefined);
+      onNotify('Share link created', 'The bearer token is in the URL fragment and was copied when permitted.', 'success');
+    } catch (error) {
+      notifyError(error, onNotify);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revokeLink = async () => {
+    if (!serviceOwner) return;
+    setBusy(true);
+    try {
+      await (await loadServiceApi()).revokeDocumentLink(documentId);
+      setLink(null);
+      onNotify('Share link revoked', 'Existing durable grants remain; the bearer link no longer redeems.', 'success');
+    } catch (error) {
+      notifyError(error, onNotify);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const copyPage = async () => {
     try {
-      await navigator.clipboard.writeText(location.href);
-      onNotify('Page link copied', 'This is the document address, not a link grant.', 'success');
+      await navigator.clipboard.writeText(`${location.origin}/d/${encodeURIComponent(documentId)}`);
+      onNotify('Page address copied', 'This address carries no authority; only admitted collaborators can open it.', 'success');
     } catch {
       onNotify('Copy was blocked', 'Select the address from the browser bar instead.', 'danger');
     }
   };
 
+  const unavailable = capabilities?.role === 'local'
+    ? 'This is a browser-local document. Keep it in the service before sharing.'
+    : capabilities?.role === 'scratch'
+      ? 'A scratch workspace is not a person and cannot grant access. Keep the workspace first.'
+      : capabilities?.role === null
+        ? 'Document authority is still being resolved.'
+        : 'Only the document owner can change access.';
+
   return (
     <div className="share-dialog">
       <div className="local-notice">
-        <Icon path={icons.check} size={15} />
+        <Icon path={serviceOwner ? icons.check : icons.share} size={15} />
         <span>
-          <strong>Local workspace</strong>
-          {SHARE_LOCAL_LINE}
+          <strong>{serviceOwner ? 'Durable access control' : 'Sharing unavailable'}</strong>
+          {serviceOwner ? 'Changes apply to the Rust ACL and live rooms immediately.' : unavailable}
         </span>
       </div>
 
       <p className="identity-note">{SHARE_GRANT_LINE}</p>
 
-      <form
-        className="share-invite"
-        onSubmit={(event) => {
-          event.preventDefault();
-          stageGrant();
-        }}
-      >
+      <form className="share-invite" onSubmit={(event) => { event.preventDefault(); void grant(); }}>
         <label htmlFor="share-principal">People with access</label>
         <div className="share-input-row">
-          <input
-            id="share-principal"
-            data-autofocus
-            placeholder="principal of the person"
-            value={principal}
-            onChange={(event) => setPrincipal(event.target.value)}
-            autoComplete="off"
-          />
-          <select aria-label="Access level" value={role} onChange={(event) => setRole(event.target.value as GrantRole)}>
+          <input id="share-principal" data-autofocus placeholder="Marks principal ID" value={principal} disabled={!serviceOwner || busy} onChange={(event) => setPrincipal(event.target.value)} autoComplete="off" />
+          <select aria-label="Access level" value={role} disabled={!serviceOwner || busy} onChange={(event) => setRole(event.target.value as GrantRole)}>
             <option value="editor">{ROLE_COPY.editor.label}</option>
             <option value="commenter">{ROLE_COPY.commenter.label}</option>
             <option value="viewer">{ROLE_COPY.viewer.label}</option>
           </select>
-          <button type="submit" className="button" disabled={!principal.trim()}>
-            Stage
-          </button>
+          <button type="submit" className="button" disabled={!principal.trim() || !serviceOwner || busy}>Grant</button>
         </div>
       </form>
 
       <div className="access-list">
         <div className="access-person">
           <span className="avatar avatar-self">Y</span>
-          <span>
-            <strong>You</strong>
-            <small>{ROLE_COPY.owner.detail}</small>
-          </span>
-          <span>{ROLE_COPY.owner.label}</span>
+          <span><strong>You</strong><small>{ROLE_COPY.owner.detail}</small></span>
+          <span>{capabilities?.role === 'owner' ? ROLE_COPY.owner.label : 'Current device'}</span>
         </div>
-        {staged.map((entry) => (
-          <div className="access-person" key={entry.principal}>
-            <span className="avatar">{entry.principal[0]?.toUpperCase()}</span>
-            <span>
-              <strong>Staged grant</strong>
-              <small>{ROLE_COPY[entry.role].detail}</small>
-            </span>
-            <button
-              type="button"
-              className="button"
-              onClick={() => setStaged((current) => current.filter((item) => item.principal !== entry.principal))}
-            >
-              Revoke
-            </button>
+        {shares.map((entry) => (
+          <div className="access-person" key={entry.principalId}>
+            <span className="avatar">{entry.principalId[0]?.toUpperCase()}</span>
+            <span><strong>{entry.principalId}</strong><small>{ROLE_COPY[entry.role].detail}</small></span>
+            <button type="button" className="button" disabled={busy} onClick={() => void revoke(entry.principalId)}>Revoke</button>
           </div>
         ))}
       </div>
 
       <section className="identity-section">
-        <h3>Link grant</h3>
+        <h3>Bearer link</h3>
         <div className="share-input-row share-link-grant">
-          <select aria-label="Link role" value={linkRole} onChange={(event) => setLinkRole(event.target.value as GrantRole)}>
+          <select aria-label="Link role" value={linkRole} disabled={!serviceOwner || busy} onChange={(event) => setLinkRole(event.target.value as GrantRole)}>
             <option value="editor">{ROLE_COPY.editor.label}</option>
             <option value="commenter">{ROLE_COPY.commenter.label}</option>
             <option value="viewer">{ROLE_COPY.viewer.label}</option>
           </select>
-          <select aria-label="Link lifetime" value={ttl} onChange={(event) => setTtl(event.target.value as typeof ttl)}>
-            {LINK_TTL_OPTIONS.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.label}
-              </option>
-            ))}
+          <select aria-label="Link lifetime" value={ttl} disabled={!serviceOwner || busy} onChange={(event) => setTtl(event.target.value as typeof ttl)}>
+            {LINK_TTL_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
           </select>
-          <button
-            type="button"
-            className="button"
-            onClick={() => {
-              setLink({ role: linkRole, ttl });
-              onNotify('Link grant staged', 'No token was minted. Redeem still needs a live session.', 'success');
-            }}
-          >
-            Stage link
-          </button>
+          <button type="button" className="button" disabled={!serviceOwner || busy} onClick={() => void mintLink()}>Create and copy</button>
         </div>
         {link && (
           <div className="share-link-row">
             <span>
-              <strong>{ROLE_COPY[link.role].label} · {LINK_TTL_OPTIONS.find((option) => option.id === link.ttl)?.label}</strong>
-              <small>Staged only. Scratch callers receive authentication failed, not a sent invite.</small>
+              <strong>{ROLE_COPY[link.role].label} · expires {new Date(link.expiresAtMs).toLocaleString()}</strong>
+              <small>The secret is after #, so it is not sent in HTTP requests or referrers.</small>
             </span>
-            <button type="button" className="button" onClick={() => setLink(null)}>
-              Revoke link
-            </button>
+            <button type="button" className="button" disabled={busy} onClick={() => void navigator.clipboard.writeText(link.url)}>Copy</button>
+            <button type="button" className="button" disabled={busy} onClick={() => void revokeLink()}>Revoke link</button>
           </div>
         )}
-        <form
-          className="share-invite"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!redeem.trim()) return;
-            onNotify(SERVICE_ERROR_COPY[401].title, 'Link redeem requires a live session. Scratch is refused.', 'danger');
-            setRedeem('');
-          }}
-        >
-          <label htmlFor="share-redeem">Redeem a link</label>
-          <div className="share-input-row">
-            <input
-              id="share-redeem"
-              placeholder="Paste a grant token"
-              value={redeem}
-              onChange={(event) => setRedeem(event.target.value)}
-              autoComplete="off"
-            />
-            <button type="submit" className="button" disabled={!redeem.trim()}>
-              Redeem
-            </button>
-          </div>
-        </form>
       </section>
 
       <div className="share-link-row">
-        <span>
-          <strong>{title}</strong>
-          <small>Only available in this browser today</small>
-        </span>
-        <button type="button" className="button primary" onClick={() => void copyPage()}>
-          <Icon path={icons.link} /> Copy page
-        </button>
+        <span><strong>{title}</strong><small>The plain page address carries no access token.</small></span>
+        <button type="button" className="button primary" onClick={() => void copyPage()}><Icon path={icons.link} /> Copy page address</button>
       </div>
     </div>
   );
+}
+
+function notifyError(error: unknown, notify: ShareDialogProps['onNotify']): void {
+  const copy = error instanceof ServiceError ? error.copy : copyForUnknownFailure();
+  notify(copy.title, copy.detail, copy.tone);
 }

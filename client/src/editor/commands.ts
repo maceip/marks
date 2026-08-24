@@ -136,6 +136,10 @@ const SHAPE_PATH: Record<ShapeKind, string> = {
   bubble: '<path d="M24 18h96a16 16 0 0 1 16 16v28a16 16 0 0 1-16 16H70l-18 14v-14H24A16 16 0 0 1 8 62V34A16 16 0 0 1 24 18z"/>',
 };
 
+export function shapePath(kind: ShapeKind): string {
+  return SHAPE_PATH[kind];
+}
+
 export function insertShape(kind: ShapeKind = 'rect', label = 'Label'): StateCommand {
   const svg = `<figure class="marks-shape" data-shape="${kind}" data-fill="accent">
 <svg viewBox="0 0 160 96" role="img" aria-label="${label}">${SHAPE_PATH[kind]}</svg>

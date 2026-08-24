@@ -2,12 +2,16 @@ import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { useLayoutEffect, useRef } from 'react';
 import type { CollabSession } from '../../collab/types';
+import { inspectEditorContext, type EditorContext } from '../../editor/context';
 import { createEditorExtensions } from '../../editor/setup';
 
 export interface CursorInfo {
   line: number;
   column: number;
   selected: number;
+  from: number;
+  to: number;
+  context: EditorContext;
 }
 
 interface EditorPaneProps {
@@ -15,6 +19,7 @@ interface EditorPaneProps {
   onView: (view: EditorView | null) => void;
   onScroll: () => void;
   onCursor: (info: CursorInfo) => void;
+  onAssetError?: (error: Error) => void;
 }
 
 export function EditorPane({
@@ -22,6 +27,7 @@ export function EditorPane({
   onView,
   onScroll,
   onCursor,
+  onAssetError,
 }: EditorPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -29,8 +35,8 @@ export function EditorPane({
   // Keep the latest callbacks reachable without rebuilding the editor. An
   // editor rebuild loses focus, cursor and scroll position, so it must happen
   // only when the document itself changes.
-  const handlers = useRef({ onScroll, onCursor, onView });
-  handlers.current = { onScroll, onCursor, onView };
+  const handlers = useRef({ onScroll, onCursor, onView, onAssetError });
+  handlers.current = { onScroll, onCursor, onView, onAssetError };
 
   // A layout effect, not a passive one: React detaches DOM nodes before
   // passive cleanups run, and a CRDT update dispatching into a detached
@@ -56,8 +62,16 @@ export function EditorPane({
               line: line.number,
               column: range.head - line.from + 1,
               selected: Math.abs(range.to - range.from),
+              from: range.from,
+              to: range.to,
+              context: inspectEditorContext(
+                current.state.doc.toString(),
+                range.from,
+                range.to,
+              ),
             });
           },
+          onAssetError: (error) => handlers.current.onAssetError?.(error),
         }),
       }),
     });

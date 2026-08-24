@@ -1,6 +1,7 @@
 import type { EditorView } from '@codemirror/view';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import type { ConnectionStatus, Peer } from '../../collab/types';
+import type { CollabSession, ConnectionStatus, Peer } from '../../collab/types';
+import { useOptionalCommandCenter } from '../../commands/context';
 import type { Posture } from '../../lib/posture';
 import type { UiActionId } from '../../lib/ui-actions';
 import { Icon, icons } from '../ui/Icon';
@@ -23,6 +24,7 @@ interface TopBarProps {
   docId: string | null;
   route: SurfaceRoute;
   documentReady: boolean;
+  session: CollabSession | null;
   documentAvailable: boolean;
   posture: Posture;
   selected?: number;
@@ -36,6 +38,7 @@ interface TopBarProps {
   outlineOpen: boolean;
   reviewOpen?: 'comments' | 'history' | null;
   localMode?: boolean;
+  workspaceKind: 'local' | 'scratch' | 'session';
   focusMode?: boolean;
   ribbonCollapsed?: boolean;
   onModeChange: (mode: ViewMode) => void;
@@ -45,7 +48,7 @@ interface TopBarProps {
   onToggleOutline: () => void;
   onToggleRibbon: () => void;
   onAction: (action: UiActionId) => void;
-  onOpenAi?: () => void;
+  onOpenDraftTools?: () => void;
   onVoice?: () => void;
   voiceActive?: boolean;
   voiceSupported?: boolean;
@@ -54,11 +57,13 @@ interface TopBarProps {
 
 const STATUS_LABEL: Record<ConnectionStatus, string> = {
   connecting: 'Opening',
+  saving: 'Saving',
   connected: 'Saved',
   offline: 'Offline',
 };
 
 export function TopBar(props: TopBarProps) {
+  const commandCenter = useOptionalCommandCenter();
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
 
@@ -79,6 +84,17 @@ export function TopBar(props: TopBarProps) {
   }, [moreOpen]);
 
   const documentRoute = props.route === 'document';
+  const resolvedCommands = commandCenter
+    ? new Map([
+        ...commandCenter.commands('palette'),
+        ...commandCenter.ribbon.flatMap((tab) => tab.groups.flatMap((group) => group.commands)),
+      ].map((command) => [command.id, command]))
+    : null;
+  const invoke = (commandId: string, legacy: UiActionId) => {
+    if (commandCenter && resolvedCommands?.get(commandId)?.enabled) void commandCenter.invoke(commandId);
+    else if (!commandCenter) props.onAction(legacy);
+  };
+  const available = (commandId: string) => resolvedCommands?.get(commandId);
 
   return (
     <header className={`app-ribbon ribbon-${props.route} surface-material-host`}>
@@ -105,8 +121,8 @@ export function TopBar(props: TopBarProps) {
             <MarksMark size={24} />
           </span>
 
-          {documentRoute ? (
-            <button type="button" className="doc-heading doc-heading-button" title="Rename document" onClick={() => props.onAction('rename')}>
+          {documentRoute && (!commandCenter || available('document.rename')?.enabled) ? (
+            <button type="button" className="doc-heading doc-heading-button" data-command-id="document.rename" title={available('document.rename')?.unavailableReason ?? 'Rename document'} onClick={() => invoke('document.rename', 'rename')}>
               {props.title}
             </button>
           ) : (
@@ -118,7 +134,9 @@ export function TopBar(props: TopBarProps) {
               className={`status status-${props.status}`}
               title={
                 props.status === 'offline'
-                  ? 'Offline — edits remain available locally'
+                  ? props.documentReady
+                    ? 'Offline — authorized edits remain in the local journal'
+                    : 'Offline — document remains readable'
                   : STATUS_LABEL[props.status]
               }
             >
@@ -127,7 +145,7 @@ export function TopBar(props: TopBarProps) {
             </span>
           )}
 
-          {props.localMode && (
+          {props.workspaceKind === 'scratch' && (
             <button
               type="button"
               className="identity-chip"
@@ -136,6 +154,7 @@ export function TopBar(props: TopBarProps) {
               Temporary
             </button>
           )}
+          {props.workspaceKind === 'local' && <span className="identity-chip">Local</span>}
         </div>
 
           <div className="topbar-right">
@@ -146,32 +165,36 @@ export function TopBar(props: TopBarProps) {
           )}
           {documentRoute && props.documentAvailable && <PresenceBar peers={props.peers} />}
 
-          {documentRoute && props.documentAvailable && (
+          {documentRoute && props.documentAvailable && (!commandCenter || available('document.share')) && (
             <button
               type="button"
               className="titlebar-action"
               aria-label="Share document"
               title="Share document"
-              onClick={() => props.onAction('share')}
+              data-command-id="document.share"
+              disabled={commandCenter ? !available('document.share')?.enabled : false}
+              onClick={() => invoke('document.share', 'share')}
             >
               <Icon path={icons.share} />
               <span>Share</span>
             </button>
           )}
 
-          {props.docId && props.documentAvailable && (
+          {props.docId && props.documentAvailable && (!commandCenter || available('document.export-markdown')) && (
             <button
               type="button"
               className="icon-button titlebar-download"
               aria-label="Download markdown"
               title="Download .md"
-              onClick={() => props.onAction('download')}
+              data-command-id="document.export-markdown"
+              disabled={commandCenter ? !available('document.export-markdown')?.enabled : false}
+              onClick={() => invoke('document.export-markdown', 'download')}
             >
               <Icon path={icons.download} />
             </button>
           )}
 
-          <button type="button" className="icon-button titlebar-search" aria-label="Open command palette" title="Command palette (⌘⇧P)" onClick={() => props.onAction('command-palette')}>
+          <button type="button" className="icon-button titlebar-search" data-command-id="workspace.command-palette" aria-label="Open command palette" title="Command palette (⌘⇧P)" onClick={() => invoke('workspace.command-palette', 'command-palette')}>
             <Icon path={icons.search} />
           </button>
 
@@ -180,7 +203,8 @@ export function TopBar(props: TopBarProps) {
             className="icon-button titlebar-theme"
             aria-label={props.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
             title="Toggle theme"
-            onClick={props.onToggleTheme}
+            data-command-id="view.theme"
+            onClick={() => commandCenter ? invoke('view.theme', 'preferences') : props.onToggleTheme()}
           >
             <Icon path={props.theme === 'dark' ? icons.sun : icons.moon} />
           </button>
@@ -192,7 +216,8 @@ export function TopBar(props: TopBarProps) {
               aria-label={props.ribbonCollapsed ? 'Expand command ribbon' : 'Collapse command ribbon'}
               aria-pressed={props.ribbonCollapsed}
               title={`${props.ribbonCollapsed ? 'Expand' : 'Collapse'} ribbon (⌃F1)`}
-              onClick={props.onToggleRibbon}
+              data-command-id="view.ribbon"
+              onClick={() => commandCenter ? invoke('view.ribbon', 'preferences') : props.onToggleRibbon()}
             >
               <Icon path={icons.chevron} />
             </button>
@@ -204,13 +229,13 @@ export function TopBar(props: TopBarProps) {
             </button>
             {moreOpen && (
               <div className="popover-menu" role="menu">
-                <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('keep-workspace'); }}><Icon path={icons.share} /> Keep workspace</button>
-                <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('account'); }}><Icon path={icons.settings} /> Account</button>
-                <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('pairing'); }}><Icon path={icons.link} /> Phone confirmation</button>
-                <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('logout'); }}><Icon path={icons.close} /> Sign out</button>
-                <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('preferences'); }}><Icon path={icons.settings} /> Appearance</button>
-                <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('benchmark'); }}><Icon path={icons.gauge} /> Performance</button>
-                <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); props.onAction('about'); }}><Icon path={icons.bolt} /> Google Docs for Markdown</button>
+                {(!commandCenter ? props.workspaceKind === 'scratch' : available('identity.keep')) && <button type="button" role="menuitem" data-command-id="identity.keep" onClick={() => { setMoreOpen(false); invoke('identity.keep', 'keep-workspace'); }}><Icon path={icons.share} /> Keep workspace</button>}
+                {(!commandCenter ? props.workspaceKind !== 'local' : available('identity.account')) && <button type="button" role="menuitem" data-command-id="identity.account" onClick={() => { setMoreOpen(false); invoke('identity.account', 'account'); }}><Icon path={icons.settings} /> Account</button>}
+                {(!commandCenter ? props.workspaceKind !== 'local' : available('identity.pairing')) && <button type="button" role="menuitem" data-command-id="identity.pairing" onClick={() => { setMoreOpen(false); invoke('identity.pairing', 'pairing'); }}><Icon path={icons.link} /> Phone confirmation</button>}
+                {(!commandCenter ? props.workspaceKind === 'session' : available('identity.sign-out')) && <button type="button" role="menuitem" data-command-id="identity.sign-out" onClick={() => { setMoreOpen(false); invoke('identity.sign-out', 'logout'); }}><Icon path={icons.close} /> Sign out</button>}
+                <button type="button" role="menuitem" data-command-id="view.preferences" onClick={() => { setMoreOpen(false); invoke('view.preferences', 'preferences'); }}><Icon path={icons.settings} /> Appearance</button>
+                <button type="button" role="menuitem" data-command-id="review.performance" onClick={() => { setMoreOpen(false); invoke('review.performance', 'benchmark'); }}><Icon path={icons.gauge} /> Performance</button>
+                <button type="button" role="menuitem" data-command-id="workspace.about" onClick={() => { setMoreOpen(false); invoke('workspace.about', 'about'); }}><Icon path={icons.bolt} /> Google Docs for Markdown</button>
               </div>
             )}
           </div>
@@ -220,6 +245,8 @@ export function TopBar(props: TopBarProps) {
       {documentRoute && (
         <Suspense fallback={props.posture.phone ? null : <div className="ribbon-loading">Loading commands…</div>}>
           <DocumentChrome
+            documentId={props.docId ?? ''}
+            session={props.session}
             posture={props.posture}
             documentReady={props.documentReady}
             documentTitle={props.title}
@@ -235,13 +262,13 @@ export function TopBar(props: TopBarProps) {
             onToggleHud={props.onToggleHud}
             onToggleOutline={props.onToggleOutline}
             onAction={props.onAction}
-            onOpenAi={() => props.onOpenAi?.()}
+            onOpenDraftTools={() => props.onOpenDraftTools?.()}
             onToggleTheme={props.onToggleTheme}
             onVoice={props.onVoice}
             voiceActive={props.voiceActive}
             voiceSupported={props.voiceSupported}
             onNotify={props.onNotify}
-            localMode={props.localMode}
+            temporary={props.workspaceKind === 'scratch'}
           />
         </Suspense>
       )}

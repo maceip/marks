@@ -1,0 +1,12 @@
+{
+  "format": 2,
+  "engine_revision": "3d11890684d6c23bf3c23131ac6197055175a601",
+  "source_dirty": false,
+  "source_sha256": "3adaa158a3b89aba2798baff8e716ee4395a45dba81ad0b1ba2a8704aaeccad9",
+  "abi_version": 1,
+  "abi_sha256": "a0ac69f12ed8acb6bb9a206f6d434abd283f0becc2548bff0159dfd780112873",
+  "profile_sha256": "1024302965e5aeb4f36010946dfe005a398fc2dd9ca3d77fc9aff6ac86e66f41",
+  "wasm_sha256": "0d1c966cc4a46b520fa0589a034e39d06f157d822e3cd770b07ea28f21681377",
+  "compiler": "rustc 1.95.0 (59807616e 2026-04-14)",
+  "target": "wasm32-unknown-unknown"
+}

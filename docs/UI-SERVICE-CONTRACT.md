@@ -27,8 +27,8 @@ room admission rule, update this file in the same change.
 | [`ESBT-INTEGRATION.md`](ESBT-INTEGRATION.md) | Engine/wire work; not a second identity system |
 
 Do not re-litigate ESBT encoding here. Room replica and wire stay canonical
-Rust-core `ESBM` / `ESBS` / `ESBF`. The temporary TypeScript `@marks/esbt`
-package is not a production transcoding bridge.
+Rust-core `ESBM` / `ESBS` / `ESBF`. The browser uses the same Rust source
+through a generated, artifact-embedded Wasm ABI; no transcoding package exists.
 
 ## 2. Two product modes
 
@@ -37,7 +37,7 @@ package is not a production transcoding bridge.
 
 | Mode | UI may do | UI must not do |
 | --- | --- | --- |
-| `local` | Own catalog, editor, review, share *staging*, history in the browser | Claim invitations were sent, rooms exist, or a principal is signed in |
+| `local` | Own catalog, CRDT journal, images, comments, and named versions in IndexedDB; stage sharing UI | Claim invitations were sent, rooms exist, or a principal is signed in |
 | `service` | Call only the interfaces below, through the modules in §4 | Invent a second auth header, a Node backend, or a second room URL |
 
 Components stay mode-agnostic. `useDocuments`, `useDocumentMeta`, and
@@ -80,10 +80,11 @@ Implemented in `client/src/auth/caller.ts` as `ensureServiceCaller`,
 
 | Need | Session | Scratch |
 | --- | --- | --- |
-| Catalog, create, rename, duplicate, delete, export | `/v1/documents…` with cookie only | `/v1/documents…` with `MarksScratch` |
+| Catalog, create, rename, duplicate, trash/restore, export, assets | `/v1/documents…` with cookie only | `/v1/documents…` with `MarksScratch` |
 | Snapshot | `GET /v1/documents/{id}/snapshot` | `GET /v1/scratch/documents/{id}/snapshot` |
 | Room ticket | `POST /v1/documents/{id}/session` | `POST /v1/scratch/documents/{id}/session` |
 | Shares and link grants | `/v1/documents/{id}/shares` and `/link` | Forbidden. Scratch cannot share. |
+| Comments and named versions | `/v1/documents/{id}/comments` and `/versions` | Forbidden. Review metadata is principal-owned. |
 | Pairing / EVT / pending device | Not these endpoints | Scratch header |
 
 There is no `/v1/scratch/documents` list or create route. Scratch catalog
@@ -121,6 +122,7 @@ Every JSON error is `{ "error": "<stable message>" }`.
 | `409` | Promotion or share conflict. Do not create a second principal |
 | `429` | Rate limited. Back off; do not mint another scratch in a tight loop |
 | `500` | Internal. Toast a generic failure |
+| `503` | A bounded server subsystem is at capacity. Preserve local work and retry with backoff |
 
 Raw paths, status text, and protocol jargon do not belong in user-facing copy
 ([`UI-SURFACE.md`](UI-SURFACE.md)).
@@ -134,11 +136,14 @@ under `components/`.
 | --- | --- | --- |
 | `client/src/auth/caller.ts` | Resolve session-vs-scratch; apply headers | Done for first paint |
 | `client/src/auth/scratch.ts` | Tab-scoped `sessionStorage` credential | Done |
-| `client/src/auth/device-key.ts` | Non-extractable P-256 key in IndexedDB | Crypto done; not bound on first paint |
+| `client/src/auth/device-key.ts` | Non-extractable P-256 key in IndexedDB | Bound during service first paint |
 | `client/src/auth/protocol.ts` | Canonical grant / bootstrap / proof bytes | Done; must stay byte-identical to Rust |
 | `client/src/auth/room-access.ts` | Snapshot + ticket mint + room URL checks | Done for both prefixes |
-| `client/src/lib/api.ts` | Catalog/document HTTP | Headers done; CSRF/share/pairing not wired |
+| `client/src/lib/api.ts` | Documents, trash, assets, sharing, review HTTP | Wired service adapter; components do not call `fetch` directly |
+| `client/src/lib/service-api.ts` | Shared lazy boundary for the remote metadata graph | Local startup does not eagerly parse service request code |
 | `client/src/data/documents.ts` | `DocumentRepository` local vs service | Service path uses `api.ts` |
+| `client/src/data/review.ts` | Durable local/service comments and named versions | Local rows and quota metadata are transactional IndexedDB records; anchors stay ESBT bytes |
+| `client/src/data/assets.ts` | Local content-addressed image store or service upload | PNG/JPEG/GIF/WebP only; document quotas match the service defaults |
 | `client/src/hooks/useSession.ts` | Opens `CollabSession` only with a provider | Service requires `documentAccess` |
 | `client/src/collab/` | `CollabSession` + Wasm `EsbtEngine` + journal | Local and service rooms speak canonical `ESBM`/`ESBS`/`ESBF` |
 
@@ -360,7 +365,9 @@ Document JSON uses **snake_case timestamps**. Auth JSON uses **camelCase
   "engine": "esbt",
   "chars": 0,
   "created_at": 0,
-  "updated_at": 0
+  "updated_at": 0,
+  "deleted_at": null,
+  "purge_at": null
 }
 ```
 
@@ -369,16 +376,48 @@ Refuse any `engine` other than `esbt` (`documentIsOpenable`).
 | Method | Path | Authority | Origin | Body | Success |
 | --- | --- | --- | --- | --- | --- |
 | `GET` | `/v1/documents` | session or scratch | no | — | `{ "documents": [DocumentMeta] }` |
-| `POST` | `/v1/documents` | session or scratch | session only | `{ "title"? }` | `201 { "document" }` |
+| `POST` | `/v1/documents` | session or scratch | session only | `{ "title"?, "markdown"? }` | `201 { "document" }` |
 | `GET` | `/v1/documents/{id}` | session or scratch | no | — | `{ "document", "connections" }` |
 | `PATCH` | `/v1/documents/{id}` | owner / scratch-owner | session only | `{ "title" }` | `{ "document" }` |
-| `DELETE` | `/v1/documents/{id}` | owner / scratch-owner | session only | — | `{ "deleted": true }` |
+| `DELETE` | `/v1/documents/{id}` | owner / scratch-owner | session only | — | `{ "deleted": true }` tombstone |
 | `POST` | `/v1/documents/{id}/duplicate` | readable | session only | `{}` | `201 { "document" }` |
 | `GET` | `/v1/documents/{id}/export` | readable | no | — | `text/markdown` attachment |
+| `GET` | `/v1/documents/{id}/export-bundle` | readable | no | — | streamed portable ZIP |
+| `GET` | `/v1/trash` | owner / scratch-owner | no | — | `{ "documents", "retentionMs" }` |
+| `POST` | `/v1/documents/{id}/restore` | owner / scratch-owner | session only | `{}` | `{ "document" }` |
+| `DELETE` | `/v1/documents/{id}/purge` | owner / scratch-owner | session only | — | `{ "purged": true }` after retention |
 
 `chars` is a UTF-16 code-unit count. Titles are 1–512 characters after trim.
+Creation validates and publishes optional Markdown and its initial snapshot in
+one transaction; templates/imports must not create a visible blank row and
+fill it in with a second request.
 
-### 6.6 Snapshot and room ticket
+Delete is owner-only trash, not immediate reclamation. It closes the live
+room, revokes tickets, and hides the document from collaborators. Only the
+recovery owner sees `/v1/trash`; `purge_at` is 30 days after `deleted_at`.
+Purge removes review metadata and asset references atomically, then reclaims
+content-addressed bytes that no other document references.
+
+### 6.6 Assets and portable export
+
+| Method | Path | Authority | Origin | Request / response |
+| --- | --- | --- | --- | --- |
+| `POST` | `/v1/documents/{id}/assets` | text editor | session only | Raw image body + `X-Marks-Filename`; `201 { "asset": { id, url, filename, mediaType, bytes } }` |
+| `GET` | `/a/{documentId}/{assetId}` | document-scoped capability URL | no | Streamed image bytes while the document is live |
+| `GET` | `/v1/documents/{id}/export-bundle` | readable | no | `document.md`, `manifest.json`, and only referenced assets |
+
+Uploads ignore a claimed MIME type and sniff PNG, JPEG, GIF, or WebP bytes;
+SVG is deliberately refused. Defaults are 10 MiB per image, 128 MiB and 1,000
+images per document, with hash deduplication. Asset IDs are scoped read
+capabilities embedded in Markdown, not global public blob URLs. Trashing the
+document revokes them.
+
+The service bundle rewrites known `/a/…` links in one pass, verifies every
+content hash before sending headers, and streams through a bounded channel;
+`MARKS_MAX_BUNDLE_EXPORTS` bounds concurrent compression/I/O. Local mode emits
+the same version-1 portable manifest from IndexedDB.
+
+### 6.7 Snapshot and room ticket
 
 #### Snapshot
 
@@ -416,7 +455,7 @@ site.
 Mint a fresh ticket immediately before every WebSocket open, including
 reconnect. Tickets last 30 seconds and are one-use.
 
-### 6.7 Sharing (session owner only)
+### 6.8 Sharing (session owner only)
 
 Share UI in local mode is staging only. In service mode these endpoints are
 the real invitations.
@@ -433,7 +472,47 @@ the real invitations.
 Shares cannot grant `owner`. Link redeem requires a live session. Scratch
 callers receive `401`/`404`, not a staged success.
 
-### 6.8 EVT (experimental)
+### 6.9 Comments and named versions (session principals)
+
+Review is a bounded transactional metadata plane. Comments never become text
+operations; versions store deduplicated, zstd-compressed canonical Markdown,
+not engine snapshots.
+
+| Method | Path | Authority | Body / success |
+| --- | --- | --- | --- |
+| `GET` | `/v1/documents/{id}/comments?cursor=<opaque>` | readable | At most 25 newest threads; returns `{ comments, hasMore, nextCursor, repliesTruncated }` |
+| `POST` | `/v1/documents/{id}/comments` | commenter | Create body `{ body, startAnchor?, endAnchor?, quote?, startOffset?, endOffset? }`; returns `201 { comment }` |
+| `PUT` / `DELETE` | `/v1/documents/{id}/comments/{comment}` | commenter; author for body/delete | `{ body?, resolved? }` → `{ updated }`, or `{ deleted }` |
+| `POST` | `/v1/documents/{id}/comments/{comment}/replies` | commenter | `{ body }` → `201 { reply }` |
+| `PUT` / `DELETE` | `/v1/documents/{id}/comments/{comment}/replies/{reply}` | reply author | `{ body }` → `{ updated }`, or `{ deleted }` |
+| `GET` / `POST` | `/v1/documents/{id}/versions` | readable / text editor | Create `{ label }` only after pending edits are durable |
+| `GET` / `DELETE` | `/v1/documents/{id}/versions/{version}` | readable / text editor | `{ version, markdown }`, or `{ deleted }` |
+
+Paired `startAnchor` / `endAnchor` values are base64url canonical ESBT anchors;
+the offsets and quote are display/recovery hints. The browser resolves anchors
+against the current replica, so a concurrent insertion does not detach a
+thread from its text. Deletes are tombstones to preserve thread shape.
+
+There are at most 10,000 comments per document, 200 replies per comment, 100
+named versions, and 64 MiB of compressed version content. Creating a service
+version first waits for `CollabSession.whenDurable()`; the server then reads
+committed room state. Restoring is an ordinary new CRDT replacement followed
+by the same durable-commit barrier, so history is never rewritten.
+
+Comment pagination is stable keyset pagination by `(createdAt, id)`, not an
+offset over a moving list. The client appends and de-duplicates pages through
+`nextCursor`. Because one page contains at most 25 threads and each thread at
+most 200 replies, the bounded 5,000-reply join covers the whole page;
+`repliesTruncated: true` is a contract violation, not silent data loss.
+
+Local mode uses the same 25-thread keyset interface over compound IndexedDB
+indexes. Comments, replies, version bodies, and per-document version-byte
+accounting are transactional; legacy synchronous `localStorage` records are
+migrated once. Local purge deletes review records before the catalog tombstone
+is reclaimed, and local limits mirror 10,000 threads, 200 replies, 100 versions,
+and a conservative 64 MiB uncompressed version budget.
+
+### 6.10 EVT (experimental)
 
 `POST /v1/auth/evt/challenges` and `POST /v1/auth/evt/redeem` exist behind
 `MARKS_EVT_ENABLED`. When the flag is off they are `404`. Do not build a
@@ -441,9 +520,20 @@ primary account-creation UI on EVT. Phone pairing is the v1 upgrade rail.
 If this UI is added later, follow [`AUTHN-AUTHZ-PROTOCOL.md`](AUTHN-AUTHZ-PROTOCOL.md)
 §6 and keep raw email out of storage, logs, and toasts.
 
-### 6.9 Health
+### 6.11 Operations and artifact identity
 
-`GET /healthz` → `{ "ok": true }`. Not a product surface.
+- `GET /healthz` proves a cheap process/database read.
+- `GET /readyz` requires a recent process-owned `synchronous=FULL` SQLite
+  heartbeat; probe traffic cannot manufacture readiness.
+- `GET /v1/artifact` binds build revision, native ESBT revision, Wasm ESBT
+  revision/hash, ABI/profile hashes, deployed-static verification, coherence,
+  and release readiness. Startup refuses when the deployed manifest differs
+  from the build-bound manifest or the deployed Wasm digest differs from it.
+
+These are deployment/proof interfaces, not product UI. Release CI requires
+`engineCoherent: true`, `profileCoherent: true`, and
+`staticArtifactVerified: true`; strict release mode additionally requires
+`releaseReady: true`.
 
 ## 7. Room interface
 
@@ -456,8 +546,8 @@ call them.
 
 Upgrade rules, already enforced in `room-access.ts`:
 
-1. Offer `marks.esbt.v1` and `marks.ticket.v1.<ticketId>.<ticketSecret>`.
-2. The server echoes **only** `marks.esbt.v1`. Never put the ticket in a URL,
+1. Offer `marks.esbt.v2` and `marks.ticket.v1.<ticketId>.<ticketSecret>`.
+2. The server echoes **only** `marks.esbt.v2`. Never put the ticket in a URL,
    query, or header log.
 3. `roomUrl` must stay on the page origin, `ws:`/`wss:` matching `http:`/`https:`,
    path prefix `/collab/`, no userinfo, hash, or query on the minted URL.
@@ -466,47 +556,63 @@ Upgrade rules, already enforced in `room-access.ts`:
 5. After claim, epoch change, logout, or revoke, the server closes the socket.
    The UI reconnects with a new ticket under the current caller.
 
-Frame tags the current test peer already speaks: `0x01` update, `0x02`
-ephemeral, `0x03` server version, `0x04` snapshot, `0x05` synced. Viewer and
-commenter sockets may not send `MSG_UPDATE`. Comments are not ESBT bytes.
+Every binary frame is one tag byte followed by this payload:
+
+| Tag | Direction | Payload |
+| ---: | --- | --- |
+| `0x01` | server → client | canonical ESBT update |
+| `0x02` | both | bounded, lossy presence bytes |
+| `0x03` | server → client | canonical server version |
+| `0x04` | server → client | canonical compact/full snapshot |
+| `0x05` | server → client | empty initial-sync boundary |
+| `0x06` | client → server | `MKMT` v1 stable mutation ID, kind, and canonical bytes |
+| `0x07` | server → origin client | `MKCM` v1 mutation ID, durable revision, and committed version |
+
+Clients never send bare `0x01`/`0x04` under v2. Viewer and commenter sockets
+may not send `0x06`. A mutation remains `saving` until its exact `0x07` receipt
+has been reflected atomically into IndexedDB. Retrying an ID with the same
+digest returns its original receipt; reusing it for different bytes is a
+protocol violation. Comments are not ESBT bytes.
 
 **Service-mode text sync uses the Rust/Wasm `CollabSession`.** The room and
 the browser speak the same `ESBM`/`ESBS`/`ESBF` encodings. Do not add a
 TypeScript transcoder. Catalog, identity, admission, snapshot fetch, and
 room bytes all go through that one binding.
 
-## 8. Product behavior the UI still owes
+## 8. Product behavior invariants
 
-These are UI jobs. The server already implements the other side.
+The data/auth/collaboration modules implement these paths. Desktop, phone,
+fold, and ribbon presentations may change without duplicating their logic.
 
-1. **First paint (service):** `ensureServiceCaller` before catalog or editor
-   work. No registration form.
-2. **Honest scratch:** closing an unpromoted tab is unrecoverable. Say so.
-3. **Upgrade QR or four words:** bind pending device, create pairing, render
-   `url` and `words`, poll finalize, then switch caller to session.
+1. **First paint (service):** run `ensureServiceCaller` before catalog or
+   editor work. There is no registration form.
+2. **Honest scratch:** closing an unpromoted tab loses its authority. The
+   local CRDT journal does not turn that capability into an account.
+3. **Upgrade:** bind the pending device, create a QR/four-word pairing, finish
+   promotion, clear scratch state, and reconnect under the session caller.
 4. **Single-device keep:** on phone posture, lead with “Keep on this phone”
    (`selfBootstrap`) because there is no second screen to scan; keep the
    pairing QR one tap away. On larger postures the QR leads and the
    single-device keep is the quiet fallback. Say plainly that one device
    means one key, and that keeping here never merges with an account that
    lives elsewhere.
-5. **Return visit:** session probe, then silent device redeem, then scratch.
-6. **Share dialog:** local mode stays staged; service mode calls §6.7 and
-   does not claim success on `401`/`404`.
-7. **Logout / devices:** CSRF header from the session bootstrap.
-8. **Reconnect:** new ticket, same `siteId`, `?vv=` when the replica has one.
-9. **Role copy:** owner / editor / commenter / viewer as in the protocol
-   matrix. Scratch is “temporary workspace,” never a named account.
-10. **Comments and history:** keep the local adapters until a review HTTP
-    service exists. There are no comment routes on `marks-server` today.
-11. **Errors:** map §3.4 to toasts; never dump `{ "error": … }` strings that
-    leak which record failed.
-
-Presentation surfaces for every item in this list exist on desktop, phone, and
-fold: Temporary chip, Keep workspace with a real `/link` QR, phone confirmation
-at `/link`, Account devices/controllers/sessions, Share with principal grants
-and link TTL, mapped §3.4 toasts, local comments/history, and reconnect copy.
-They stay honest. They do not mint pairings, send CSRF, or claim a session.
+5. **Return visit:** probe the cookie, attempt silent device redeem, and only
+   then mint scratch.
+6. **Sharing:** local mode is explicit staging; service mode calls §6.8 and
+   never claims success on `401`/`404`.
+7. **Reconnect/durability:** mint a new ticket, reuse the journaled `siteId`,
+   send the stable pending mutation IDs, and keep “saving” visible until their
+   commit receipts are checkpointed.
+8. **Offline:** retain cached document metadata and the Wasm/IndexedDB journal
+   on transport errors. Only an authoritative service `404` means absence.
+9. **Review:** role capabilities control comment/version actions. Creating and
+   restoring a version crosses `whenDurable()`; it never edits history in
+   place.
+10. **Import/assets/export:** Markdown import is one populated create; paste,
+    drop, and picker images use stable editor ranges; portable export includes
+    only referenced known assets.
+11. **Errors:** map §3.4 to product copy; never dump record-sensitive protocol
+    detail, credentials, or raw service bodies into a toast.
 
 ## 9. What the UI must not invent
 
@@ -520,15 +626,17 @@ They stay honest. They do not mint pairings, send CSRF, or claim a session.
 - Logging tickets, scratch capabilities, pairing secrets, or CSRF tokens
 - Calling `/v1/scratch/documents` for list/create (those routes do not exist)
 
-## 10. Current gap map
+## 10. Implementation map
 
-Use this as the frontend checklist. Server boxes are closed unless noted.
+This is the current source wiring. Runtime proof remains the browser/server
+matrix in [`TEST-HARNESS.md`](TEST-HARNESS.md), not this table.
 
 | Capability | Server | Browser |
 | --- | --- | --- |
 | Scratch mint + storage | Yes | Yes (`scratch.ts`, `caller.ts`) |
 | Session probe prefers cookie | Yes (cookie wins) | Yes (`ensureServiceCaller`) |
-| Catalog / CRUD / export | Yes | Partial (`api.ts`); needs origin-safe mutations and service-mode UX |
+| Catalog / atomic create / duplicate / export | Yes | Yes (`api.ts`, `documents.ts`) |
+| Trash / restore / retained purge | Yes | Yes, local and service repositories |
 | Snapshot + ticket mint | Yes, both prefixes | Yes (`room-access.ts`) |
 | Pending device bind | Yes | Yes (`pending-device.ts`, first paint in service mode) |
 | QR pairing + finalize | Yes | Yes (`identity.ts`, Keep workspace); local mode does not mint |
@@ -538,9 +646,14 @@ Use this as the frontend checklist. Server boxes are closed unless noted.
 | Four-word pairing | Yes (`/lookup`) | Yes (Keep + `/link`) |
 | Silent device redeem | Yes | Yes (`device-session.ts` before scratch mint) |
 | Logout / device revoke + CSRF | Yes | Yes (Account / Sign out in service mode) |
-| Shares / link grants | Yes | Product UI; local staging only |
+| Shares / link grants | Yes | Yes in service; honest staging in local mode |
 | Room bytes / multi-peer | Yes (native ESBT) | Yes (Wasm `EsbtEngine` + journal) |
-| Comments / history service | No | Local adapters only |
+| Retry receipts / truthful saving | Yes (`MKCM`) | Yes, atomic IndexedDB acknowledgement |
+| Anchored comments / replies | Yes | Yes, local and service adapters |
+| Named versions / durable restore | Yes | Yes, local and service adapters |
+| Images / quotas / portable bundle | Yes | Yes, local and service adapters |
+| Offline cold-open / reconnect | Journal-compatible | Chromium + Firefox cold boot; WebKit mounted-replica isolation path |
+| Artifact provenance | Native/Wasm coherence endpoint | Dev gate green; strict release gate requires clean coordinated revisions |
 | EVT | Flagged | Do not prioritize |
 
 ## 11. How to evolve this contract

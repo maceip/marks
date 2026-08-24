@@ -18,8 +18,8 @@ test('Marks keeps one backend: Rust marks-server, never a Node server workspace'
   const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
   assert.deepEqual(
     packageJson.workspaces,
-    ['client', 'esbt'],
-    'npm workspaces must not include a server package',
+    ['client'],
+    'npm workspaces must contain only the browser client, never a server or duplicate engine',
   );
   assert.equal(packageJson.scripts?.['dev:server'], undefined);
   assert.equal(packageJson.scripts?.start, undefined);
