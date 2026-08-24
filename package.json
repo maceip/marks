@@ -51,5 +51,10 @@
     "playwright": "^1.62.1",
     "puppeteer-core": "^25.8.0",
     "typescript": "^5.9.3"
+  },
+  "allowScripts": {
+    "agent-browser@0.34.0": true,
+    "fsevents@2.3.3": true,
+    "fsevents@2.3.2": true
   }
 }
