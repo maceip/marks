@@ -100,10 +100,12 @@ jobs:
             fi
           fi
 
-          printf 'operation=%s\n' "$operation" >> "$GITHUB_OUTPUT"
-          printf 'release_id=%s\n' "$release_id" >> "$GITHUB_OUTPUT"
-          printf 'revision=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          printf 'ci_run_id=%s\n' "$TESTED_RUN_ID" >> "$GITHUB_OUTPUT"
+          {
+            printf 'operation=%s\n' "$operation"
+            printf 'release_id=%s\n' "$release_id"
+            printf 'revision=%s\n' "$(git rev-parse HEAD)"
+            printf 'ci_run_id=%s\n' "$TESTED_RUN_ID"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Setup Node.js v24
         if: steps.request.outputs.operation == 'deploy'
@@ -209,11 +211,13 @@ jobs:
             fi
           fi
 
-          printf 'current=%s\n' "$current" >> "$GITHUB_OUTPUT"
-          printf 'profile=%s\n' "$profile" >> "$GITHUB_OUTPUT"
-          printf 'runtime_changed=%s\n' "$runtime_changed" >> "$GITHUB_OUTPUT"
-          printf 'should_deploy=%s\n' "$should_deploy" >> "$GITHUB_OUTPUT"
-          printf 'reasons=%s\n' "$reasons" >> "$GITHUB_OUTPUT"
+          {
+            printf 'current=%s\n' "$current"
+            printf 'profile=%s\n' "$profile"
+            printf 'runtime_changed=%s\n' "$runtime_changed"
+            printf 'should_deploy=%s\n' "$should_deploy"
+            printf 'reasons=%s\n' "$reasons"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Install pinned Rust toolchain for a manual full deploy
         if: >-

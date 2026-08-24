@@ -92,6 +92,7 @@ jobs:
           server_pid=""
           mkdir -p "$run_root"
 
+          # shellcheck disable=SC2317 # Invoked indirectly by the EXIT/INT/TERM trap.
           cleanup() {
             status=$?
             trap - EXIT INT TERM
