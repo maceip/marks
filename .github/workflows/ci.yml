@@ -7,11 +7,12 @@
 #   converging on the UI-created document.
 #
 # What it is not:
-#   `npm run test:harness` is helper-unit tests. `smoke` / `smoke:platforms`
-#   stay local: they are the two-browser preview-sync run of the Wasm
-#   CollabSession. CI proves native multi-peer rooms plus Wasm plumbing
-#   units. The service matrix proves one production browser at a time plus
-#   native second peers; it is not a two-live-browser paint test.
+#   `npm run test:harness` is helper-unit tests. `smoke:platforms` stays local.
+#   The retained pre-auth `npm run smoke` path is not an admitted service proof.
+#   CI proves native multi-peer rooms plus Wasm plumbing units. The service
+#   matrix proves one production browser at a time plus native second peers;
+#   it is not a two-live-browser paint test. The scheduled workflow separately
+#   reruns the Chromium release shape and enforces large-document UI budgets.
 #   Floating `stable` is forbidden: pin rust-toolchain.toml / rust-version.
 name: CI
 
@@ -32,7 +33,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Reject retired duplicate implementations
         run: |
@@ -82,7 +83,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Setup Node.js v22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -136,7 +137,7 @@ jobs:
         browser: [chromium, firefox, webkit]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@1.88.0
@@ -144,7 +145,7 @@ jobs:
           components: rustfmt
 
       - name: Setup Node.js v22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'npm'

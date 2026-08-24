@@ -11,9 +11,12 @@ before applying any entry.
 
 ## Browser matrix
 
-The Playwright smoke suite opens each collaborator in an independent browser
-context (separate cookies, IndexedDB, caches, service workers, and deterministic
-test document identity). Its two-peer checks cover avatar/caret arrival,
+The retained pre-auth Playwright smoke suite opens each collaborator in an
+independent browser context, but those contexts do not currently establish
+separate valid scratch/session authorities. It is therefore not admitted CI
+evidence. The scenarios below remain the browser/browser acceptance target;
+current release CI instead proves one authorized Playwright client plus a
+native second peer. The target two-browser checks cover avatar/caret arrival,
 selection placement, removal/expiry, edits inserted before a remote cursor,
 and section navigation while the editor is unmounted in preview-only mode.
 Every release run exercises split, editor, and preview modes plus:

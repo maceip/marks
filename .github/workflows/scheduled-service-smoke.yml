@@ -1,0 +1,130 @@
+# Nightly coverage that is intentionally different from the required CI matrix:
+# build the production release shape, rerun the current Chromium service/admission
+# proof with a native second peer, then enforce large-document UI latency budgets.
+# The retired pre-auth `npm run smoke` path is not an admitted service proof.
+name: Scheduled service smoke and performance
+
+on:
+  schedule:
+    - cron: '17 8 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/scheduled-service-smoke.yml
+  pull_request:
+    paths:
+      - .github/workflows/scheduled-service-smoke.yml
+      - scripts/ci-service-ui.mjs
+      - scripts/measure-budget.mjs
+      - scripts/measure.mjs
+      - scripts/run-service-ci.sh
+      - scripts/wait-for-server.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scheduled-service-smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release-smoke-and-performance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.88.0
+
+      - name: Setup Node.js v22
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build release marks-server
+        run: cargo build -p marks-server --release --locked
+        env:
+          MARKS_BUILD_REVISION: ${{ github.sha }}
+          MARKS_SOURCE_DIRTY: '0'
+
+      - name: Build production service-mode client
+        run: VITE_MARKS_DATA_MODE=service VITE_MARKS_TEST_SERVICE_WORKER=1 npm run build
+
+      - name: Enforce production UI budgets
+        run: npm run check:ui-budgets
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Prove service admission, durability, offline recovery, and a native second peer
+        run: bash scripts/run-service-ci.sh --bin target/release/marks-server --static-dir client/dist --browser chromium
+        env:
+          MARKS_BROWSER: chromium
+          MARKS_REQUIRE_RELEASE: '1'
+          MARKS_TEST_SERVICE_WORKER: '1'
+
+      - name: Enforce large-document rendering budgets
+        shell: bash
+        run: |
+          set -euo pipefail
+          origin=http://127.0.0.1:3319
+          run_root="$RUNNER_TEMP/marks-performance-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          server_log="$run_root/server.log"
+          measure_log="$run_root/measure.log"
+          server_pid=""
+          mkdir -p "$run_root"
+
+          cleanup() {
+            status=$?
+            trap - EXIT INT TERM
+            if [ -n "$server_pid" ]; then
+              kill "$server_pid" 2>/dev/null || true
+              wait "$server_pid" 2>/dev/null || true
+            fi
+            if [ "$status" -ne 0 ] && [ -f "$server_log" ]; then
+              echo "----- marks-server performance log -----" >&2
+              cat "$server_log" >&2
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT INT TERM
+
+          MARKS_LISTEN=127.0.0.1:3319 \
+          MARKS_ORIGIN="$origin" \
+          MARKS_DB="$run_root/marks.sqlite" \
+          MARKS_STATIC_DIR="$GITHUB_WORKSPACE/client/dist" \
+            target/release/marks-server >"$server_log" 2>&1 &
+          server_pid=$!
+          bash scripts/wait-for-server.sh "$origin/healthz" "$server_pid" 60 "$server_log"
+
+          set +e
+          MARKS_URL="$origin" npm run measure -- \
+            --sections 220 \
+            --keystrokes 60 \
+            --budget-first-ms 15000 \
+            --budget-p50 150 \
+            --budget-p95 300 \
+            --budget-dirty 2 \
+            --budget-dom 6 | tee "$measure_log"
+          measure_status=${PIPESTATUS[0]}
+          set -e
+
+          {
+            echo '### Large-document performance receipt'
+            echo
+            echo '```text'
+            cat "$measure_log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit "$measure_status"

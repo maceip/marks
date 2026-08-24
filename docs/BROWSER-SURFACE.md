@@ -208,8 +208,8 @@ npm run test:harness
 npm run harness:probe
 npm run typecheck
 # against a production build with the Rust server already running:
-npm run build
-npm run smoke              # Playwright two-peer / REST
+VITE_MARKS_DATA_MODE=service npm run build
+npm run ci:service         # Playwright service UI plus native second peer
 npm run smoke:platforms    # Playwright + Puppeteer + agent-browser glass checks
 ```
 

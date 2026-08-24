@@ -238,7 +238,7 @@ npm run test:harness     # helper units only: chrome discovery, budget parsers, 
 cargo test --workspace   # marks-auth validators plus marks-server HTTP/room integration
 npm run check:ui-budgets # gzip critical-path budgets after npm run build
 npm run harness:probe    # print Playwright / Puppeteer / agent-browser + Chrome paths
-npm run smoke            # Playwright two-peer / REST smoke
+npm run ci:service       # current service UI plus native second-peer proof
 npm run smoke:platforms  # portable glass checks on Playwright, Puppeteer, agent-browser
 npm run measure          # latency on a large generated document
 ```
@@ -255,14 +255,17 @@ version in `rust-toolchain.toml` (the same pin as
   native ESBT peers against the UI-created document (`npm run ci:service`).
 
 A green workflow is proof of service-mode admission, native multi-peer room
-convergence, and the Wasm client plumbing tests. It is not a two-browser
-preview-sync run of the Wasm `CollabSession`; `smoke` / `smoke:platforms` /
-`measure` stay local for that.
+convergence, and the Wasm client plumbing tests. It is not a two-live-browser
+paint test. The separate `scheduled-service-smoke.yml` workflow runs daily,
+manually, and whenever its own contract changes: it builds the release-shaped
+service client/server, repeats the Chromium service/native-peer proof, then
+enforces large-document first-render, p50/p95, dirty-block, and DOM-operation
+budgets.
 
-
-`npm run smoke` is Playwright-only and checks the things that need two real
-browsers or the REST surface. It is retained as the acceptance suite for the
-Rust server and is not runnable against a static Vite preview.
+The old `npm run smoke` program is retained for its interaction scenarios, but
+its independent-browser-context sharing path predates the current scratch and
+session admission boundary and is not an admitted service acceptance suite.
+Use `npm run ci:service` for current service evidence.
 
 `npm run smoke:platforms` runs the same document-glass checks (rendering,
 select-all, context menu, honest voice availability, theme, and connectivity
@@ -270,12 +273,13 @@ copy) on all three local platforms. How each platform is found, and which Chrome
 launch, is in [docs/TEST-HARNESS.md](docs/TEST-HARNESS.md).
 
 The portable surface suite can run against the default local Vite app. The
-connected two-peer/REST suite still needs a service-mode build and an
-independently running Rust server:
+current connected service proof needs a service-mode build and an independently
+running Rust server binary:
 
 ```bash
-VITE_MARKS_DATA_MODE=service npm run build
-MARKS_URL=http://127.0.0.1:3000 npm run smoke
+VITE_MARKS_DATA_MODE=service VITE_MARKS_TEST_SERVICE_WORKER=1 npm run build
+cargo build -p marks-server
+MARKS_TEST_SERVICE_WORKER=1 npm run ci:service -- --bin target/debug/marks-server --static-dir client/dist --browser chromium
 ```
 
 
@@ -290,8 +294,9 @@ MARKS_URL=http://127.0.0.1:3000 npm run smoke
   identifier compression remains engine research, not a Marks wiring gap.
 - Local mode is a real Wasm replica with an IndexedDB journal. Service-mode
   admission and native multi-peer rooms are proven in the `service-collab`
-  CI job. Two-browser preview sync through the Wasm `CollabSession` is still
-  the local `npm run smoke` suite.
+  CI job. A two-live-browser service proof with independently authorized
+  browser contexts remains a separate acceptance gap; the retained pre-auth
+  `npm run smoke` path does not satisfy it.
 
 ## Built on
 

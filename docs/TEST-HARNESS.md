@@ -17,7 +17,7 @@ marks is exercised on three local browser platforms:
 
 | Platform | Role | How it is found |
 | --- | --- | --- |
-| **Playwright** | Deep collab smoke (`npm run smoke`) and the portable surface suite | `playwright` in this repo. Uses its bundled Chromium unless `CHROMIUM_PATH` is set. |
+| **Playwright** | Production service proof, retained legacy smoke, performance, and the portable surface suite | `playwright` in this repo. Uses its bundled Chromium unless `CHROMIUM_PATH` is set. |
 | **Puppeteer** | Same portable surface suite | `puppeteer-core` (preferred) or `puppeteer`. Never downloads Chrome; it launches the system binary. |
 | **agent-browser** | Same portable surface suite | The Vercel Labs CLI (`node_modules/.bin/agent-browser` or `PATH`). A CLI, not a Node library — the harness wraps it. |
 
@@ -56,7 +56,7 @@ npm run test:bench                 # deterministic engine fixture + receipt stat
 # app must already be running
 npm run measure                    # large-doc preview latency (print only)
 npm run measure -- --budget-p50 150 --budget-p95 300 --budget-first-ms 20000
-npm run smoke                      # Playwright two-peer / REST / engines
+npm run smoke                      # retained pre-auth runner; not current service evidence
 npm run smoke:surface              # portable glass checks, Playwright
 npm run smoke:puppeteer
 npm run smoke:agent-browser
@@ -76,9 +76,8 @@ MARKS_TEST_SERVICE_WORKER=1 npm run ci:service -- --bin target/debug/marks-serve
 MARKS_TEST_SERVICE_WORKER=1 npm run ci:service -- --bin target/debug/marks-server --static-dir client/dist --browser firefox
 MARKS_TEST_SERVICE_WORKER=1 npm run ci:service -- --bin target/debug/marks-server --static-dir client/dist --browser webkit
 
-# The deeper two-browser smoke is service-only and still local.
-# Start the Rust Marks server separately on :3000, then:
-MARKS_URL=http://127.0.0.1:3000 npm run smoke
+# The scheduled release-shaped workflow uses ci:service, then measure.
+# It deliberately does not call the retained pre-auth smoke runner.
 ```
 
 The retired Node prototype has been removed. `npm run preview` serves only the
@@ -92,7 +91,7 @@ first paint, scoped select-all, preview context menu, honest voice availability,
 theme toggle, and honest local/offline status. This is the set that must stay
 green on all three platforms.
 
-**Playwright smoke** (`scripts/smoke.mjs`) — the above plus incremental preview, two ESBT peers, per-user undo, checkbox write-back, outline, scroll sync, snapshot/export REST, live-room delete, retired-engine refusal.
+**Retained Playwright smoke** (`scripts/smoke.mjs`) — preserves incremental preview, two-context, undo, checkbox, outline, scroll, REST, deletion, and retired-engine scenarios from before scratch/session admission. Its independent contexts do not currently establish separate valid authorities, so it is not an admitted service proof and is not scheduled.
 
 **Production service matrix** (`scripts/ci-service-ui.mjs` plus
 `crates/marks-server/tests/live_service.rs`) — coherent runtime artifact,
@@ -110,10 +109,13 @@ convergence.
 
 **Measure** (`scripts/measure.mjs`) — types a ~60 KB document, then 60
 keystrokes in the middle, and prints the HUD. `--budget-*` flags fail the
-process when first-render, p50/p95, dirty blocks, or DOM ops exceed a cap. The
-old scheduled workflow was removed with the Node server; restore it only after
-it boots and measures the production Rust artifact. `scripts/wait-for-server.sh`
-remains the bounded readiness helper for that workflow.
+process when first-render, p50/p95, dirty blocks, or DOM ops exceed a cap.
+`.github/workflows/scheduled-service-smoke.yml` builds the release-shaped Rust
+server and service-mode browser artifact, reruns the admitted Chromium
+service/native-peer proof, and then measures that same production shape with
+15 s first-render, 150 ms p50, 300 ms p95, two dirty blocks, and six DOM ops as
+hard limits. It runs daily, manually, and on changes to its own contract.
+`scripts/wait-for-server.sh` provides its bounded readiness check.
 
 ## Adding a check
 
