@@ -50,6 +50,7 @@ test('operator entry point documents deploy, status, and one-command rollback', 
   const result = runBash(localScript, ['--help']);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /deploy-secure-build\.sh deploy/);
+  assert.match(result.stdout, /deploy-secure-build\.sh deploy-verified <revision>/);
   assert.match(result.stdout, /deploy-secure-build\.sh rollback \[release-id\]/);
   assert.match(result.stdout, /automatically restore a failed\s+activation/);
   assert.match(result.stdout, /remote command grammar are fixed/);
@@ -85,6 +86,12 @@ test('GitHub production deploy follows only successful same-repository main CI',
   );
   assert.match(workflow, /ref: \$\{\{ github\.event_name == 'workflow_run' && github\.event\.workflow_run\.head_sha \|\| github\.sha \}\}/);
   assert.match(workflow, /run: npm run deploy:secure-build/);
+  assert.match(workflow, /scripts\/deploy-secure-build\.sh deploy-verified/);
+  assert.match(workflow, /MARKS_CI_VERIFIED_SHA/);
+  assert.match(workflow, /MARKS_CI_RUN_ID/);
+  assert.match(workflow, /node scripts\/ci-impact\.mjs/);
+  assert.match(workflow, /steps\.impact\.outputs\.should_deploy == 'true'/);
+  assert.match(workflow, /Skip application deployment when no runtime artifact changed/);
   assert.match(workflow, /^\s*environment:\s*\n\s*name: Production$/m);
   assert.match(workflow, /^\s*group: marks-production$/m);
   assert.match(workflow, /^\s*cancel-in-progress: false$/m);
@@ -110,6 +117,19 @@ test('GitHub fast rollback is manual, serialized, pinned, and does not rebuild',
   assert.match(workflow, /rm -f -- "\$key_path"/);
   assert.doesNotMatch(workflow, /ssh-keyscan|StrictHostKeyChecking no/);
   assert.doesNotMatch(workflow, /User devuser|devuser@secure\.build/);
+
+  const verifiedStep = workflow.slice(
+    workflow.indexOf('- name: Deploy the exact successful CI revision'),
+    workflow.indexOf('- name: Run the complete gate for a manual deploy'),
+  );
+  assert.match(verifiedStep, /deploy-verified/);
+  assert.doesNotMatch(verifiedStep, /npm run deploy|cargo|playwright/);
+
+  const manualDeployStep = workflow.slice(
+    workflow.indexOf('- name: Run the complete gate for a manual deploy'),
+    workflow.indexOf('- name: Skip application deployment'),
+  );
+  assert.match(manualDeployStep, /npm run deploy:secure-build/);
 
   const rollbackStep = workflow.slice(
     workflow.indexOf('- name: Fast rollback'),
@@ -314,4 +334,22 @@ test('unsafe rollback identifiers are rejected before SSH', () => {
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
+});
+
+test('deploy-verified cannot be used as a local skip-tests switch', () => {
+  const result = runBash(localScript, [
+    'deploy-verified',
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  ], {
+    env: {
+      ...process.env,
+      GITHUB_ACTIONS: '',
+      GITHUB_EVENT_NAME: '',
+      MARKS_CI_VERIFIED_SHA: '',
+      MARKS_CI_RUN_ID: '',
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /available only in GitHub Actions/);
+  assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /checking restricted deployment protocol/);
 });

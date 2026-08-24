@@ -249,34 +249,49 @@ npm run smoke:platforms  # portable glass checks on Playwright, Puppeteer, agent
 npm run measure          # latency on a large generated document
 ```
 
-GitHub Actions (`.github/workflows/ci.yml`) has two required jobs on the Rust
-version in `rust-toolchain.toml` (the same pin as
-`workspace.package.rust-version`):
+GitHub Actions (`.github/workflows/ci.yml`) classifies the complete base-to-head
+diff before scheduling expensive work. The classifier is checked-in code with
+unit tests; unknown paths and changes to CI selection itself fail toward full
+coverage.
 
-- `test` — format, clippy, workspace tests (including in-process
-  `room_collab`), strict component/WIT/codec verification, Node unit suites
-  including `test:component`, and the default local client build.
-- `service-collab` — builds `marks-server` plus `VITE_MARKS_DATA_MODE=service`,
-  boots the binary, drives first-paint `/v1` from Playwright, proves two
-  isolated browser replicas through separately minted room tickets, then runs
-  two native ESBT peers against the UI-created document (`npm run ci:service`).
+| Profile | Aggregate checks | Live service browsers | Production runtime |
+| --- | --- | --- | --- |
+| `docs` | none | none | unchanged |
+| `infra` | workflow/shell/deploy harness | none | unchanged |
+| `web-unit` | TypeScript, web units, ESBT provenance, client build/budgets | none | changed |
+| `web-chromium` | web aggregate | Chromium | changed |
+| `server-chromium` | Rust format/test/clippy/room proof | Chromium | changed |
+| `full` | complete Rust + web + harness aggregate | Chromium, Firefox, WebKit | changed only when runtime paths changed |
 
-A green workflow is proof of current service admission, isolated-browser
-convergence, remote caret/presence rendering, per-peer undo, preview writeback,
-native multi-peer convergence, and the Wasm client plumbing tests. The separate
-`scheduled-service-smoke.yml` workflow runs daily, manually, and whenever its
-own contract changes: it builds the release-shaped service client/server,
-repeats the Chromium browser/native-peer proof, then enforces large-document
-first-render, p50/p95, dirty-block, and DOM-operation budgets.
+Browser/auth/editor/rendering-surface/service-worker/collaboration/WIT/Wasm/
+codec, dependency, toolchain, test, selector, mixed server-plus-web, and unknown
+changes all select `full`. Other mixed changes union their requirements, so an
+infrastructure plus web change cannot drop either harness. Firefox and WebKit
+prove the service UI; the browser-independent native ESBT peer is run once with
+Chromium. Bounded Rust caches are keyed by OS,
+the pinned toolchain, `Cargo.lock`, and build profile so later commits reuse
+dependencies while Cargo still validates every changed source. An always-run
+`CI gate` fails unless exactly the classified aggregate and service jobs pass.
+
+A green full workflow is proof of current service admission,
+isolated-browser convergence, remote caret/presence rendering, per-peer undo,
+preview writeback, native multi-peer convergence, and Wasm client plumbing.
+The separate `scheduled-service-smoke.yml` workflow remains an unconditional
+daily/manual release-shape Chromium and performance proof, regardless of which
+incremental profiles recent commits selected.
 
 A successful same-repository `CI` push run on `main` then triggers the separate,
 privileged `production.yml` workflow. It checks out the exact tested revision,
-runs the additional deployment gate, and uses the forced-command
-`marks-deploy@secure.build` protocol to build, canary, and atomically activate
-Linux server and web artifacts. The key cannot open a shell, forward ports,
-invoke arbitrary sudo/Docker commands, read production data, or address an
-unrelated service. Manual dispatch defaults to the no-build fast rollback path.
-Required SSH secrets and the rollback procedure are documented in
+compares it with the currently deployed Git revision, and skips application
+deployment when the accumulated diff contains no runtime artifact change. For
+a runtime change, the successful exact-SHA CI receipt removes only the duplicate
+GitHub-side test pass; the forced-command `marks-deploy@secure.build` protocol
+still rebuilds from the exact Git archive, verifies it, canaries it, and
+atomically activates it. A manually requested deploy still runs the complete
+local gate. The key cannot open a shell, forward ports, invoke arbitrary
+sudo/Docker commands, read production data, or address an unrelated service.
+Manual dispatch defaults to the no-build fast rollback path. Required SSH
+secrets and the rollback procedure are documented in
 [deploy/README.md](deploy/README.md).
 
 `npm run smoke:platforms` runs the same document-glass checks (rendering,

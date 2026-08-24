@@ -23,9 +23,13 @@ as `devuser`. Caddy terminates TLS for the subdomain, Knot is authoritative for
 
 Every successful same-repository `CI` push run on `main` triggers
 `.github/workflows/production.yml`. The privileged workflow checks out the
-exact tested revision and invokes the same deployment command documented
-below. Pull requests, fork runs, failed CI, non-`main` runs, and manually
-selected non-`main` refs cannot reach the production job.
+exact tested revision and compares the complete currently-deployed-to-head diff
+with `scripts/ci-impact.mjs`. A docs, test, or CI/deployment-infrastructure-only
+commit records a successful no-runtime-change receipt without rebuilding or
+restarting the application. Accumulated runtime changes deploy even if an
+intervening deployment was skipped or failed. Pull requests, fork runs, failed
+CI, non-`main` runs, and manually selected non-`main` refs cannot reach the
+production job.
 
 GitHub Actions needs two repository or `production` environment secrets:
 
@@ -60,6 +64,14 @@ runs the pinned Rust format/test/Clippy gate, all browser/product/Markdown/
 benchmark/Wasm/auth and harness unit suites, the service-mode production
 client build and UI budgets, then a live Chromium workflow with a native
 second ESBT peer. There is no `--skip-tests` or dirty-release option.
+
+That complete local gate is the operator/manual path. An automatic
+same-repository `workflow_run` uses `deploy-verified <sha>` only after checking
+out the successful CI SHA and binding it to the triggering CI run id. That path
+cannot be used as a generic local skip switch: it rejects non-GitHub and
+non-`workflow_run` callers. It removes the duplicate GitHub-side suite, while
+the host still performs its independent locked source verification, Linux
+build, isolated canary, activation, observation, and automatic restoration.
 
 The exact commit is sent with `git archive`; ignored files and the local
 working tree are not uploaded. The client can issue only the fixed

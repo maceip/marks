@@ -38,6 +38,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
+      - name: Restore successive release build state
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-rust-1.88.0-${{ hashFiles('Cargo.lock') }}-release-current
+
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@1.88.0
 

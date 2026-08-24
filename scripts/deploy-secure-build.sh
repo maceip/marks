@@ -30,6 +30,7 @@ usage() {
   cat <<'EOF'
 Usage:
   scripts/deploy-secure-build.sh deploy
+  scripts/deploy-secure-build.sh deploy-verified <revision>
   scripts/deploy-secure-build.sh rollback [release-id]
   scripts/deploy-secure-build.sh status
   scripts/deploy-secure-build.sh releases
@@ -39,6 +40,10 @@ Commands:
                commit through the restricted secure.build protocol, canary it,
                atomically activate it, and automatically restore a failed
                activation.
+  deploy-verified
+               GitHub workflow_run path for an exact successful CI revision.
+               It removes only the duplicate local gate; secure.build still
+               performs its locked build, verification, canary, and activation.
   rollback     Atomically activate `previous`, or the named retained release.
                A successful rollback swaps `current` and `previous`, so the
                command can be used again to undo the rollback.
@@ -53,6 +58,7 @@ Environment:
 Deployment intentionally has no skip-tests or dirty-tree switch. Rollback and
 status do not build and do not run the pre-deploy suite. The SSH target and
 remote command grammar are fixed rather than supplied by the environment.
+deploy-verified is rejected outside the exact GitHub workflow_run contract.
 EOF
 }
 
@@ -223,6 +229,12 @@ deploy() {
   check_remote_protocol
   run_local_gate "$revision"
 
+  ship_revision "$revision"
+}
+
+ship_revision() {
+  local revision=$1
+
   echo "==> uploading exact commit $revision"
   STAGED_REVISION=$revision
   git -C "$ROOT" archive --format=tar "$revision" \
@@ -232,12 +244,43 @@ deploy() {
   restricted_command deploy "$revision"
 }
 
+deploy_verified() {
+  local expected_revision=$1
+  [[ "$expected_revision" =~ ^[0-9a-f]{40}$ ]] \
+    || die "deploy-verified requires one full lowercase Git revision"
+  [[ "${GITHUB_ACTIONS:-}" == true ]] \
+    || die "deploy-verified is available only in GitHub Actions"
+  [[ "${GITHUB_EVENT_NAME:-}" == workflow_run ]] \
+    || die "deploy-verified requires a workflow_run event"
+  [[ "${MARKS_CI_VERIFIED_SHA:-}" == "$expected_revision" ]] \
+    || die "deploy-verified revision does not match the successful CI receipt"
+  [[ "${MARKS_CI_RUN_ID:-}" =~ ^[0-9]+$ ]] \
+    || die "deploy-verified requires the successful CI run id"
+
+  validate_deploy_config
+  assert_clean_commit
+  assert_published_commit
+
+  local revision
+  revision=$(git -C "$ROOT" rev-parse HEAD)
+  [[ "$revision" == "$expected_revision" ]] \
+    || die "checked-out HEAD $revision does not match verified revision $expected_revision"
+
+  check_remote_protocol
+  echo "==> accepting successful CI run $MARKS_CI_RUN_ID for exact revision $revision"
+  ship_revision "$revision"
+}
+
 main() {
   local command=${1:-}
   case "$command" in
     deploy)
       [[ $# -eq 1 ]] || die "deploy accepts no arguments"
       deploy
+      ;;
+    deploy-verified)
+      [[ $# -eq 2 ]] || die "deploy-verified requires one revision"
+      deploy_verified "$2"
       ;;
     rollback)
       [[ $# -le 2 ]] || die "rollback accepts at most one release id"

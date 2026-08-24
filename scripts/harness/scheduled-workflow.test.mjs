@@ -21,6 +21,8 @@ test('scheduled proof uses the current service boundary and explicit rendering b
   assert.match(workflow, /--budget-p95 300/);
   assert.match(workflow, /--budget-dirty 2/);
   assert.match(workflow, /--budget-dom 6/);
+  assert.match(workflow, /actions\/cache@v6/);
+  assert.match(workflow, /release-current/);
   assert.doesNotMatch(workflow, /npm run smoke(?:\s|$)/m);
 });
 

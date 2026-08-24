@@ -66,6 +66,7 @@ jobs:
           REQUESTED_OPERATION: ${{ inputs.operation }}
           REQUESTED_RELEASE_ID: ${{ inputs.release_id }}
           TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
+          TESTED_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" == workflow_run ]]; then
@@ -102,12 +103,7 @@ jobs:
           printf 'operation=%s\n' "$operation" >> "$GITHUB_OUTPUT"
           printf 'release_id=%s\n' "$release_id" >> "$GITHUB_OUTPUT"
           printf 'revision=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Install pinned Rust toolchain
-        if: steps.request.outputs.operation == 'deploy'
-        uses: dtolnay/rust-toolchain@1.88.0
-        with:
-          components: clippy, rustfmt
+          printf 'ci_run_id=%s\n' "$TESTED_RUN_ID" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node.js v24
         if: steps.request.outputs.operation == 'deploy'
@@ -167,9 +163,93 @@ jobs:
           printf 'SSH_AGENT_PID=%s\n' "$SSH_AGENT_PID" >> "$GITHUB_ENV"
           ssh -o ConnectTimeout=15 secure.build probe
 
-      - name: Test, build, canary, and deploy the successful main revision
+      - name: Determine deployed-to-head runtime impact
+        id: impact
         if: steps.request.outputs.operation == 'deploy'
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REVISION: ${{ steps.request.outputs.revision }}
+        run: |
+          set -euo pipefail
+          status_receipt=$(ssh secure.build status)
+          printf '%s\n' "$status_receipt"
+          current=$(awk '$1 == "current:" { print $2 }' <<< "$status_receipt")
+          [[ -n "$current" ]] || {
+            echo "restricted status did not report the current release" >&2
+            exit 1
+          }
+
+          profile=manual-full
+          runtime_changed=true
+          should_deploy=true
+          reasons=manual-deploy
+          if [[ "$EVENT_NAME" == workflow_run ]]; then
+            if [[ "$current" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "${current}^{commit}"; then
+              impact_output="$RUNNER_TEMP/marks-production-impact-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+              : > "$impact_output"
+              node scripts/ci-impact.mjs \
+                --base "$current" \
+                --head "$REVISION" \
+                --github-output "$impact_output"
+              profile=$(awk -F= '$1 == "profile" { print substr($0, index($0, "=") + 1) }' "$impact_output")
+              runtime_changed=$(awk -F= '$1 == "runtime_changed" { print $2 }' "$impact_output")
+              reasons=$(awk -F= '$1 == "reasons" { print substr($0, index($0, "=") + 1) }' "$impact_output")
+              rm -f -- "$impact_output"
+              [[ "$runtime_changed" == true || "$runtime_changed" == false ]]
+              if [[ "$runtime_changed" == false ]]; then
+                should_deploy=false
+              fi
+            elif [[ "$current" == legacy-* ]]; then
+              profile=first-release
+              reasons=legacy-current
+            else
+              echo "current release is neither a reachable Git revision nor legacy: $current" >&2
+              exit 1
+            fi
+          fi
+
+          printf 'current=%s\n' "$current" >> "$GITHUB_OUTPUT"
+          printf 'profile=%s\n' "$profile" >> "$GITHUB_OUTPUT"
+          printf 'runtime_changed=%s\n' "$runtime_changed" >> "$GITHUB_OUTPUT"
+          printf 'should_deploy=%s\n' "$should_deploy" >> "$GITHUB_OUTPUT"
+          printf 'reasons=%s\n' "$reasons" >> "$GITHUB_OUTPUT"
+
+      - name: Install pinned Rust toolchain for a manual full deploy
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          steps.request.outputs.operation == 'deploy' &&
+          steps.impact.outputs.should_deploy == 'true'
+        uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: clippy, rustfmt
+
+      - name: Deploy the exact successful CI revision without a duplicate local gate
+        if: >-
+          github.event_name == 'workflow_run' &&
+          steps.request.outputs.operation == 'deploy' &&
+          steps.impact.outputs.should_deploy == 'true'
+        shell: bash
+        env:
+          MARKS_CI_VERIFIED_SHA: ${{ steps.request.outputs.revision }}
+          MARKS_CI_RUN_ID: ${{ steps.request.outputs.ci_run_id }}
+        run: bash scripts/deploy-secure-build.sh deploy-verified "$MARKS_CI_VERIFIED_SHA"
+
+      - name: Run the complete gate for a manual deploy
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          steps.request.outputs.operation == 'deploy' &&
+          steps.impact.outputs.should_deploy == 'true'
         run: npm run deploy:secure-build
+
+      - name: Skip application deployment when no runtime artifact changed
+        if: >-
+          steps.request.outputs.operation == 'deploy' &&
+          steps.impact.outputs.should_deploy == 'false'
+        shell: bash
+        run: |
+          echo "CI passed, but ${{ steps.impact.outputs.current }}..${{ steps.request.outputs.revision }} contains no runtime change."
+          echo "Production remains on ${{ steps.impact.outputs.current }}."
 
       - name: Fast rollback to previous or a retained release
         if: steps.request.outputs.operation == 'rollback'
@@ -195,7 +275,8 @@ jobs:
       - name: Verify production after a state change
         if: >-
           success() &&
-          (steps.request.outputs.operation == 'deploy' ||
+          ((steps.request.outputs.operation == 'deploy' &&
+            steps.impact.outputs.should_deploy == 'true') ||
            steps.request.outputs.operation == 'rollback')
         run: bash scripts/deploy-secure-build.sh status
 
@@ -206,12 +287,24 @@ jobs:
           OPERATION: ${{ steps.request.outputs.operation }}
           REVISION: ${{ steps.request.outputs.revision }}
           RELEASE_ID: ${{ steps.request.outputs.release_id }}
+          PREVIOUS_REVISION: ${{ steps.impact.outputs.current }}
+          IMPACT_PROFILE: ${{ steps.impact.outputs.profile }}
+          RUNTIME_CHANGED: ${{ steps.impact.outputs.runtime_changed }}
+          SHOULD_DEPLOY: ${{ steps.impact.outputs.should_deploy }}
+          IMPACT_REASONS: ${{ steps.impact.outputs.reasons }}
         run: |
           {
             echo '### Marks production operation'
             echo
             echo "- Operation: \`$OPERATION\`"
             echo "- Workflow revision: \`$REVISION\`"
+            if [[ "$OPERATION" == deploy ]]; then
+              echo "- Previously deployed: \`$PREVIOUS_REVISION\`"
+              echo "- Impact profile: \`$IMPACT_PROFILE\`"
+              echo "- Runtime changed: \`$RUNTIME_CHANGED\`"
+              echo "- Deployment executed: \`$SHOULD_DEPLOY\`"
+              echo "- Impact reasons: \`$IMPACT_REASONS\`"
+            fi
             if [[ -n "$RELEASE_ID" ]]; then
               echo "- Requested release: \`$RELEASE_ID\`"
             fi

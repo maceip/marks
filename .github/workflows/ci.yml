@@ -1,23 +1,23 @@
-# What this workflow is for:
-#   `test` — compile, format, typecheck, unit/integration suites that do not
-#   start the production binary (including in-process room_collab).
-#   `service-collab` — a live marks-server, a VITE_MARKS_DATA_MODE=service
-#   client, Playwright artifact/admission/two-browser/durable-edit/reload/
-#   offline/import proof in Chromium, Firefox, and WebKit, and two native ESBT
-#   peers converging on the UI-created document.
-#
-# What it is not:
-#   `npm run test:harness` is helper-unit tests. `smoke:platforms` stays local.
-#   CI proves isolated browser replicas, native multi-peer rooms, and Wasm
-#   plumbing units. The scheduled workflow separately reruns the Chromium
-#   release shape and enforces large-document UI budgets.
-#   Floating `stable` is forbidden: pin rust-toolchain.toml / rust-version.
+# Incremental required CI. `impact` computes one conservative profile from the
+# complete base..head diff. Unknown paths, test-selection changes, dependency
+# contracts, and browser/protocol-sensitive code fail toward the full aggregate
+# plus Chromium/Firefox/WebKit matrix. The nightly workflow always remains full.
 name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      coverage:
+        description: Coverage profile override
+        required: true
+        default: full
+        type: choice
+        options:
+          - full
+          - incremental
 
 permissions:
   contents: read
@@ -26,7 +26,94 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  impact:
+    name: change impact
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      profile: ${{ steps.classify.outputs.profile }}
+      runtime_changed: ${{ steps.classify.outputs.runtime_changed }}
+      run_rust: ${{ steps.classify.outputs.run_rust }}
+      run_web: ${{ steps.classify.outputs.run_web }}
+      run_harness: ${{ steps.classify.outputs.run_harness }}
+      run_aggregate: ${{ steps.classify.outputs.run_aggregate }}
+      run_service: ${{ steps.classify.outputs.run_service }}
+      browser_matrix: ${{ steps.classify.outputs.browser_matrix }}
+      changed_path_count: ${{ steps.classify.outputs.changed_path_count }}
+      reasons: ${{ steps.classify.outputs.reasons }}
+    steps:
+      - name: Checkout complete history for impact analysis
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js v24
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Classify the complete change
+        id: classify
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BASE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+          COVERAGE_OVERRIDE: ${{ inputs.coverage }}
+        run: |
+          set -euo pipefail
+          head_revision=$HEAD_REVISION
+          case "$EVENT_NAME" in
+            push)
+              base_revision=$PUSH_BASE
+              ;;
+            pull_request)
+              base_revision=$PR_BASE
+              ;;
+            workflow_dispatch)
+              base_revision=$(git rev-parse "${head_revision}^" 2>/dev/null || printf '%040d' 0)
+              ;;
+            *)
+              echo "unsupported CI event: $EVENT_NAME" >&2
+              exit 2
+              ;;
+          esac
+
+          [[ "$base_revision" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$head_revision" =~ ^[0-9a-f]{40}$ ]]
+          force=()
+          if [[ "$EVENT_NAME" == workflow_dispatch && "$COVERAGE_OVERRIDE" == full ]]; then
+            force=(--force-full)
+          fi
+          node scripts/ci-impact.mjs \
+            --base "$base_revision" \
+            --head "$head_revision" \
+            --github-output "$GITHUB_OUTPUT" \
+            "${force[@]}"
+
+      - name: Record impact receipt
+        shell: bash
+        env:
+          PROFILE: ${{ steps.classify.outputs.profile }}
+          PATH_COUNT: ${{ steps.classify.outputs.changed_path_count }}
+          REASONS: ${{ steps.classify.outputs.reasons }}
+          RUNTIME_CHANGED: ${{ steps.classify.outputs.runtime_changed }}
+          BROWSERS: ${{ steps.classify.outputs.browser_matrix }}
+        run: |
+          {
+            echo '### CI impact receipt'
+            echo
+            echo "- Profile: \`$PROFILE\`"
+            echo "- Changed paths: \`$PATH_COUNT\`"
+            echo "- Runtime changed: \`$RUNTIME_CHANGED\`"
+            echo "- Service browsers: \`$BROWSERS\`"
+            echo "- Reasons: \`$REASONS\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   test:
+    needs: impact
+    if: needs.impact.outputs.run_aggregate == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -45,13 +132,25 @@ jobs:
             exit 1
           fi
 
+      - name: Restore successive Rust build state
+        if: needs.impact.outputs.run_rust == 'true'
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-rust-1.88.0-${{ hashFiles('Cargo.lock') }}-aggregate-current
+
       - name: Install pinned Rust toolchain
+        if: needs.impact.outputs.run_rust == 'true'
         uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: clippy, rustfmt
           targets: wasm32-unknown-unknown
 
       - name: Refuse rustc drift from rust-version
+        if: needs.impact.outputs.run_rust == 'true'
         run: |
           rustc -vV
           cargo -vV
@@ -72,70 +171,104 @@ jobs:
           esac
 
       - name: Rust format
+        if: needs.impact.outputs.run_rust == 'true'
         run: cargo fmt --all --check
 
       - name: Rust workspace tests
+        if: needs.impact.outputs.run_rust == 'true'
         run: cargo test --workspace --locked
 
       - name: Rust workspace lint
+        if: needs.impact.outputs.run_rust == 'true'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Setup Node.js v24
+        if: needs.impact.outputs.run_web == 'true' || needs.impact.outputs.run_harness == 'true'
         uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: 'npm'
 
       - name: Install dependencies
+        if: needs.impact.outputs.run_web == 'true' || needs.impact.outputs.run_harness == 'true'
         run: npm ci
 
+      - name: Validate workflow and deployment shell contracts
+        if: needs.impact.outputs.run_harness == 'true'
+        run: |
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          bash -n scripts/deploy-secure-build.sh deploy/remote-release.sh scripts/run-service-ci.sh
+
       - name: Typecheck
+        if: needs.impact.outputs.run_web == 'true'
         run: npm run typecheck
 
       - name: Verify checked-in ESBT component, WIT, codec, and provenance
+        if: needs.impact.outputs.run_web == 'true'
         run: npm run verify:esbt
 
       - name: Browser unit tests
+        if: needs.impact.outputs.run_web == 'true'
         run: npm run test:browser
 
       - name: Product boundary unit tests
+        if: needs.impact.outputs.run_web == 'true'
         run: npm run test:surface
 
       - name: Markdown renderer tests
+        if: needs.impact.outputs.run_web == 'true'
         run: npm run test:markdown
 
       - name: Benchmark fixture and receipt tests
+        if: needs.impact.outputs.run_web == 'true'
         run: npm run test:bench
 
       - name: ESBT component client plumbing tests
+        if: needs.impact.outputs.run_web == 'true'
         run: npm run test:component
 
       - name: Browser auth protocol tests
+        if: needs.impact.outputs.run_web == 'true'
         run: npm run test:auth
 
       - name: Harness helper unit tests
+        if: needs.impact.outputs.run_harness == 'true'
         run: npm run test:harness
 
       - name: Production client build
+        if: needs.impact.outputs.run_web == 'true'
         run: npm run build
 
       - name: Production UI budgets
+        if: needs.impact.outputs.run_web == 'true'
         run: npm run check:ui-budgets
 
       - name: Rust multi-peer room collaboration
+        if: needs.impact.outputs.run_rust == 'true'
         run: cargo test -p marks-server --test room_collab --locked
 
   service-collab:
+    needs: impact
+    if: needs.impact.outputs.run_service == 'true'
     name: service-mode ${{ matrix.browser }} and multi-peer
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        browser: [chromium, firefox, webkit]
+        browser: ${{ fromJSON(needs.impact.outputs.browser_matrix) }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+
+      - name: Restore successive Rust build state
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-rust-1.88.0-${{ hashFiles('Cargo.lock') }}-service-current
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@1.88.0
@@ -166,9 +299,67 @@ jobs:
       - name: Install Playwright browser
         run: npx playwright install --with-deps ${{ matrix.browser }}
 
-      - name: Live server, service UI, and two-peer room
-        run: bash scripts/run-service-ci.sh --bin target/debug/marks-server --static-dir client/dist --browser ${{ matrix.browser }}
+      - name: Live service UI and browser-independent native peer proof
+        shell: bash
         env:
+          BROWSER: ${{ matrix.browser }}
           MARKS_BROWSER: ${{ matrix.browser }}
           MARKS_REQUIRE_RELEASE: '1'
           MARKS_TEST_SERVICE_WORKER: '1'
+        run: |
+          set -euo pipefail
+          args=(
+            --bin target/debug/marks-server
+            --static-dir client/dist
+            --browser "$BROWSER"
+          )
+          if [[ "$BROWSER" != chromium ]]; then
+            args+=(--skip-collab)
+          fi
+          bash scripts/run-service-ci.sh "${args[@]}"
+
+  gate:
+    name: CI gate
+    if: always()
+    needs: [impact, test, service-collab]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require exactly the classified checks
+        shell: bash
+        env:
+          IMPACT_RESULT: ${{ needs.impact.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          SERVICE_RESULT: ${{ needs.service-collab.result }}
+          RUN_AGGREGATE: ${{ needs.impact.outputs.run_aggregate }}
+          RUN_SERVICE: ${{ needs.impact.outputs.run_service }}
+          PROFILE: ${{ needs.impact.outputs.profile }}
+        run: |
+          set -euo pipefail
+          [[ "$IMPACT_RESULT" == success ]] || {
+            echo "impact classification did not succeed: $IMPACT_RESULT" >&2
+            exit 1
+          }
+          if [[ "$RUN_AGGREGATE" == true ]]; then
+            [[ "$TEST_RESULT" == success ]] || {
+              echo "classified aggregate checks did not succeed: $TEST_RESULT" >&2
+              exit 1
+            }
+          else
+            [[ "$TEST_RESULT" == skipped ]] || {
+              echo "unclassified aggregate job result: $TEST_RESULT" >&2
+              exit 1
+            }
+          fi
+          if [[ "$RUN_SERVICE" == true ]]; then
+            [[ "$SERVICE_RESULT" == success ]] || {
+              echo "classified service checks did not succeed: $SERVICE_RESULT" >&2
+              exit 1
+            }
+          else
+            [[ "$SERVICE_RESULT" == skipped ]] || {
+              echo "unclassified service job result: $SERVICE_RESULT" >&2
+              exit 1
+            }
+          fi
+          echo "CI profile $PROFILE passed exactly its required jobs"
