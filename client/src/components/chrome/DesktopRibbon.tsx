@@ -10,6 +10,7 @@ import {
 import type { CollabSession } from '../../collab/types';
 import { assignKeyTips } from '../../commands/keytips.ts';
 import { solveRibbonLayout, type RibbonLayout } from '../../commands/layout.ts';
+import { ribbonTask } from '../../commands/projection.ts';
 import { useCommandCenter } from '../../commands/context';
 import { COMMANDS } from '../../commands/registry.ts';
 import type {
@@ -74,7 +75,9 @@ const TAB_PREFERRED: Partial<Record<RibbonTabId, string>> = {
 
 export function DesktopRibbon(props: DesktopRibbonProps) {
   const center = useCommandCenter();
-  const [tab, setTab] = useState<RibbonTabId>('home');
+  const [tab, setTab] = useState<RibbonTabId>(() =>
+    ribbonTask(center.environment) === 'inspect' ? 'view' : 'home',
+  );
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [galleryOpen, setGalleryOpen] = useState<string | null>(null);
   const [keyTipLayer, setKeyTipLayer] = useState<KeyTipLayer>(null);
@@ -87,6 +90,17 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
     getPresenceDisplay(props.mode === 'preview'));
 
   const tabs = center.ribbon;
+  const task = ribbonTask(center.environment);
+  const lastRibbonTask = useRef(task);
+  const taskMotion = useRef<'compose' | 'inspect' | null>(null);
+  if (lastRibbonTask.current !== task) {
+    lastRibbonTask.current = task;
+    taskMotion.current = task;
+    const preferred = task === 'inspect'
+      ? tabs.find((candidate) => candidate.id === 'view') ?? tabs.find((candidate) => candidate.id === 'review')
+      : tabs.find((candidate) => candidate.id === 'home');
+    if (preferred && preferred.id !== tab) setTab(preferred.id);
+  }
   const selectedTab = tabs.find((candidate) => candidate.id === tab) ?? tabs[0];
   const groups = selectedTab?.groups ?? [];
   const layout = useMemo(() => {
@@ -122,14 +136,6 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
     window.addEventListener(PRESENCE_DISPLAY_EVENT, sync);
     return () => window.removeEventListener(PRESENCE_DISPLAY_EVENT, sync);
   }, [props.mode]);
-
-  useEffect(() => {
-    if (tabs.some((candidate) => candidate.id === tab)) return;
-    const preferred = center.environment.mode === 'preview'
-      ? tabs.find((candidate) => candidate.id === 'view' || candidate.id === 'review')
-      : tabs.find((candidate) => candidate.id === 'home');
-    setTab(preferred?.id ?? tabs[0]?.id ?? 'home');
-  }, [center.environment.mode, tab, tabs]);
 
   useEffect(() => {
     const active = center.runs.findLast((run) =>
@@ -217,6 +223,7 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
       ref={rootRef}
       className={`ribbon-body${keyTipLayer ? ' keytips-visible' : ''}`}
       data-command-context={center.environment.context}
+      data-ribbon-task={task}
       data-agent-active={center.raised.size > 0 ? 'true' : undefined}
     >
       <RibbonTabList role="tablist">
@@ -245,7 +252,14 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
       </RibbonTabList>
 
       <RibbonDeck>
-        <RibbonToolbar className="ribbon-deck-enter" aria-label={`${selectedTab?.label ?? 'Command'} commands`}>
+        <RibbonToolbar
+          key={`${task}-${selectedTab?.id ?? 'home'}`}
+          className={`ribbon-deck-enter${taskMotion.current ? ` ribbon-deck-${taskMotion.current}` : ''}`}
+          aria-label={`${selectedTab?.label ?? 'Command'} commands`}
+          onAnimationEnd={() => {
+            taskMotion.current = null;
+          }}
+        >
           {visibleGroups.map((group) => (
             <CommandGroup
               key={group.id}

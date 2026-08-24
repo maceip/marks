@@ -1,5 +1,6 @@
 import type { EditorView } from '@codemirror/view';
 import { useCommandCenter } from '../../commands/context';
+import { ribbonTask } from '../../commands/projection.ts';
 import { Glyph } from '../glyphs/Glyph';
 
 interface MiniToolbarProps {
@@ -10,7 +11,7 @@ interface MiniToolbarProps {
 
 export function MiniToolbar({ selected, disabled: _disabled, getView: _getView }: MiniToolbarProps) {
   const center = useCommandCenter();
-  if (selected <= 0 || center.environment.mode === 'preview') return null;
+  if (selected <= 0 || ribbonTask(center.environment) === 'inspect') return null;
   const commands = center.commands('mini');
 
   return (

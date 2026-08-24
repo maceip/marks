@@ -202,6 +202,8 @@
   --layout-mobile-ribbon-height: 104px;
   --layout-statusbar-height: 30px;
   --layout-sidebar-width: 268px;
+  /* Thinner than Material 3 navigation rail (80dp). */
+  --layout-app-rail-width: 72px;
 }
 
 [data-theme='dark'] {

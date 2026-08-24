@@ -59,6 +59,9 @@ const AppOverlays = lazy(() =>
 const CommandProvider = lazy(() =>
   import('./commands/react').then((module) => ({ default: module.CommandProvider })),
 );
+const AppRail = lazy(() =>
+  import('./components/chrome/AppRail').then((module) => ({ default: module.AppRail })),
+);
 const AgentPill = lazy(() =>
   import('./components/agent/AgentPill').then((module) => ({ default: module.AgentPill })),
 );
@@ -774,6 +777,7 @@ export function App() {
     capabilities: session?.capabilities() ?? null,
     workspaceKind,
     mode,
+    activePane: surface.lastSurface === 'preview' ? 'preview' : 'editor',
     shell: posture.shell,
     context: cursor.context.kind,
     selectionLength: cursor.selected,
@@ -801,6 +805,7 @@ export function App() {
     posture.shell,
     reviewSurface?.type,
     session,
+    surface.lastSurface,
     surface.voiceStatus,
     surface.voiceSupported,
     theme,
@@ -854,6 +859,11 @@ export function App() {
       )}
 
       <main className={`main route-${route.name}`}>
+        {posture.foldable && route.name === 'document' && !focusMode && (
+          <Suspense fallback={null}>
+            <AppRail />
+          </Suspense>
+        )}
         <TopBar
           title={route.name === 'benchmark' ? 'Engine benchmark' : route.name === 'link' ? 'Phone confirmation' : title}
           docId={docId}
@@ -921,6 +931,11 @@ export function App() {
           <div
             className="workspace-shell"
             onContextMenuCapture={surface.onContextMenu}
+            onPointerDownCapture={(event) => {
+              const target = event.target as HTMLElement;
+              if (target.closest('.preview-pane')) surface.setLastSurface('preview');
+              else if (target.closest('.editor-pane')) surface.setLastSurface('editor');
+            }}
             onFocusCapture={(event) => {
               const target = event.target as HTMLElement;
               if (target.closest('.preview-pane')) surface.setLastSurface('preview');

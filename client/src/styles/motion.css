@@ -29,6 +29,12 @@
 @keyframes motion-ribbon-replace {
   from { opacity: 0; transform: translateY(var(--motion-translate-sm)); }
 }
+@keyframes motion-ribbon-inspect {
+  from { opacity: 0; transform: translateX(var(--motion-translate-sm)); }
+}
+@keyframes motion-ribbon-compose {
+  from { opacity: 0; transform: translateX(calc(-1 * var(--motion-translate-sm))); }
+}
 @keyframes motion-status-pulse { 50% { opacity: 0.45; transform: scale(0.92); } }
 
 .motion-fade-in { animation: motion-fade-in var(--motion-fast) var(--ease-standard) both; }
@@ -43,6 +49,8 @@
 .motion-toast-in { animation: motion-toast-in var(--motion-medium) var(--ease-spring) both; }
 .motion-toast-out { animation: motion-toast-out var(--motion-fast) var(--ease-accelerate) both; }
 .motion-ribbon-replace { animation: motion-ribbon-replace var(--motion-fast) var(--ease-decelerate) both; }
+.motion-ribbon-inspect { animation: motion-ribbon-inspect var(--motion-fast) var(--ease-decelerate) both; }
+.motion-ribbon-compose { animation: motion-ribbon-compose var(--motion-fast) var(--ease-decelerate) both; }
 .motion-status-pulse { animation: motion-status-pulse var(--motion-deliberate) var(--ease-standard) infinite; }
 
 /* The pill is the sole dimension-motion exception: containment and clipping bound reflow. */

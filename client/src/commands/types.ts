@@ -7,6 +7,8 @@ import type { GlyphName } from '../components/glyphs/Glyph';
 export type CommandId = string;
 export type CommandSource = 'human' | 'keyboard' | 'palette' | 'agent' | 'bridge';
 export type CommandModality = 'edit' | 'split' | 'preview';
+export type RibbonPane = 'editor' | 'preview';
+export type RibbonTask = 'compose' | 'inspect';
 export type CommandSurface = 'ribbon' | 'phone' | 'foldable' | 'mini' | 'palette' | 'quick-access' | 'agent';
 export type CommandRisk = 'read' | 'write' | 'external' | 'destructive';
 export type CommandCapability = keyof Pick<
@@ -141,6 +143,7 @@ export interface CommandEnvironment {
   capabilities: DocumentCapabilities | null;
   workspaceKind: 'local' | 'scratch' | 'session';
   mode: CommandModality;
+  activePane: RibbonPane;
   shell: Shell;
   context: EditorContextKind;
   selectionLength: number;

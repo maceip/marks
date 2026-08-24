@@ -4,7 +4,6 @@ import type { Posture } from '../../lib/posture';
 import type { UiActionId } from '../../lib/ui-actions';
 import type { ViewMode } from '../shell/TopBar';
 import { DesktopRibbon } from './DesktopRibbon';
-import { FoldableRibbon } from './FoldableRibbon';
 import { MiniToolbar } from './MiniToolbar';
 import { PhoneComposer } from './PhoneComposer';
 import { LiquidDock } from '../shell/LiquidDock';
@@ -63,15 +62,6 @@ export function DocumentChrome(props: DocumentChromeProps) {
     );
   }
 
-  if (props.posture.foldable) {
-    return (
-      <>
-        <FoldableRibbon posture={props.posture} />
-        <MiniToolbar selected={props.selected} disabled={!props.documentReady} getView={props.getView} />
-      </>
-    );
-  }
-
   return (
     <>
       <DesktopRibbon
@@ -99,14 +89,16 @@ export function DocumentChrome(props: DocumentChromeProps) {
         onNotify={props.onNotify}
       />
       <MiniToolbar selected={props.selected} disabled={!props.documentReady} getView={props.getView} />
-      <LiquidDock
-        onCommands={() => props.onAction('command-palette')}
-        onComments={() => props.onAction('comments')}
-        onHistory={() => props.onAction('history')}
-        onVoice={props.onVoice}
-        voiceActive={props.voiceActive}
-        voiceSupported={props.voiceSupported}
-      />
+      {!props.posture.foldable && (
+        <LiquidDock
+          onCommands={() => props.onAction('command-palette')}
+          onComments={() => props.onAction('comments')}
+          onHistory={() => props.onAction('history')}
+          onVoice={props.onVoice}
+          voiceActive={props.voiceActive}
+          voiceSupported={props.voiceSupported}
+        />
+      )}
     </>
   );
 }

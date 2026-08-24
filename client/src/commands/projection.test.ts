@@ -12,6 +12,7 @@ function environment(patch: Partial<CommandEnvironment> = {}): CommandEnvironmen
     capabilities: { role: 'owner', edit: true, comment: true, saveVersion: true, manageShares: true },
     workspaceKind: 'session',
     mode: 'split',
+    activePane: 'editor',
     shell: 'desktop',
     context: 'text',
     selectionLength: 0,
@@ -35,6 +36,34 @@ test('preview projection removes mutation controls but preserves reading control
   assert.equal(commands.some((command) => command.id === 'view.editor'), true);
   assert.equal(commands.some((command) => command.id === 'review.comments'), true);
   assert.equal(commands.some((command) => command.id === 'document.print'), true);
+});
+
+test('desktop split inspects the rendered pane without leaving split mode', () => {
+  const inspect = composeRibbon(environment({ mode: 'split', activePane: 'preview' }));
+  const compose = composeRibbon(environment({ mode: 'split', activePane: 'editor' }));
+  const inspectCommands = inspect.flatMap((tab) => tab.groups.flatMap((group) => group.commands));
+  const composeCommands = compose.flatMap((tab) => tab.groups.flatMap((group) => group.commands));
+  assert.equal(inspectCommands.some((command) => command.id === 'format.bold'), false);
+  assert.equal(inspectCommands.some((command) => command.id === 'review.comments'), true);
+  assert.equal(composeCommands.some((command) => command.id === 'format.bold'), true);
+  assert.equal(inspect.some((tab) => tab.id === 'view'), true);
+});
+
+test('foldable split keeps the compose ribbon until the app rail changes the view', () => {
+  for (const shell of ['fold-book', 'fold-laptop'] as const) {
+    const split = composeRibbon(environment({
+      mode: 'split',
+      activePane: 'preview',
+      shell,
+    }));
+    const preview = composeRibbon(environment({
+      mode: 'preview',
+      activePane: 'preview',
+      shell,
+    }));
+    assert.equal(split.flatMap((tab) => tab.groups.flatMap((group) => group.commands)).some((command) => command.id === 'format.bold'), true, shell);
+    assert.equal(preview.flatMap((tab) => tab.groups.flatMap((group) => group.commands)).some((command) => command.id === 'format.bold'), false, shell);
+  }
 });
 
 test('role and identity gates are explicit and do not rely on button handlers', () => {
@@ -61,7 +90,7 @@ test('contextual task tabs exist only for the selected object', () => {
   assert.equal(imageTabs.find((tab) => tab.id === 'picture')?.contextual, true);
 });
 
-test('foldables receive a distinct hinge-safe command projection', () => {
+test('foldables still project a dedicated command surface for the view rail', () => {
   const book = projectCommands(environment({ shell: 'fold-book', context: 'image' }), 'foldable');
   assert.equal(book.some((command) => command.id === 'format.bold'), true);
   assert.equal(book.some((command) => command.id === 'picture.medium' && command.contextual), true);

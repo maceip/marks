@@ -59,6 +59,7 @@ Reduced motion is selected either by `prefers-reduced-motion: reduce` or `data-m
 | Trigger | Property | Start | End | Duration | Easing | Delay/stagger | Interruption | Reduced-motion replacement |
 |---|---|---|---|---|---|---|---|---|
 | Active ribbon tab/deck is replaced | opacity, transform | 0; small Y | 1; rest | fast | decelerate | optional standard stagger for groups | A new selection replaces the target and continues from computed state; no queue | Replace deck instantly |
+| Desktop split inspects the rendered pane, or a foldable rail switches to Preview | opacity, transform | 0; small X | 1; rest | fast | decelerate | none | The inspect/compose replacement is a new deck; it does not queue behind the previous tab animation | Replace deck instantly |
 
 ### Async control
 

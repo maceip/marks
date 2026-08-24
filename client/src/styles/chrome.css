@@ -1,4 +1,4 @@
-/* Document chrome: ribbon, 3D glyphs, phone composer, foldable stage.
+/* Document chrome: ribbon, 3D glyphs, phone composer, unfolded view rail.
    Loaded only with the document route so home keeps its CSS budget. */
 
 .quick-access {
@@ -25,7 +25,8 @@
 .phone-sheet-grid .glyph,
 .mini-toolbar .glyph,
 .draft-tools-modes .glyph,
-.liquid-dock .glyph {
+.liquid-dock .glyph,
+.app-rail .glyph {
   pointer-events: auto;
 }
 
@@ -37,6 +38,7 @@
 .ribbon-body {
   display: grid;
   grid-template-rows: 29px minmax(0, 1fr);
+  width: 100%;
   min-width: 0;
   min-height: 0;
 }
@@ -453,9 +455,23 @@
 .style-h3 span { font-size: 12px; color: var(--color-action); }
 .style-h4 span { font-size: 11px; }
 
-.ribbon-deck-enter { animation: ribbon-deck-in var(--duration-medium) var(--ease-out) both; }
+.ribbon-deck-enter { animation: ribbon-deck-in var(--duration-fast) var(--ease-out) both; }
+.ribbon-deck-inspect { animation-name: ribbon-deck-inspect-in; animation-timing-function: var(--ease-decelerate); }
+.ribbon-deck-compose { animation-name: ribbon-deck-compose-in; animation-timing-function: var(--ease-decelerate); }
 @keyframes ribbon-deck-in {
-  from { opacity: 0; transform: translateY(4px); }
+  from { opacity: 0; transform: translateY(var(--motion-translate-sm)); }
+}
+@keyframes ribbon-deck-inspect-in {
+  from { opacity: 0; transform: translateX(var(--motion-translate-sm)); }
+}
+@keyframes ribbon-deck-compose-in {
+  from { opacity: 0; transform: translateX(calc(-1 * var(--motion-translate-sm))); }
+}
+@keyframes ribbon-deck-reduced { from { opacity: 1; } to { opacity: 1; } }
+:root[data-motion='reduced'] .ribbon-deck-enter,
+:root[data-motion='reduced'] .ribbon-deck-inspect,
+:root[data-motion='reduced'] .ribbon-deck-compose {
+  animation-name: ribbon-deck-reduced;
 }
 
 /* The material host establishes z-order for ordinary children. Keep this
@@ -773,335 +789,118 @@
   min-height: calc(48px + env(safe-area-inset-bottom));
 }
 
-/* Foldables get a physical-segment projection rather than the desktop ribbon.
-   No interactive control spans the hinge. */
-.fold-ribbon {
-  position: relative;
-  display: grid;
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-  border-top: 1px solid var(--material-border);
-  background: color-mix(in srgb, var(--material-tint) 55%, transparent);
-}
-
-.fold-ribbon-vertical {
-  grid-template-columns: minmax(0, var(--segment-0-width)) var(--hinge-gap) minmax(0, var(--segment-1-width));
-}
-
-.fold-ribbon-segment {
-  position: relative;
-  display: grid;
-  grid-template-rows: 29px minmax(0, 1fr);
-  min-width: 0;
-  overflow: hidden;
-  isolation: isolate;
-}
-
-.fold-ribbon-primary { grid-column: 1; }
-.fold-ribbon-hinge {
-  grid-column: 2;
-  background: linear-gradient(90deg, rgb(4 10 28 / 5%), transparent 35% 65%, rgb(4 10 28 / 5%));
-  box-shadow: inset 1px 0 var(--material-border), inset -1px 0 var(--material-border);
-}
-.fold-ribbon-vertical .fold-ribbon-companion { grid-column: 3; }
-
-.fold-ribbon-head {
-  position: relative;
-  z-index: 1;
+/* Unfolded foldable: one wide canvas plus a view rail thinner than Material 3's 80dp. */
+.app-rail {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 24;
   display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: var(--layout-app-rail-width);
+  padding: 8px 4px;
+  border-right: 1px solid var(--material-border);
+  background: var(--material-refraction), var(--material-tint-strong);
+}
+
+.app-rail button {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  justify-content: center;
+  gap: 6px;
   min-width: 0;
-  padding: 2px 8px 0;
-  border-bottom: 1px solid var(--material-border);
-}
-
-.fold-ribbon-head > div {
-  display: flex;
-  align-self: stretch;
-  gap: 2px;
-}
-
-.fold-ribbon-head button {
-  min-height: 26px;
-  padding: 0 8px;
+  min-height: var(--control-height-touch);
+  padding: 8px 2px;
   border: 0;
-  border-bottom: 2px solid transparent;
+  border-radius: 16px;
   background: transparent;
   color: var(--color-fg-muted);
-  font-size: 10.5px;
-  font-weight: 620;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
   cursor: pointer;
 }
 
-.fold-ribbon-head button[aria-selected='true'] {
-  border-bottom-color: var(--color-action);
+.app-rail button:hover {
+  color: var(--color-fg-default);
+  background: color-mix(in srgb, var(--color-bg-raised) 55%, transparent);
+}
+
+.app-rail button[aria-pressed='true'] {
   color: var(--color-action);
+  background: var(--color-action-soft);
 }
 
-.fold-ribbon-head > span,
-.fold-ribbon-head strong {
-  overflow: hidden;
-  color: var(--color-fg-subtle);
-  font: 650 9px/1 var(--font-family-mono);
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  text-transform: uppercase;
-  letter-spacing: .055em;
+.app-rail button:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
 }
 
-.fold-command-rail {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  padding: 4px 6px;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.fold-command-rail::-webkit-scrollbar { display: none; }
-
-.fold-command {
-  position: relative;
-  display: inline-grid;
-  flex: 0 0 auto;
-  place-items: center;
-  gap: 1px;
-  min-width: 48px;
-  min-height: 52px;
-  padding: 3px 5px;
-  border: 1px solid var(--material-border);
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--color-bg-raised) 78%, transparent);
-  color: var(--color-fg-muted);
-  box-shadow: inset 0 1px var(--material-highlight);
-  font-size: 8.5px;
-  font-weight: 620;
-  cursor: pointer;
-}
-
-.fold-command > span {
-  max-width: 62px;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.fold-command:hover:not(:disabled) { color: var(--color-fg-default); border-color: color-mix(in srgb, var(--color-action) 25%, var(--material-border)); }
-.fold-command.active { color: var(--color-action); background: var(--color-action-soft); }
-.fold-command.contextual { color: var(--color-brand-positive); border-color: color-mix(in srgb, var(--color-brand-positive) 32%, var(--material-border)); }
-.fold-command:disabled { opacity: .38; cursor: not-allowed; }
-.fold-command.agent-raised { border-color: var(--color-brand-positive); box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-brand-positive) 13%, transparent), inset 0 1px var(--material-highlight); }
-.fold-command.agent-running::after {
-  position: absolute;
-  inset: -3px;
-  border: 2px solid var(--color-brand-positive);
-  border-radius: inherit;
-  content: '';
-  animation: agent-command-pulse var(--motion-agent-command-pulse) ease-in-out infinite alternate;
-  pointer-events: none;
-}
-.fold-command.agent-awaiting-approval::after {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  display: grid;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--color-brand-warm);
-  color: white;
-  content: '!';
-  font: 800 10px/1 sans-serif;
-}
-
-.fold-command-library {
-  position: fixed;
-  top: calc(var(--ribbon-height) + 8px);
-  right: max(10px, env(safe-area-inset-right));
-  z-index: 92;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  width: min(calc(var(--segment-1-width) - 20px), 520px);
-  max-height: min(560px, calc(100vh - var(--ribbon-height) - 20px));
-  overflow: hidden;
-  border: 1px solid var(--material-border);
-  border-radius: 20px;
-  background: var(--material-refraction), var(--material-tint-strong);
-  box-shadow: var(--elevation-lg);
-  backdrop-filter: blur(26px) saturate(1.2);
-}
-
-.fold-command-library > header {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px;
-  border-bottom: 1px solid var(--material-border);
-}
-.fold-command-library > header > div { display: grid; }
-.fold-command-library > header strong { font-size: 13px; }
-.fold-command-library > header span { color: var(--color-fg-subtle); font-size: 10px; }
-.fold-command-library > div:last-child {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-  padding: 8px;
-  overflow: auto;
-}
-.fold-command.detailed {
-  grid-template-columns: 25px minmax(0, 1fr);
-  grid-template-rows: auto auto;
-  justify-items: start;
-  min-width: 0;
-  min-height: 58px;
-  padding: 7px;
-  text-align: left;
-}
-.fold-command.detailed .glyph { grid-row: 1 / 3; }
-.fold-command.detailed > span { max-width: 100%; color: var(--color-fg-default); font-size: 10px; }
-.fold-command.detailed small {
-  width: 100%;
-  overflow: hidden;
-  color: var(--color-fg-subtle);
-  font-size: 8.5px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.fold-ribbon-horizontal { display: block; }
-.fold-ribbon-horizontal .fold-ribbon-primary { height: 100%; }
-.fold-ribbon-horizontal .fold-ribbon-companion {
-  position: fixed;
-  top: calc(var(--segment-0-height) + var(--hinge-gap) + 8px);
-  right: max(10px, env(safe-area-inset-right));
-  left: max(10px, env(safe-area-inset-left));
-  z-index: 46;
-  height: 84px;
-  grid-template-rows: 24px minmax(0, 1fr);
-  border: 1px solid var(--material-border);
-  border-radius: 19px;
-  background: var(--material-refraction), var(--material-tint-strong);
-  box-shadow: var(--elevation-lg);
-  backdrop-filter: blur(24px) saturate(1.15);
-}
-.fold-ribbon-horizontal .fold-ribbon-companion .fold-ribbon-head { padding-top: 0; }
-.fold-ribbon-horizontal .fold-ribbon-companion .fold-command { min-height: 48px; }
-.fold-ribbon-horizontal .fold-command-library {
-  right: 12px;
-  left: 12px;
-  width: auto;
-}
-
-:root[data-shell='fold-book'],
-:root[data-shell='fold-laptop'] {
-  --ribbon-height: 148px;
+.app-rail button:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 var(--border-width-strong) color-mix(in srgb, var(--color-action) 42%, transparent);
 }
 
 :root[data-shell='fold-book'] .main.route-document,
 :root[data-shell='fold-laptop'] .main.route-document {
-  grid-template-rows: var(--ribbon-height) minmax(0, 1fr) var(--layout-statusbar-height);
+  position: relative;
+  grid-template-rows: var(--layout-ribbon-height) minmax(0, 1fr) var(--layout-statusbar-height);
   padding-bottom: 0;
+  padding-left: var(--layout-app-rail-width);
 }
 
 :root[data-shell='fold-book'] .app-ribbon.ribbon-document,
 :root[data-shell='fold-laptop'] .app-ribbon.ribbon-document {
   grid-template-rows: var(--layout-titlebar-height) minmax(0, 1fr);
+  width: 100%;
   background: var(--material-refraction), var(--material-tint-strong);
 }
 
-:root[data-shell='fold-book'] .app-ribbon .fold-ribbon,
-:root[data-shell='fold-laptop'] .app-ribbon .fold-ribbon {
-  position: relative;
-  inset: auto;
-  min-height: 0;
-  padding: 0;
-  overflow: visible;
-  border-top: 1px solid var(--material-border);
-  box-shadow: none;
+:root[data-shell='fold-book'] .app-ribbon .ribbon-body,
+:root[data-shell='fold-laptop'] .app-ribbon .ribbon-body {
+  width: 100%;
+  min-width: 0;
 }
 
 :root[data-shell='fold-book'] .statusbar,
 :root[data-shell='fold-laptop'] .statusbar { display: flex; }
 
-:root[data-shell='fold-book'] .workspace,
-:root[data-shell='fold-book'] .workspace.mode-edit,
-:root[data-shell='fold-book'] .workspace.mode-preview,
 :root[data-shell='fold-book'] .workspace.mode-split {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--hinge-gap, 28px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, calc(var(--segment-0-width) - var(--layout-app-rail-width))) var(--hinge-gap, 28px) minmax(0, 1fr);
 }
 
-:root[data-shell='fold-book'] .workspace .splitter {
+:root[data-shell='fold-book'] .workspace.mode-split .splitter {
   pointer-events: none;
   background: transparent;
 }
 
-:root[data-shell='fold-book'] .workspace.mode-edit .preview-pane,
-:root[data-shell='fold-book'] .workspace.mode-edit .fold-companion,
-:root[data-shell='fold-book'] .workspace.mode-preview .editor-pane {
-  display: flex;
-}
-
-:root[data-shell='fold-laptop'] .workspace,
 :root[data-shell='fold-laptop'] .workspace.mode-split {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) var(--hinge-gap, 24px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, var(--segment-0-height, 1fr)) var(--hinge-gap, 24px) minmax(0, 1fr);
 }
 
-:root[data-shell='fold-laptop'] .workspace .splitter {
-  cursor: row-resize;
+:root[data-shell='fold-laptop'] .workspace.mode-split .splitter {
+  pointer-events: none;
   background: transparent;
 }
 
-.fold-companion {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  background: var(--color-bg-surface);
+:root[data-shell='fold-laptop'] .workspace.mode-split .preview-pane {
+  border-left: 0;
+  border-top: 1px solid var(--color-border-default);
 }
 
-.fold-companion-tabs {
-  display: flex;
-  gap: 4px;
-  padding: 8px 10px 0;
-}
-
-.fold-companion-tabs button {
-  min-height: 32px;
-  padding: 0 10px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-pill);
-  background: transparent;
-  color: var(--color-fg-muted);
-  font-size: 11px;
-}
-
-.fold-companion-tabs button.active {
-  background: var(--color-action-soft);
-  color: var(--color-action);
-}
-
-.fold-companion-body {
-  min-height: 0;
-  flex: 1;
-  overflow: auto;
+:root[data-shell='fold-book'] .focus-mode .main.route-document,
+:root[data-shell='fold-laptop'] .focus-mode .main.route-document {
+  padding-left: 0;
 }
 
 :root[data-density='compact'] .ribbon-command { height: 42px; min-width: 46px; }
 :root[data-glass='reduced'] .phone-nav,
 :root[data-glass='reduced'] .phone-sheet,
-:root[data-glass='reduced'] .mini-toolbar {
+:root[data-glass='reduced'] .mini-toolbar,
+:root[data-glass='reduced'] .app-rail {
   background: var(--color-bg-raised);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;

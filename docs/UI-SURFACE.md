@@ -131,9 +131,12 @@ Reduced motion and the foundation glass tier keep the glyphs flat.
 
 The full desktop and studio ribbon is 148px in comfortable density and 132px
 in compact density. It collapses to the 48px titlebar with its titlebar
-control or `Control+F1`; the preference persists locally. Phone posture is a
-separate composer (write / preview / insert / AI / more) and does not expose
-an inapplicable collapsed state or Split mode.
+control or `Control+F1`; the preference persists locally. In two-column
+desktop split, clicking the rendered Markdown pane shifts the ribbon to
+inspect commands as fast as the motion tokens allow; clicking the editor
+restores compose commands. Phone posture is a separate composer (write /
+preview / insert / AI / more) and does not expose an inapplicable collapsed
+state or Split mode.
 
 Dictate remains visible as part of the command model. On browsers without the
 speech API it is disabled with an honest explanation; no interaction silently
@@ -190,11 +193,8 @@ fallback when those signals are absent. Shared fallback widths live in
 - **studio** — tablet mid-width: compact top ribbon, modal document drawer.
 - **desktop** — persistent document rail, full ribbon, selection mini-toolbar,
   and the floating liquid dock.
-- **fold-book** — two horizontal viewport segments: editor on the left,
-  companion stage (Preview / Outline / AI / Review) on the right, hinge gap
-  from segment geometry.
-- **fold-laptop** — stacked segments: editor above, preview below, hinge as
-  the splitter.
+- **fold-book** — one wide canvas with a 72px view rail (thinner than Material 3's 80dp navigation rail) for Markdown / Split / Preview. Split snaps the editor and preview to the vertical hinge. The ribbon spans the full remaining chrome width and follows the rail's view, not pane clicks.
+- **fold-laptop** — the same view rail and full-width ribbon; Split stacks source above preview on the horizontal hinge.
 
 `?marks-posture=fold-book` (or `fold-laptop`) forces a shell for walkthroughs
 when hardware segments are unavailable.
@@ -276,7 +276,7 @@ Before a UI handoff, verify at minimum:
 - persistent desktop rail and modal tablet/phone drawer behavior;
 - File, Home, Insert, Draw, AI, Review, and View ribbon decks plus contextual
   Picture / Table / Shape tools;
-- phone composer and fold-book companion (including `?marks-posture=`);
+- phone composer and unfolded foldable rail (including `?marks-posture=`);
 - ribbon collapse/expand and focus-mode escape path;
 - template creation, rename, duplicate, formatting, comments, history, share
   staging, preferences, command palette, outline, performance, and custom

@@ -10,6 +10,7 @@ function environment(): CommandEnvironment {
     capabilities: { role: 'owner', edit: true, comment: true, saveVersion: true, manageShares: true },
     workspaceKind: 'session',
     mode: 'edit',
+    activePane: 'editor',
     shell: 'desktop',
     context: 'text',
     selectionLength: 4,

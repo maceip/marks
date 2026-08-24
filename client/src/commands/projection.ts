@@ -9,6 +9,7 @@ import type {
   ProjectedCommandGroup,
   ProjectedRibbonTab,
   RibbonTabId,
+  RibbonTask,
 } from './types.ts';
 import { EMPTY_PARAMETERS } from './types.ts';
 
@@ -52,6 +53,22 @@ export interface CommandAvailability {
   reason?: string;
 }
 
+/**
+ * Which ribbon projection to show. Foldable unfolded follows the app-rail
+ * view. Desktop split follows whichever document pane last received a click.
+ */
+export function ribbonTask(environment: CommandEnvironment): RibbonTask {
+  if (environment.mode === 'preview') return 'inspect';
+  if (environment.mode === 'edit') return 'compose';
+  if (environment.shell === 'fold-book' || environment.shell === 'fold-laptop') return 'compose';
+  return environment.activePane === 'preview' ? 'inspect' : 'compose';
+}
+
+function ribbonCommandMode(environment: CommandEnvironment, surface: CommandSurface): CommandEnvironment['mode'] {
+  if (surface === 'ribbon' && ribbonTask(environment) === 'inspect') return 'preview';
+  return environment.mode;
+}
+
 export function commandAvailability(
   command: CommandDefinition,
   environment: CommandEnvironment,
@@ -59,13 +76,14 @@ export function commandAvailability(
 ): CommandAvailability {
   if (!command.surfaces.includes(surface)) return { visible: false, enabled: false };
 
+  const commandMode = ribbonCommandMode(environment, surface);
   let reason: string | undefined;
   if (command.requiresDocument && !environment.hasDocument) reason = 'Open a document first.';
   else if (command.requiresDocument && !environment.hydrated) reason = 'The document is still opening.';
-  else if (command.modes && !command.modes.includes(environment.mode)) {
-    reason = environment.mode === 'preview'
+  else if (command.modes && !command.modes.includes(commandMode)) {
+    reason = commandMode === 'preview'
       ? 'Switch to Editor or Split to change Markdown.'
-      : `This command is unavailable in ${environment.mode} mode.`;
+      : `This command is unavailable in ${commandMode} mode.`;
   } else if (command.contexts && !command.contexts.includes(environment.context)) {
     reason = `Select a ${command.contexts.join(' or ')} to use this command.`;
   } else if (command.workspaceKinds && !command.workspaceKinds.includes(environment.workspaceKind)) {
@@ -87,8 +105,10 @@ export function commandAvailability(
     reason = 'Split view is not available in the phone shell.';
   }
 
-  const contextualMismatch = Boolean(command.contexts && !command.contexts.includes(environment.context));
-  const modalityMismatch = Boolean(command.modes && !command.modes.includes(environment.mode));
+  const inspectRibbon = surface === 'ribbon' && ribbonTask(environment) === 'inspect';
+  const context = inspectRibbon ? 'text' : environment.context;
+  const contextualMismatch = Boolean(command.contexts && !command.contexts.includes(context));
+  const modalityMismatch = Boolean(command.modes && !command.modes.includes(commandMode));
   const identityMismatch = Boolean(
     (command.workspaceKinds && !command.workspaceKinds.includes(environment.workspaceKind)) ||
     (command.roles && !command.roles.includes(environment.capabilities?.role as never)),

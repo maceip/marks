@@ -108,6 +108,27 @@ export async function runSurface(session, { check }) {
   check('agent can restore split mode through the same command runtime',
     (await session.isVisible('.editor-pane')) && (await session.isVisible('.preview-pane')));
 
+  await session.click('.preview-pane');
+  await session.wait(100);
+  const inspectState = await session.evaluate(() => ({
+    task: document.querySelector('.ribbon-body')?.getAttribute('data-ribbon-task'),
+    bold: document.querySelectorAll('.ribbon-body [data-command-id="format.bold"]').length,
+    editor: Boolean(document.querySelector('.editor-pane')),
+    preview: Boolean(document.querySelector('.preview-pane')),
+  }));
+  check('desktop split inspects the rendered pane from a preview click',
+    inspectState.task === 'inspect' && inspectState.bold === 0 && inspectState.editor && inspectState.preview,
+    JSON.stringify(inspectState));
+  await session.click('.cm-content');
+  await session.wait(100);
+  const composeState = await session.evaluate(() => ({
+    task: document.querySelector('.ribbon-body')?.getAttribute('data-ribbon-task'),
+    bold: document.querySelectorAll('.ribbon-body [data-command-id="format.bold"]').length,
+  }));
+  check('desktop split restores compose commands from an editor click',
+    composeState.task === 'compose' && composeState.bold >= 1,
+    JSON.stringify(composeState));
+
   const ribbonWildState = await session.evaluate(() => document.documentElement.dataset.marksRibbonWild ?? 'missing');
   const ribbonWildEnabled = ribbonWildState === 'enabled';
   check('ribbon-wild build flag matches the expected state',
@@ -260,35 +281,82 @@ export async function runSurface(session, { check }) {
 
   const documentPath = await session.evaluate(() => location.pathname);
   await session.goto(`${documentPath}?marks-posture=fold-book`);
-  await session.waitForSelector('.fold-ribbon-vertical', { timeout: 20_000 });
-  check('book fold uses two hinge-safe ribbon segments',
-    (await session.count('.fold-ribbon-primary')) === 1 &&
-    (await session.count('.fold-ribbon-hinge')) === 1 &&
-    (await session.count('.fold-ribbon-companion')) === 1);
-  await session.click('.fold-more');
-  await session.waitForSelector('.fold-command-library');
+  await session.waitForSelector('.app-rail', { timeout: 20_000 });
+  const bookChrome = await session.evaluate(() => {
+    const rail = document.querySelector('.app-rail');
+    const ribbon = document.querySelector('.app-ribbon .ribbon-body');
+    const header = document.querySelector('.app-ribbon');
+    return {
+      commands: document.querySelectorAll('.app-rail [data-command-id]').length,
+      ribbons: document.querySelectorAll('.ribbon-body').length,
+      foldRibbons: document.querySelectorAll('.fold-ribbon').length,
+      railWidth: rail ? Math.round(rail.getBoundingClientRect().width) : 0,
+      ribbonWidth: ribbon instanceof HTMLElement ? Math.round(ribbon.getBoundingClientRect().width) : 0,
+      headerWidth: header instanceof HTMLElement ? Math.round(header.getBoundingClientRect().width) : 0,
+    };
+  });
+  check('book fold uses a view rail and a full-width ribbon',
+    bookChrome.commands === 3 && bookChrome.ribbons === 1 && bookChrome.foldRibbons === 0,
+    JSON.stringify(bookChrome));
+  check('unfolded app rail is thinner than the Material 3 80dp rail',
+    bookChrome.railWidth > 0 && bookChrome.railWidth <= 72,
+    String(bookChrome.railWidth));
+  check('book fold ribbon spans its chrome container',
+    bookChrome.ribbonWidth > 0 && Math.abs(bookChrome.ribbonWidth - bookChrome.headerWidth) <= 2,
+    JSON.stringify(bookChrome));
+
+  await session.click('.preview-pane');
+  await session.wait(100);
+  check('book fold split keeps compose until the app rail changes the view',
+    (await session.evaluate(() => document.querySelector('.ribbon-body')?.getAttribute('data-ribbon-task'))) === 'compose' &&
+    (await session.count('.ribbon-body [data-command-id="format.bold"]')) >= 1);
+  await session.click('.app-rail [data-command-id="view.preview"]');
+  await session.wait(200);
+  check('book fold preview rail shows inspect commands',
+    (await session.evaluate(() => document.querySelector('.ribbon-body')?.getAttribute('data-ribbon-task'))) === 'inspect' &&
+    (await session.count('.ribbon-body [data-command-id="format.bold"]')) === 0);
+  await session.click('.app-rail [data-command-id="view.split"]');
+  await session.wait(200);
+
+  await session.evaluate(() => {
+    const all = document.querySelector('.ribbon-profile-toggle');
+    if (all instanceof HTMLButtonElement && all.getAttribute('aria-pressed') !== 'true') all.click();
+    const review = [...document.querySelectorAll('.ribbon-tab')]
+      .find((button) => button.textContent?.trim() === 'Review');
+    if (!(review instanceof HTMLButtonElement)) throw new Error('Review ribbon tab not found');
+    review.click();
+  });
+  await session.wait(150);
   if (ribbonWildEnabled) {
     check('book fold command library exposes all five possibility tools',
-      (await session.count('.fold-command-library [data-command-id^="wild."]')) === 5);
-    await session.click('.fold-command-library [data-command-id="wild.intent-horizon"]');
+      (await session.count('.ribbon-body [data-command-id^="wild."]')) === 5);
+    await session.click('.ribbon-body [data-command-id="wild.intent-horizon"]');
     await session.waitForSelector('.wild-studio[data-shell="fold-book"][data-wild-capability="intent"]');
     check('possibility layer respects the unfolded book posture',
       (await session.isVisible('.wild-studio[data-shell="fold-book"]')));
     await session.click('button[aria-label="Close possibility layer"]');
   } else {
     check('disabled ribbon-wild stays absent from foldable command libraries',
-      (await session.count('.fold-command-library [data-command-id^="wild."]')) === 0);
+      (await session.count('.ribbon-body [data-command-id^="wild."]')) === 0);
   }
 
   await session.goto(`${documentPath}?marks-posture=fold-laptop`);
-  await session.waitForSelector('.fold-ribbon-horizontal', { timeout: 20_000 });
-  check('laptop fold exposes an independent lower touch shelf',
-    (await session.count('.fold-ribbon-primary')) === 1 &&
-    (await session.count('.fold-ribbon-companion')) === 1);
+  await session.waitForSelector('.app-rail', { timeout: 20_000 });
+  check('laptop fold uses a view rail and a full-width ribbon',
+    (await session.count('.app-rail [data-command-id]')) === 3 &&
+    (await session.count('.ribbon-body')) === 1 &&
+    (await session.count('.fold-ribbon')) === 0);
   if (ribbonWildEnabled) {
-    await session.click('.fold-more');
-    await session.waitForSelector('.fold-command-library');
-    await session.click('.fold-command-library [data-command-id="wild.consequence-lanes"]');
+    await session.evaluate(() => {
+      const all = document.querySelector('.ribbon-profile-toggle');
+      if (all instanceof HTMLButtonElement && all.getAttribute('aria-pressed') !== 'true') all.click();
+      const review = [...document.querySelectorAll('.ribbon-tab')]
+        .find((button) => button.textContent?.trim() === 'Review');
+      if (!(review instanceof HTMLButtonElement)) throw new Error('Review ribbon tab not found');
+      review.click();
+    });
+    await session.wait(150);
+    await session.click('.ribbon-body [data-command-id="wild.consequence-lanes"]');
     await session.waitForSelector('.wild-studio[data-shell="fold-laptop"][data-wild-capability="consequences"]');
     check('possibility layer respects the unfolded laptop posture',
       (await session.count('.wild-studio[data-shell="fold-laptop"] .consequence-lanes [data-lane]')) === 5);
@@ -346,6 +414,8 @@ export const SURFACE_CHECK_NAMES = [
   'agent command changes to rendered-only mode',
   'rendered-only ribbon removes text mutation controls',
   'agent can restore split mode through the same command runtime',
+  'desktop split inspects the rendered pane from a preview click',
+  'desktop split restores compose commands from an editor click',
   'ribbon-wild build flag matches the expected state',
   'disabled ribbon-wild exposes no commands, agent tools, or surfaces',
   'in-page agent can visibly operate the possibility ribbon layer',
@@ -362,11 +432,15 @@ export const SURFACE_CHECK_NAMES = [
   'theme toggles',
   'connectivity state is honest',
   'WebGL context loss removes canvases',
-  'book fold uses two hinge-safe ribbon segments',
+  'book fold uses a view rail and a full-width ribbon',
+  'unfolded app rail is thinner than the Material 3 80dp rail',
+  'book fold ribbon spans its chrome container',
+  'book fold split keeps compose until the app rail changes the view',
+  'book fold preview rail shows inspect commands',
   'disabled ribbon-wild stays absent from foldable command libraries',
   'book fold command library exposes all five possibility tools',
   'possibility layer respects the unfolded book posture',
-  'laptop fold exposes an independent lower touch shelf',
+  'laptop fold uses a view rail and a full-width ribbon',
   'possibility layer respects the unfolded laptop posture',
   'phone uses a focused composer instead of desktop ribbon',
   'phone page sheet applies phone-confirmation eligibility',

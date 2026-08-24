@@ -11,7 +11,6 @@ import type { PreviewStats } from '../../markdown/preview';
 import type { Heading } from '../../markdown/types';
 import '../../styles/document.css';
 import '../../styles/chrome.css';
-import { Outline } from './Outline';
 import type { CursorInfo } from './EditorPane';
 import type { ViewMode } from '../shell/TopBar';
 
@@ -20,9 +19,6 @@ const EditorPane = lazy(() =>
 );
 const PreviewPane = lazy(() =>
   import('./PreviewPane').then((module) => ({ default: module.PreviewPane })),
-);
-const DraftToolsSheet = lazy(() =>
-  import('../chrome/DraftToolsSheet').then((module) => ({ default: module.DraftToolsSheet })),
 );
 
 interface WorkspaceProps {
@@ -56,10 +52,7 @@ function WorkspaceView({
   session,
   mode,
   posture,
-  getView,
-  documentTitle,
   onModeChange,
-  onAction,
   scrollSync,
   onStats,
   onHeadings,
@@ -73,16 +66,13 @@ function WorkspaceView({
   const [split, setSplit] = useState(loadSplit);
   const [dragging, setDragging] = useState(false);
   const [previewWarm, setPreviewWarm] = useState(
-    () => mode !== 'edit' || Boolean(previewRequested) || posture.foldable,
+    () => mode !== 'edit' || Boolean(previewRequested),
   );
-  const [companion, setCompanion] = useState<'preview' | 'outline' | 'tools'>('preview');
-  const [localHeadings, setLocalHeadings] = useState<Heading[]>([]);
-  const foldBook = posture.shell === 'fold-book';
-  const showEditor = mode !== 'preview' || foldBook;
+  const showEditor = mode !== 'preview';
 
   useEffect(() => {
-    if (mode !== 'edit' || previewRequested || posture.foldable) setPreviewWarm(true);
-  }, [mode, posture.foldable, previewRequested]);
+    if (mode !== 'edit' || previewRequested) setPreviewWarm(true);
+  }, [mode, previewRequested]);
 
   useEffect(() => {
     if (posture.shell !== 'phone' || !onModeChange) return;
@@ -124,10 +114,9 @@ function WorkspaceView({
     [scrollSync, onPreview],
   );
 
-  // Only sync scrolling when both panes are actually on screen.
   useEffect(() => {
-    scrollSync.setEnabled(mode === 'split' || foldBook);
-  }, [foldBook, mode, scrollSync]);
+    scrollSync.setEnabled(mode === 'split');
+  }, [mode, scrollSync]);
 
   useEffect(() => {
     if (!dragging) return;
@@ -206,54 +195,14 @@ function WorkspaceView({
             </section>
           }
         >
-          {foldBook ? (
-            <section className="fold-companion" aria-label="Folded companion">
-              <nav className="fold-companion-tabs" aria-label="Companion pane">
-                <button type="button" className={companion === 'preview' ? 'active' : undefined} onClick={() => setCompanion('preview')}>Preview</button>
-                <button type="button" className={companion === 'outline' ? 'active' : undefined} onClick={() => setCompanion('outline')}>Outline</button>
-                <button type="button" className={companion === 'tools' ? 'active' : undefined} onClick={() => setCompanion('tools')}>Tools</button>
-                <button type="button" onClick={() => onAction?.('comments')}>Review</button>
-              </nav>
-              <div className="fold-companion-body">
-                <div hidden={companion !== 'preview'}>
-                  <PreviewPane
-                    session={session}
-                    renderedOnly={mode === 'preview'}
-                    onContainer={handleContainer}
-                    onStats={onStats}
-                    onHeadings={(items) => {
-                      setLocalHeadings(items);
-                      onHeadings(items);
-                    }}
-                    onScroll={() => scrollSync.fromPreview()}
-                  />
-                </div>
-                {companion === 'outline' && (
-                  <Outline headings={localHeadings} onSelect={(line) => scrollSync.scrollToLine(line)} />
-                )}
-                {companion === 'tools' && (
-                  <Suspense fallback={null}>
-                    <DraftToolsSheet
-                      open
-                      embedded
-                      documentTitle={documentTitle}
-                      getView={getView}
-                      onClose={() => setCompanion('preview')}
-                    />
-                  </Suspense>
-                )}
-              </div>
-            </section>
-          ) : (
-            <PreviewPane
-              session={session}
-              renderedOnly={mode === 'preview'}
-              onContainer={handleContainer}
-              onStats={onStats}
-              onHeadings={onHeadings}
-              onScroll={() => scrollSync.fromPreview()}
-            />
-          )}
+          <PreviewPane
+            session={session}
+            renderedOnly={mode === 'preview'}
+            onContainer={handleContainer}
+            onStats={onStats}
+            onHeadings={onHeadings}
+            onScroll={() => scrollSync.fromPreview()}
+          />
         </Suspense>
       )}
     </div>
