@@ -37,4 +37,4 @@ zip = { version = "4", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 p256.workspace = true
-tokio-tungstenite = "0.28"
+tokio-tungstenite = "0.29"
