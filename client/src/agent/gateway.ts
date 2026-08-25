@@ -1,5 +1,10 @@
 import { ensureServiceCaller } from '../auth/caller.ts';
 import { getCachedSession } from '../auth/session-cache.ts';
+import {
+  fetchWithTimeout,
+  runWithTimeout,
+  SERVICE_REQUEST_TIMEOUT_MS,
+} from '../browser/network.ts';
 import type {
   CreateHostedAgentRun,
   HostedAgentCancelResult,
@@ -13,6 +18,7 @@ import type {
 
 const MAX_EVENT_BYTES = 128 * 1024;
 const MAX_RECONNECT_DELAY_MS = 5_000;
+export const AGENT_EVENT_INACTIVITY_TIMEOUT_MS = 35_000;
 const TERMINAL_EVENTS = new Set<HostedAgentRunEvent['type']>([
   'run.completed',
   'run.failed',
@@ -49,6 +55,12 @@ export class AgentGatewayError extends Error {
   }
 }
 
+export interface AgentGatewayRequestOptions {
+  fetch?: typeof fetch;
+  signal?: AbortSignal | null;
+  timeoutMs?: number;
+}
+
 class EventConsumerError {
   readonly cause: unknown;
 
@@ -58,26 +70,26 @@ class EventConsumerError {
 }
 
 export async function getHostedAgentCapabilities(
-  fetchImpl: typeof fetch = globalThis.fetch,
+  input: typeof fetch | AgentGatewayRequestOptions = {},
 ): Promise<HostedAgentCapabilities> {
+  const options = requestOptions(input);
   const response = await sessionRequest(
     '/v1/agent/capabilities',
-    { method: 'GET' },
-    fetchImpl,
-    false,
+    { method: 'GET', signal: options.signal },
+    { ...options, csrf: false },
   );
   return parseCapabilities(await response.json().catch(() => null));
 }
 
 export async function createHostedAgentRun(
   request: CreateHostedAgentRun,
-  fetchImpl: typeof fetch = globalThis.fetch,
+  input: typeof fetch | AgentGatewayRequestOptions = {},
 ): Promise<HostedAgentRunAccepted> {
+  const options = requestOptions(input);
   const response = await sessionRequest(
     '/v1/agent/runs',
-    { method: 'POST', body: JSON.stringify(request) },
-    fetchImpl,
-    true,
+    { method: 'POST', body: JSON.stringify(request), signal: options.signal },
+    { ...options, csrf: true },
   );
   return parseAccepted(await response.json().catch(() => null));
 }
@@ -85,13 +97,13 @@ export async function createHostedAgentRun(
 export async function submitHostedAgentToolResult(
   runId: string,
   result: HostedAgentToolResult,
-  fetchImpl: typeof fetch = globalThis.fetch,
+  input: typeof fetch | AgentGatewayRequestOptions = {},
 ): Promise<HostedAgentToolResultAccepted> {
+  const options = requestOptions(input);
   const response = await sessionRequest(
     `/v1/agent/runs/${encodeURIComponent(runId)}/tool-results`,
-    { method: 'POST', body: JSON.stringify(result) },
-    fetchImpl,
-    true,
+    { method: 'POST', body: JSON.stringify(result), signal: options.signal },
+    { ...options, csrf: true },
   );
   const body = await response.json().catch(() => null);
   if (
@@ -111,13 +123,13 @@ export async function submitHostedAgentToolResult(
 
 export async function cancelHostedAgentRun(
   runId: string,
-  fetchImpl: typeof fetch = globalThis.fetch,
+  input: typeof fetch | AgentGatewayRequestOptions = {},
 ): Promise<HostedAgentCancelResult> {
+  const options = requestOptions(input);
   const response = await sessionRequest(
     `/v1/agent/runs/${encodeURIComponent(runId)}`,
-    { method: 'DELETE' },
-    fetchImpl,
-    true,
+    { method: 'DELETE', signal: options.signal },
+    { ...options, csrf: true },
   );
   const body = await response.json().catch(() => null);
   if (
@@ -141,6 +153,8 @@ export async function streamHostedAgentRun(
     onEvent: (event: HostedAgentEventEnvelope) => void | Promise<void>;
     fetch?: typeof fetch;
     after?: string;
+    requestTimeoutMs?: number;
+    inactivityTimeoutMs?: number;
   },
 ): Promise<void> {
   assertSameOriginAgentUrl(eventsUrl);
@@ -153,14 +167,24 @@ export async function streamHostedAgentRun(
     if (after) url.searchParams.set('after', after);
     let response: Response;
     try {
-      response = await sessionRequest(url.pathname + url.search, {
-        method: 'GET',
-        headers: {
-          Accept: 'text/event-stream',
-          ...(after ? { 'Last-Event-ID': after } : {}),
+      response = await sessionRequest(
+        url.pathname + url.search,
+        {
+          method: 'GET',
+          headers: {
+            Accept: 'text/event-stream',
+            ...(after ? { 'Last-Event-ID': after } : {}),
+          },
+          signal: options.signal,
         },
-        signal: options.signal,
-      }, fetchImpl, false);
+        {
+          fetch: fetchImpl,
+          signal: options.signal,
+          timeoutMs: options.requestTimeoutMs,
+          csrf: false,
+          stream: true,
+        },
+      );
     } catch (error) {
       if (options.signal.aborted) return;
       if (error instanceof AgentGatewayError && error.status > 0 && error.status < 500) throw error;
@@ -174,7 +198,11 @@ export async function streamHostedAgentRun(
     }
     let terminal = false;
     try {
-      for await (const envelope of parseEventStream(response.body, options.signal)) {
+      for await (const envelope of parseEventStream(
+        response.body,
+        options.signal,
+        options.inactivityTimeoutMs,
+      )) {
         if (after && compareEventIds(envelope.id, after) <= 0) continue;
         after = envelope.id;
         try {
@@ -203,6 +231,7 @@ export async function streamHostedAgentRun(
 export async function* parseEventStream(
   body: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
+  inactivityTimeoutMs = AGENT_EVENT_INACTIVITY_TIMEOUT_MS,
 ): AsyncGenerator<HostedAgentEventEnvelope> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -210,7 +239,20 @@ export async function* parseEventStream(
   let buffer = '';
   try {
     while (!signal?.aborted) {
-      const { value, done } = await reader.read();
+      const { value, done } = await runWithTimeout(
+        async (readSignal) => {
+          const cancel = () => { void reader.cancel(readSignal.reason).catch(() => undefined); };
+          readSignal.addEventListener('abort', cancel, { once: true });
+          try {
+            return await reader.read();
+          } finally {
+            readSignal.removeEventListener('abort', cancel);
+          }
+        },
+        inactivityTimeoutMs,
+        signal,
+        new DOMException('The agent event stream stopped responding.', 'TimeoutError'),
+      );
       buffer += decoder.decode(value, { stream: !done });
       if (encoder.encode(buffer).byteLength > MAX_EVENT_BYTES && !eventBoundary(buffer)) {
         throw invalidResponse('Agent event exceeded its size limit.');
@@ -230,6 +272,7 @@ export async function* parseEventStream(
       if (parsed) yield parsed;
     }
   } finally {
+    await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
 }
@@ -237,45 +280,87 @@ export async function* parseEventStream(
 async function sessionRequest(
   path: string,
   init: RequestInit,
-  fetchImpl: typeof fetch,
-  csrf: boolean,
+  options: AgentGatewayRequestOptions & { csrf: boolean; stream?: boolean },
 ): Promise<Response> {
-  let refreshed = false;
-  for (;;) {
-    const caller = await ensureServiceCaller({ fetch: fetchImpl, forceProbe: refreshed });
-    if (caller.kind !== 'session') {
-      throw new AgentGatewayError(
-        401,
-        'unauthenticated',
-        'Hosted agents require a logged-in workspace.',
-      );
+  const timeoutMs = options.timeoutMs ?? SERVICE_REQUEST_TIMEOUT_MS;
+  const fetchImpl = options.fetch ?? globalThis.fetch;
+  const timeout = new DOMException('The agent service request timed out.', 'TimeoutError');
+  try {
+    return await runWithTimeout(
+      async (signal) => {
+        const deadline = Date.now() + timeoutMs;
+        let refreshed = false;
+        for (;;) {
+          const caller = await ensureServiceCaller({ fetch: fetchImpl, forceProbe: refreshed });
+          if (signal.aborted) throw signal.reason;
+          if (caller.kind !== 'session') {
+            throw new AgentGatewayError(
+              401,
+              'unauthenticated',
+              'Hosted agents require a logged-in workspace.',
+            );
+          }
+          let session = getCachedSession();
+          if (!session) {
+            await ensureServiceCaller({ fetch: fetchImpl, forceProbe: true });
+            if (signal.aborted) throw signal.reason;
+            session = getCachedSession();
+          }
+          if (options.csrf && !session) {
+            throw new AgentGatewayError(401, 'unauthenticated', 'The current session could not be verified.');
+          }
+          const headers = new Headers(init.headers);
+          if (!headers.has('Accept')) headers.set('Accept', 'application/json');
+          if (init.body) headers.set('Content-Type', 'application/json');
+          if (options.csrf && session) headers.set('X-Marks-CSRF', session.csrf);
+          let response: Response;
+          try {
+            const request = { ...init, signal, headers, credentials: 'same-origin' } satisfies RequestInit;
+            response = options.stream
+              ? await runWithTimeout(
+                  (requestSignal) => fetchImpl(path, { ...request, signal: requestSignal }),
+                  Math.max(1, deadline - Date.now()),
+                  signal,
+                  timeout,
+                )
+              : await fetchWithTimeout(
+                  path,
+                  request,
+                  Math.max(1, deadline - Date.now()),
+                  fetchImpl,
+                );
+          } catch (error) {
+            if (signal.aborted) throw error;
+            throw new AgentGatewayError(0, 'network', 'The agent service could not be reached.');
+          }
+          if (
+            (response.status === 401 || (options.csrf && response.status === 403)) &&
+            !refreshed
+          ) {
+            refreshed = true;
+            continue;
+          }
+          if (!response.ok) throw gatewayHttpError(response.status);
+          return response;
+        }
+      },
+      timeoutMs,
+      options.signal ?? init.signal,
+      timeout,
+    );
+  } catch (error) {
+    if (options.signal?.aborted || init.signal?.aborted) throw error;
+    if (error === timeout || (error instanceof DOMException && error.name === 'TimeoutError')) {
+      throw new AgentGatewayError(0, 'network', 'The agent service took too long to respond.');
     }
-    let session = getCachedSession();
-    if (!session) {
-      await ensureServiceCaller({ fetch: fetchImpl, forceProbe: true });
-      session = getCachedSession();
-    }
-    if (csrf && !session) {
-      throw new AgentGatewayError(401, 'unauthenticated', 'The current session could not be verified.');
-    }
-    const headers = new Headers(init.headers);
-    if (!headers.has('Accept')) headers.set('Accept', 'application/json');
-    if (init.body) headers.set('Content-Type', 'application/json');
-    if (csrf && session) headers.set('X-Marks-CSRF', session.csrf);
-    let response: Response;
-    try {
-      response = await fetchImpl(path, { ...init, headers, credentials: 'same-origin' });
-    } catch (error) {
-      if (init.signal?.aborted) throw error;
-      throw new AgentGatewayError(0, 'network', 'The agent service could not be reached.');
-    }
-    if ((response.status === 401 || (csrf && response.status === 403)) && !refreshed) {
-      refreshed = true;
-      continue;
-    }
-    if (!response.ok) throw gatewayHttpError(response.status);
-    return response;
+    throw error;
   }
+}
+
+function requestOptions(
+  input: typeof fetch | AgentGatewayRequestOptions,
+): AgentGatewayRequestOptions {
+  return typeof input === 'function' ? { fetch: input } : input;
 }
 
 function parseFrame(frame: string): HostedAgentEventEnvelope | null {
