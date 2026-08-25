@@ -24,10 +24,6 @@ while true; do
     fi
     exit 1
   fi
-  if curl -sf "$URL" >/dev/null; then
-    echo "ready: ${URL}"
-    exit 0
-  fi
   if [ "$SECONDS" -ge "$deadline" ]; then
     echo "error: timed out after ${TIMEOUT}s waiting for ${URL}" >&2
     if [ -n "$LOG" ] && [ -f "$LOG" ]; then
@@ -35,6 +31,20 @@ while true; do
       cat "$LOG" >&2
     fi
     exit 1
+  fi
+  remaining=$((deadline - SECONDS))
+  request_timeout=2
+  if [ "$remaining" -lt "$request_timeout" ]; then
+    request_timeout=$remaining
+  fi
+  # A listener that accepts TCP but never returns bytes must not defeat the
+  # outer startup deadline. Keep each curl attempt within the time remaining.
+  if curl -sf \
+    --connect-timeout "$request_timeout" \
+    --max-time "$request_timeout" \
+    "$URL" >/dev/null; then
+    echo "ready: ${URL}"
+    exit 0
   fi
   sleep 1
 done

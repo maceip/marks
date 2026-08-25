@@ -141,24 +141,46 @@ try {
   await page.close();
   page = await context.newPage();
   await page.goto(`${BASE}/bench`, { waitUntil: 'domcontentloaded' });
-  await page.evaluate(async () => {
+  await page.evaluate(async (timeoutMs) => {
     await new Promise((resolve, reject) => {
+      let database = null;
+      let settled = false;
+      const cleanup = () => {
+        clearTimeout(timer);
+        database?.close();
+      };
+      const succeed = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      };
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error instanceof Error ? error : new Error(String(error ?? 'IndexedDB write failed')));
+      };
+      const timer = setTimeout(
+        () => fail(new Error(`timed out after ${timeoutMs}ms writing the incompatible welcome snapshot`)),
+        timeoutMs,
+      );
       const request = indexedDB.open('keyval-store');
-      request.onerror = () => reject(request.error);
+      request.onerror = () => fail(request.error);
+      request.onblocked = () => fail(new Error('opening the welcome IndexedDB journal was blocked'));
       request.onsuccess = () => {
-        const database = request.result;
+        database = request.result;
         if (!database.objectStoreNames.contains('keyval')) {
-          database.close();
-          reject(new Error('idb-keyval store is missing'));
+          fail(new Error('idb-keyval store is missing'));
           return;
         }
         const transaction = database.transaction('keyval', 'readwrite');
-        transaction.onerror = () => reject(transaction.error);
-        transaction.oncomplete = () => {
-          database.close();
-          resolve();
-        };
-        transaction.objectStore('keyval').put(
+        transaction.onerror = () => fail(transaction.error);
+        transaction.onabort = () => fail(
+          transaction.error ?? new Error('writing the incompatible welcome snapshot aborted'),
+        );
+        transaction.oncomplete = succeed;
+        const put = transaction.objectStore('keyval').put(
           {
             version: 3,
             siteId: '2',
@@ -171,9 +193,10 @@ try {
           },
           'marks:esbt:journal:about-marks',
         );
+        put.onerror = () => fail(put.error);
       };
     });
-  });
+  }, 10_000);
   await page.goto(`${BASE}/welcome/`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(
     () =>
