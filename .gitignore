@@ -21,3 +21,4 @@ target/
 
 # Generated visual-check output
 /artifacts/
+__pycache__/

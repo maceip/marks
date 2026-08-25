@@ -1,0 +1,51 @@
+# A dependency bump that passes the complete classified CI gate is merged
+# and deployed without a human in the loop; one that fails stays open as
+# the signal that it needs attention. Merges made with the workflow token
+# do not retrigger push workflows, so this job dispatches CI on main
+# explicitly; the production workflow accepts that dispatched success and
+# still re-computes deployed-to-head impact before deploying anything.
+name: Dependabot auto-merge
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  merge:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Merge the verified dependabot pull request and redeploy
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          pull=$(gh api "repos/$REPO/pulls?state=open&head=${REPO%%/*}:$HEAD_BRANCH" \
+            --jq '[.[] | select(.head.sha == env.HEAD_SHA and .user.login == "dependabot[bot]"
+                              and .head.repo.full_name == env.REPO)][0].number // empty')
+          if [[ -z "$pull" ]]; then
+            echo "no open dependabot pull request matches the verified revision; nothing to merge"
+            exit 0
+          fi
+          echo "merging dependabot pull request #$pull at verified $HEAD_SHA"
+          gh pr merge "$pull" -R "$REPO" --squash --match-head-commit "$HEAD_SHA"
+          # The squash merge cannot retrigger push workflows from this token;
+          # dispatch the full gate on main so the merged state is verified
+          # and, when the runtime changed, deployed through the normal path.
+          gh workflow run CI -R "$REPO" --ref main -f coverage=full

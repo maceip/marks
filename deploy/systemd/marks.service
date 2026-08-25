@@ -18,6 +18,7 @@ Environment=MARKS_BACKUP_DIR=/var/lib/marks/backups
 Environment=MARKS_BACKUP_RETAIN=14
 Environment=MARKS_ORIGIN=https://marks.secure.build
 Environment=MARKS_STATIC_DIR=/opt/marks/current/static
+Environment=MARKS_ASSET_POOL=/opt/marks/assets
 Environment=RUST_LOG=info
 ExecStart=/opt/marks/current/marks-server
 Restart=on-failure

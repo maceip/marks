@@ -10,6 +10,7 @@ import pwd
 import re
 import shutil
 import socket
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -17,20 +18,33 @@ import time
 import urllib.request
 from pathlib import Path
 
-MARKS_ROOT = Path("/opt/marks")
+def fixed_path(env_name: str, default: str) -> Path:
+    """The root boundary never takes paths from its caller. Only an
+    unprivileged test process may redirect state into a fixture tree;
+    running as root always uses the fixed production paths."""
+    if os.geteuid() == 0:
+        return Path(default)
+    return Path(os.environ.get(env_name, default))
+
+
+MARKS_ROOT = fixed_path("MARKS_TEST_ROOT", "/opt/marks")
 RELEASES = MARKS_ROOT / "releases"
 CURRENT = MARKS_ROOT / "current"
 PREVIOUS = MARKS_ROOT / "previous"
 LOCK = MARKS_ROOT / ".deploy.lock"
-INCOMING = Path("/var/lib/marks-deploy/incoming")
-CACHE = Path("/var/lib/marks-deploy/cache")
-CANARY = Path("/var/lib/marks-deploy/canary")
-VERIFIED_GIT = Path("/var/cache/marks-deploy/git")
+ASSET_POOL = MARKS_ROOT / "assets"
+INCOMING = fixed_path("MARKS_TEST_INCOMING", "/var/lib/marks-deploy/incoming")
+CACHE = fixed_path("MARKS_TEST_CACHE", "/var/lib/marks-deploy/cache")
+CANARY = fixed_path("MARKS_TEST_CANARY", "/var/lib/marks-deploy/canary")
+VERIFIED_GIT = fixed_path("MARKS_TEST_VERIFIED_GIT", "/var/cache/marks-deploy/git")
+LIVE_DB = fixed_path("MARKS_TEST_LIVE_DB", "/var/lib/marks/marks.db3")
+BACKUPS = fixed_path("MARKS_TEST_BACKUPS", "/var/lib/marks/backups")
+KEEP_RELEASES = 8
 DISPATCHER = Path("/usr/local/libexec/marks-deploy-ssh")
 UPLOADER = Path("/usr/local/libexec/marks-upload")
 RELEASE_ROOT = Path("/usr/local/sbin/marks-release-root")
-TEMPLATE = Path("/etc/marks/marks.service.template")
-UNIT = Path("/etc/systemd/system/marks.service")
+TEMPLATE = fixed_path("MARKS_TEST_TEMPLATE", "/etc/marks/marks.service.template")
+UNIT = fixed_path("MARKS_TEST_UNIT", "/etc/systemd/system/marks.service")
 SERVICE = "marks.service"
 REMOTE = "https://github.com/maceip/marks.git"
 PUBLIC_ORIGIN = "https://marks.secure.build"
@@ -72,6 +86,8 @@ def release_id(value: str) -> str:
 
 
 def deploy_identity():
+    if os.geteuid() != 0:
+        return os.getuid(), os.getgid()
     account = pwd.getpwnam("marks-deploy")
     return account.pw_uid, account.pw_gid
 
@@ -90,6 +106,7 @@ def ensure_layout() -> None:
     uid, gid = deploy_identity()
     for path, mode, owner in (
         (RELEASES, 0o755, (0, 0)),
+        (ASSET_POOL, 0o755, (0, 0)),
         (MARKS_ROOT / "deploy", 0o755, (0, 0)),
         (INCOMING, 0o700, (uid, gid)),
         (CACHE, 0o700, (uid, gid)),
@@ -101,7 +118,8 @@ def ensure_layout() -> None:
         (VERIFIED_GIT, 0o700, (0, 0)),
     ):
         path.mkdir(parents=True, exist_ok=True)
-        os.chown(path, *owner)
+        if os.geteuid() == 0:
+            os.chown(path, *owner)
         os.chmod(path, mode)
 
 
@@ -130,7 +148,7 @@ def hash_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def validate_release(path: Path) -> Path:
+def validate_release(path: Path, *, require_current_template=True) -> Path:
     release = under_releases(path)
     required = ("marks-server", "marks-admin", "marks.service", "release.json", "SHA256SUMS", "static/index.html")
     for relative in required:
@@ -143,10 +161,17 @@ def validate_release(path: Path) -> Path:
             info = item.lstat()
             if stat.S_ISLNK(info.st_mode) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
                 fail(f"release contains an unsupported filesystem object: {item}")
-            if info.st_uid != 0 or info.st_gid != 0 or info.st_mode & 0o022:
+            expected_uid = 0 if os.geteuid() == 0 else os.getuid()
+            expected_gid = 0 if os.geteuid() == 0 else os.getgid()
+            if info.st_uid != expected_uid or info.st_gid != expected_gid or info.st_mode & 0o022:
                 fail(f"release is not root-owned and sealed: {item}")
     if TEMPLATE.read_bytes() != (release / "marks.service").read_bytes():
-        fail("release unit differs from the root-owned Marks unit template")
+        # A release sealed under an older unit template stays valid for
+        # rollback — activation always installs the current template — but a
+        # forward deployment must never certify a stale unit.
+        if require_current_template:
+            fail("release unit differs from the root-owned Marks unit template")
+        print(f"note: {release.name} was sealed under an older unit template")
     receipt = json.loads((release / "release.json").read_text(encoding="utf-8"))
     if receipt.get("schema") != "marks-release.v1" or not SHA_RE.fullmatch(str(receipt.get("revision", ""))):
         fail("release receipt is invalid")
@@ -313,41 +338,59 @@ def seal_release(source: Path, revision: str) -> Path:
         copy_regular_tree(source / "client/dist", stage / "static")
         shutil.copyfile(TEMPLATE, stage / "marks.service")
         os.chmod(stage / "marks.service", 0o644)
+        schema_receipt = json.loads(
+            run([stage / "marks-admin", "schema"], capture=True).stdout.strip()
+        )
+        if not isinstance(schema_receipt.get("schemaVersion"), int) or not isinstance(
+            schema_receipt.get("maxCompatibleSchema"), int
+        ):
+            fail("built marks-admin did not report a schema identity")
         receipt = {
             "schema": "marks-release.v1", "revision": revision,
             "createdAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "builderImage": BUILDER_IMAGE,
             "nodeVersion": run(["/usr/bin/node", "--version"], capture=True).stdout.strip(),
             "npmVersion": run(["/usr/bin/npm", "--version"], capture=True).stdout.strip(),
+            "schemaVersion": schema_receipt["schemaVersion"],
+            "maxCompatibleSchema": schema_receipt["maxCompatibleSchema"],
         }
         (stage / "release.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         files = sorted(item for item in stage.rglob("*") if item.is_file() and not item.is_symlink())
         manifest = "".join(f"{hash_file(item)}  {item.relative_to(stage)}\n" for item in files)
         (stage / "SHA256SUMS").write_text(manifest, encoding="utf-8")
         for item in stage.rglob("*"):
-            os.chown(item, 0, 0)
+            if os.geteuid() == 0:
+                os.chown(item, 0, 0)
             if item.is_dir():
                 os.chmod(item, 0o755)
             elif item.name in ("marks-server", "marks-admin"):
                 os.chmod(item, 0o755)
             else:
                 os.chmod(item, 0o644)
-        os.chown(stage, 0, 0)
+        if os.geteuid() == 0:
+            os.chown(stage, 0, 0)
         os.rename(stage, release)
     except Exception:
         shutil.rmtree(stage, ignore_errors=True)
         raise
-    return validate_release(release)
+    sealed = validate_release(release)
+    link_release_assets(sealed)
+    return sealed
 
 
-def canary(release: Path, revision: str) -> None:
+def canary(release: Path, revision: str, seed_database=None) -> None:
     uid, gid = deploy_identity()
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
     state = CANARY / f"{revision}-{os.getpid()}"
-    state.mkdir(mode=0o700)
-    os.chown(state, uid, gid)
+    state.mkdir(mode=0o700, parents=True)
+    if os.geteuid() == 0:
+        os.chown(state, uid, gid)
+    if seed_database is not None:
+        snapshot_database(seed_database, state / "marks.db3")
+        if os.geteuid() == 0:
+            os.chown(state / "marks.db3", uid, gid)
     unit = f"marks-canary-{revision[:12]}-{os.getpid()}"
     try:
         run([
@@ -367,10 +410,135 @@ def canary(release: Path, revision: str) -> None:
         shutil.rmtree(state, ignore_errors=True)
 
 
+def snapshot_database(source: Path, destination: Path) -> None:
+    """One transactionally valid copy of a live SQLite database, verified."""
+    origin = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    try:
+        copy = sqlite3.connect(destination)
+        try:
+            with copy:
+                origin.backup(copy)
+            integrity = copy.execute("PRAGMA integrity_check").fetchone()[0]
+        finally:
+            copy.close()
+    finally:
+        origin.close()
+    if integrity != "ok":
+        destination.unlink(missing_ok=True)
+        fail("database snapshot failed integrity verification")
+
+
+def backup_live_database(reason: str) -> None:
+    """A verified pre-activation snapshot taken by the outgoing release,
+    before the new binary can touch the schema."""
+    if not LIVE_DB.is_file():
+        print("no live database yet; skipping pre-activation backup")
+        return
+    BACKUPS.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    destination = BACKUPS / f"pre-activation-{stamp}-{reason}.db3"
+    snapshot_database(LIVE_DB, destination)
+    print(f"pre-activation backup verified: {destination} sha256={hash_file(destination)}")
+
+
+def live_schema_version():
+    if not LIVE_DB.is_file():
+        return None
+    connection = sqlite3.connect(f"file:{LIVE_DB}?mode=ro", uri=True)
+    try:
+        row = connection.execute(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+        ).fetchone()
+        return int(row[0])
+    except sqlite3.Error:
+        return None
+    finally:
+        connection.close()
+
+
+def preflight_rollback(target: Path, receipt) -> None:
+    """Refuse a rollback the target binary cannot survive, then prove it.
+
+    The declared compatibility range fails fast on an intentional schema
+    break; the seeded canary is the empirical proof — the candidate binary
+    must boot and report ready against a copy of the live database before
+    the real switch happens.
+    """
+    if receipt.get("legacy"):
+        return
+    live = live_schema_version()
+    declared = receipt.get("maxCompatibleSchema")
+    if live is not None and isinstance(declared, int) and live > declared:
+        fail(
+            f"live database schema v{live} exceeds the target binary's "
+            f"supported v{declared}; roll forward instead"
+        )
+    canary(target, receipt["revision"], seed_database=LIVE_DB if LIVE_DB.is_file() else None)
+
+
+def release_pool_assets(release: Path):
+    assets = release / "static" / "assets"
+    if not assets.is_dir():
+        return []
+    return [item for item in sorted(assets.iterdir()) if item.is_file() and not item.is_symlink()]
+
+
+def link_release_assets(release: Path) -> None:
+    ASSET_POOL.mkdir(parents=True, exist_ok=True)
+    for item in release_pool_assets(release):
+        target = ASSET_POOL / item.name
+        if not target.exists():
+            os.link(item, target)
+
+
+def prune_releases() -> None:
+    """Bounded retention plus shared-pool garbage collection.
+
+    Keep the newest releases, everything reachable through current and
+    previous, and every legacy snapshot. The asset pool then holds exactly
+    the union of the retained releases' hashed assets: an asset leaves the
+    pool only when no retained release references it, so an old open tab
+    keeps resolving its lazy chunks for as long as its release is retained.
+    """
+    if not RELEASES.is_dir():
+        return
+    current = link_target(CURRENT)
+    previous = link_target(PREVIOUS)
+    protected = {release for release in (current, previous) if release}
+    releases = sorted(
+        (item for item in RELEASES.iterdir() if item.is_dir() and not item.name.startswith(".")),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )
+    keep = set()
+    for release in releases:
+        resolved = release.resolve()
+        if resolved in protected or release.name.startswith("legacy-") or len(keep) < KEEP_RELEASES:
+            keep.add(resolved)
+    for release in releases:
+        if release.resolve() not in keep:
+            print(f"pruning retained release {release.name}")
+            shutil.rmtree(release)
+    referenced = {}
+    for release in releases:
+        if release.resolve() in keep:
+            for item in release_pool_assets(release):
+                referenced.setdefault(item.name, item)
+    ASSET_POOL.mkdir(parents=True, exist_ok=True)
+    for name, item in referenced.items():
+        target = ASSET_POOL / name
+        if not target.exists():
+            os.link(item, target)
+    for entry in sorted(ASSET_POOL.iterdir()):
+        if entry.is_file() and entry.name not in referenced:
+            print(f"garbage-collecting unreferenced pooled asset {entry.name}")
+            entry.unlink()
+
+
 def snapshot_legacy() -> Path:
     current = link_target(CURRENT)
     if current:
-        return validate_release(current)
+        return validate_release(current, require_current_template=False)
     binary = MARKS_ROOT / "marks-server"
     static_root = MARKS_ROOT / "static"
     if not binary.is_file() or not (static_root / "index.html").is_file():
@@ -394,9 +562,11 @@ def snapshot_legacy() -> Path:
     files = sorted(item for item in stage.rglob("*") if item.is_file())
     (stage / "SHA256SUMS").write_text("".join(f"{hash_file(item)}  {item.relative_to(stage)}\n" for item in files))
     for item in stage.rglob("*"):
-        os.chown(item, 0, 0)
+        if os.geteuid() == 0:
+            os.chown(item, 0, 0)
         os.chmod(item, 0o755 if item.is_dir() or item.name in ("marks-server", "marks-admin") else 0o644)
-    os.chown(stage, 0, 0)
+    if os.geteuid() == 0:
+        os.chown(stage, 0, 0)
     os.rename(stage, release)
     atomic_link(release, CURRENT)
     return validate_release(release)
@@ -415,13 +585,14 @@ def install_stable_unit() -> None:
     run(["/usr/bin/systemctl", "daemon-reload"])
 
 
-def activate(target: Path, *, observe: bool) -> None:
-    target = validate_release(target)
+def activate(target: Path, *, observe: bool, historical_unit_ok=False) -> None:
+    target = validate_release(target, require_current_template=not historical_unit_ok)
     old = link_target(CURRENT)
     if old == target:
         receipt = json.loads((target / "release.json").read_text())
         wait_ready(PUBLIC_ORIGIN, receipt["revision"], legacy=bool(receipt.get("legacy")))
         return
+    backup_live_database(target.name[:12])
     run(["/usr/bin/systemctl", "stop", SERVICE])
     try:
         atomic_link(target, CURRENT)
@@ -457,6 +628,17 @@ def build_deploy(revision: str) -> None:
     source = INCOMING / revision
     if not source.is_dir() or source.is_symlink():
         fail("no completed upload exists for this revision")
+    git_dir = VERIFIED_GIT / f"{revision}.git"
+    try:
+        build_and_activate(source, git_dir, revision)
+    finally:
+        # Staging never outlives the attempt: a failed build cannot leave
+        # incoming or verified-Git state behind for a later run to trust.
+        shutil.rmtree(source, ignore_errors=True)
+        shutil.rmtree(git_dir, ignore_errors=True)
+
+
+def build_and_activate(source: Path, git_dir: Path, revision: str) -> None:
     verify_source(source, revision)
     # A repository unit change must not pass CI and deploy while production
     # silently keeps the older root-owned template. Require exact equality;
@@ -467,7 +649,6 @@ def build_deploy(revision: str) -> None:
     sandboxed_npm(source, "verify", "run", "verify:esbt")
     sandboxed_npm(source, "web", "run", "build", extra_env={"VITE_MARKS_DATA_MODE": "service"})
     sandboxed_npm(source, "budget", "run", "check:ui-budgets")
-    git_dir = VERIFIED_GIT / f"{revision}.git"
     dirty = run(["/usr/bin/git", f"--git-dir={git_dir}", f"--work-tree={source}", "status", "--porcelain=v1", "--untracked-files=no"], capture=True, env=fixed_environment()).stdout
     if dirty:
         fail("build modified tracked source files")
@@ -476,8 +657,7 @@ def build_deploy(revision: str) -> None:
     canary(release, revision)
     snapshot_legacy()
     activate(release, observe=True)
-    shutil.rmtree(source)
-    shutil.rmtree(git_dir, ignore_errors=True)
+    prune_releases()
 
 
 def rollback(requested=None) -> None:
@@ -485,7 +665,10 @@ def rollback(requested=None) -> None:
     target = RELEASES / release_id(requested) if requested else link_target(PREVIOUS)
     if target is None:
         fail("no previous release exists")
-    activate(target, observe=False)
+    target = validate_release(target, require_current_template=False)
+    receipt = json.loads((target / "release.json").read_text(encoding="utf-8"))
+    preflight_rollback(target, receipt)
+    activate(target, observe=False, historical_unit_ok=True)
 
 
 def status_command() -> None:

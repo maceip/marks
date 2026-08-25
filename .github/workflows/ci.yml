@@ -205,7 +205,7 @@ jobs:
         if: needs.impact.outputs.run_harness == 'true'
         run: |
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-          bash -n scripts/deploy-secure-build.sh deploy/remote-release.sh scripts/run-service-ci.sh deploy/host/marks-deploy-ssh
+          bash -n scripts/deploy-secure-build.sh scripts/run-service-ci.sh deploy/host/marks-deploy-ssh
           python3 -m py_compile deploy/host/marks-upload deploy/host/marks-release-root
 
       - name: Typecheck

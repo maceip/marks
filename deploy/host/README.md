@@ -41,9 +41,9 @@ administrative recovery procedure are recorded on the host in
 `/etc/marks/deploy-protocol.md` (pre-change backups under
 `/root/marks-boundary-backup-*`).
 
-`deploy/remote-release.sh` remains a parameterizable behavioral model of
-the release/activation semantics used by the harness tests; the installed
-implementation is this directory. Porting those activation tests to run
-against `marks-release-root` directly (by making its fixed paths
-test-injectable without weakening the root boundary) is tracked follow-up
-work.
+The activation, retention, rollback-preflight, and backup contracts are
+tested directly against `marks-release-root` by
+`scripts/harness/marks-release-root.test.py`: running unprivileged, the
+helper accepts `MARKS_TEST_*` path overrides so tests drive the exact
+installed code inside a fixture tree; running as root it ignores every
+override and uses only the fixed production paths.

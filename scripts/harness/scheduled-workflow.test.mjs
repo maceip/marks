@@ -31,6 +31,7 @@ test('actions are immutable full-commit revisions on Node 24 runtime releases', 
     readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8'),
     readFileSync(scheduledPath, 'utf8'),
     readFileSync(resolve(root, '.github/workflows/production.yml'), 'utf8'),
+    readFileSync(resolve(root, '.github/workflows/dependabot-merge.yml'), 'utf8'),
   ].join('\n');
 
   // Only a full commit SHA is an immutable action reference; tags and

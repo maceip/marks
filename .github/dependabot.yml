@@ -1,14 +1,27 @@
+# Version updates are grouped so routine weeks produce at most one pull
+# request per ecosystem; majors stay individual. Green updates are merged
+# and deployed automatically by dependabot-merge.yml — a bump that fails CI
+# simply stays open as the signal that it needs a human.
 version: 2
 updates:
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
+    groups:
+      cargo-compatible:
+        update-types: [minor, patch]
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
+    groups:
+      npm-compatible:
+        update-types: [minor, patch]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions-compatible:
+        update-types: [minor, patch]

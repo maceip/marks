@@ -38,11 +38,17 @@ concurrency:
 
 jobs:
   production:
+    # A dispatched CI run on main (used by dependabot auto-merge, whose
+    # token cannot retrigger push workflows) is as trustworthy as a push
+    # run: same repository, same branch, same gate. The impact comparison
+    # below still skips deployment when the deployed release already
+    # matches, so re-verification dispatches never churn production.
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
+       (github.event.workflow_run.event == 'push' ||
+        github.event.workflow_run.event == 'workflow_dispatch') &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
