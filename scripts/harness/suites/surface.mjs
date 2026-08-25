@@ -27,13 +27,18 @@ async function proposeFromInPageAgent(session, commandId) {
 
 async function createDocument(session) {
   await session.goto('/');
+  const dataMode = await session.evaluate(() => document.documentElement.dataset.marksMode ?? 'local');
+  if (dataMode === 'service') {
+    // Anonymous service entry creates its editable public marketing page in
+    // the background. Do not race that creation by clicking a Home action
+    // while caller discovery is still resolving.
+    await session.waitForSelector('.app[data-marketing="true"] .cm-content', { timeout: 30_000 });
+    return;
+  }
   await session.waitForSelector(
-    '.cm-content, .new-doc .button.primary, .home-actions .button.primary',
+    '.new-doc .button.primary, .home-actions .button.primary',
     { timeout: 15_000 },
   );
-  // Service mode allocates a public slug on anonymous first paint. Local mode
-  // still presents one of the two explicit create controls.
-  if ((await session.count('.cm-content')) > 0) return;
   if (await session.isVisible('.new-doc .button.primary')) {
     await session.click('.new-doc .button.primary');
     return;
@@ -488,10 +493,24 @@ export async function runSurface(session, { check }) {
 
   await session.goto(`${documentPath}?marks-posture=phone`);
   await session.waitForSelector('.phone-ribbon', { timeout: 20_000 });
+  await session.waitForSelector('.phone-ribbon-deck[aria-label="Import commands"]', { timeout: 20_000 });
   check('phone uses a focused composer instead of desktop ribbon',
     (await session.count('.phone-ribbon')) === 1 && (await session.count('.ribbon-body')) === 0);
+  const phoneDataMode = await session.evaluate(() => document.documentElement.dataset.marksMode ?? 'local');
+  if (phoneDataMode === 'service') {
+    await session.waitForSelector(
+      '.app[data-marketing="true"] .workspace.mode-preview .marks-preview .marks-block',
+      { timeout: 20_000 },
+    );
+  }
   const phoneImport = await session.evaluate(() => ({
+    dataMode: document.documentElement.dataset.marksMode ?? 'local',
+    marketing: document.querySelector('.app')?.getAttribute('data-marketing') ?? '',
+    mode: [...(document.querySelector('.workspace')?.classList ?? [])]
+      .find((name) => name.startsWith('mode-')) ?? '',
     selected: document.querySelector('.phone-ribbon-tabs [role="tab"][aria-selected="true"]')?.textContent?.trim() ?? '',
+    editor: Boolean(document.querySelector('.editor-pane')),
+    renderedBlocks: document.querySelectorAll('.preview-pane .marks-preview .marks-block').length,
     commands: [
       'import.notes-app',
       'import.meeting',
@@ -505,7 +524,36 @@ export async function runSurface(session, { check }) {
     phoneImport.selected === 'Import' && phoneImport.commands.every(Boolean),
     JSON.stringify(phoneImport),
   );
-  await session.waitForSelector('.workspace.phone-ghost .marks-preview .marks-block', { timeout: 20_000 });
+  check(
+    'service phone public marketing document opens in Preview with Import selected',
+    phoneImport.dataMode !== 'service' || (
+      phoneImport.marketing === 'true' &&
+      phoneImport.mode === 'mode-preview' &&
+      phoneImport.selected === 'Import' &&
+      !phoneImport.editor &&
+      phoneImport.renderedBlocks >= 1
+    ),
+    JSON.stringify(phoneImport),
+  );
+  await session.evaluate(() => {
+    const view = [...document.querySelectorAll('.phone-ribbon-tabs [role="tab"]')]
+      .find((button) => button.textContent?.trim() === 'View');
+    if (!(view instanceof HTMLButtonElement)) throw new Error('phone View tab not found');
+    view.click();
+  });
+  await session.waitForSelector(
+    '.phone-ribbon-deck[aria-label="View commands"] [data-command-id="view.editor"]',
+    { timeout: 10_000 },
+  );
+  await session.click('.phone-ribbon [data-command-id="view.editor"]');
+  await session.waitForSelector(
+    '.workspace.mode-edit.phone-ghost .editor-pane .cm-content',
+    { timeout: 20_000 },
+  );
+  await session.waitForSelector(
+    '.workspace.mode-edit.phone-ghost .preview-pane.preview-ghost .marks-preview .marks-block',
+    { timeout: 20_000 },
+  );
   const phoneGhost = await session.evaluate(() => {
     const root = document.querySelector('.workspace');
     const preview = document.querySelector('.preview-pane');
@@ -601,27 +649,35 @@ export async function runSurface(session, { check }) {
     if (!(view instanceof HTMLButtonElement)) throw new Error('phone View tab not found');
     view.click();
   });
-  await session.wait(100);
+  await session.waitForSelector(
+    '.phone-ribbon-deck[aria-label="View commands"] [data-command-id="view.preview"]',
+    { timeout: 10_000 },
+  );
   await session.click('.phone-ribbon [data-command-id="view.preview"]');
-  await session.wait(250);
+  await session.waitForSelector(
+    '.workspace.mode-preview .preview-pane .marks-preview .marks-block',
+    { timeout: 10_000 },
+  );
   check('phone preview mode removes the ghost overlay',
     (await session.count('.workspace.phone-ghost, .preview-ghost')) === 0 &&
     (await session.isVisible('.preview-pane')) &&
     !(await session.isVisible('.editor-pane')));
   await session.click('.phone-ribbon [data-command-id="view.editor"]');
-  await session.waitForSelector('.workspace.phone-ghost', { timeout: 10_000 });
+  await session.waitForSelector(
+    '.workspace.mode-edit.phone-ghost .editor-pane .cm-content',
+    { timeout: 10_000 },
+  );
   await session.evaluate(() => {
     const more = [...document.querySelectorAll('.phone-ribbon-tabs [role="tab"]')]
       .find((button) => button.textContent?.trim() === 'More');
     if (!(more instanceof HTMLButtonElement)) throw new Error('phone More tab not found');
     more.click();
   });
-  await session.wait(150);
-  const dataMode = await session.evaluate(() => document.documentElement.dataset.marksMode ?? 'local');
+  await session.waitForSelector('.phone-ribbon-deck[aria-label="More commands"]', { timeout: 10_000 });
   const pairingCount = await session.count('.phone-ribbon [data-command-id="identity.pairing"]');
   check('phone More ribbon applies phone-confirmation eligibility',
-    dataMode === 'service' ? pairingCount === 1 : pairingCount === 0,
-    `${dataMode}: ${pairingCount}`);
+    phoneDataMode === 'service' ? pairingCount === 1 : pairingCount === 0,
+    `${phoneDataMode}: ${pairingCount}`);
   await session.evaluate(() => {
     const review = [...document.querySelectorAll('.phone-ribbon-tabs [role="tab"]')]
       .find((button) => button.textContent?.trim() === 'Review');
@@ -698,6 +754,7 @@ export const SURFACE_CHECK_NAMES = [
   'possibility layer respects the unfolded laptop posture',
   'phone uses a focused composer instead of desktop ribbon',
   'phone opens on the complete Import ribbon',
+  'service phone public marketing document opens in Preview with Import selected',
   'phone write keeps a full-width editor under a right-hand ghost preview',
   'phone ghost viewfinder is clipped and pointer-transparent',
   'phone two-finger pan snaps the ghost to the other page half',
