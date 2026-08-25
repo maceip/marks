@@ -243,7 +243,8 @@ async function reachEditorByTouch(page, viewportWidth, failure) {
       page.waitForFunction(
         () =>
           document.querySelector('.marks-preview')?.textContent?.includes('Google Docs for Markdown') &&
-          document.querySelector('.marks-preview table') != null,
+          document.querySelector('.marks-preview table') != null &&
+          document.querySelector('.app')?.getAttribute('data-marketing') === 'true',
         undefined,
         { timeout: 30_000 },
       ),

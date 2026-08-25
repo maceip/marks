@@ -488,7 +488,8 @@ try {
   await page.waitForSelector('.cm-content', { timeout: 30_000 });
   await page.waitForFunction(
     () => document.querySelector('.cm-content')?.textContent?.includes('Google Docs for Markdown') &&
-      document.querySelector('.marks-preview')?.textContent?.includes('Typical Markdown'),
+      document.querySelector('.marks-preview')?.textContent?.includes('Typical Markdown') &&
+      document.querySelector('.app')?.getAttribute('data-marketing') === 'true',
     undefined,
     { timeout: 30_000 },
   );

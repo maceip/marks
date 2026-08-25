@@ -40,6 +40,11 @@ test('service orchestration rejects a zero-proof or ambiguous invocation before 
 
 test('browser proof bounds recovery waits and publishes receipts only after success', () => {
   const script = read('scripts/ci-service-ui.mjs');
+  const marketingWaitStart = script.indexOf("await page.waitForSelector('.cm-content'");
+  const marketingWait = script.slice(
+    marketingWaitStart,
+    script.indexOf('const initialExport', marketingWaitStart),
+  );
   assert.match(script, /waitForServiceWorkerController\(page\)/);
   assert.match(script, /service worker did not become ready and control the page within/);
   assert.match(script, /reload recovery evidence unavailable/);
@@ -47,11 +52,21 @@ test('browser proof bounds recovery waits and publishes receipts only after succ
   assert.match(script, /requireCheck\(/);
   assert.match(script, /if \(receiptPath\) rmSync\(receiptPath, \{ force: true \}\)/);
   assert.match(script, /writeReceiptAtomically\(receiptPath, pendingReceipt\)/);
+  assert.match(marketingWait, /getAttribute\('data-marketing'\) === 'true'/);
+  assert.match(marketingWait, /timeout: 30_000/);
   assert.ok(
     script.indexOf('const failed = results.filter') <
       script.indexOf('writeReceiptAtomically(receiptPath, pendingReceipt)'),
     'receipt publication must follow the final failed-check calculation',
   );
+});
+
+test('mobile proof waits for the complete marketing presentation before inspecting it', () => {
+  const script = read('scripts/check-mobile-ui.mjs');
+  const readinessStart = script.indexOf('Promise.all([');
+  const readiness = script.slice(readinessStart, script.indexOf('await assertNoHorizontalOverflow', readinessStart));
+  assert.match(readiness, /getAttribute\('data-marketing'\) === 'true'/);
+  assert.match(readiness, /timeout: 30_000/);
 });
 
 test('welcome corruption injection is bounded and abort-aware', () => {
