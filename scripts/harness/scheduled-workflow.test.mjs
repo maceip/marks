@@ -47,3 +47,32 @@ test('actions are immutable full-commit revisions on Node 24 runtime releases', 
   assert.match(workflows, /actions\/checkout@[0-9a-f]{40} # v7\./);
   assert.match(workflows, /actions\/setup-node@[0-9a-f]{40} # v7\./);
 });
+
+test('coupled RustCrypto majors stay in one dependabot pull request', () => {
+  const dependabot = readFileSync(resolve(root, '.github/dependabot.yml'), 'utf8');
+
+  assert.match(dependabot, /rustcrypto-digest:/);
+  assert.match(dependabot, /patterns:\s*\n\s*- hmac\s*\n\s*- sha2/);
+  assert.match(dependabot, /update-types: \[major\]/);
+});
+
+test('failed dependabot CI is recorded durably and its pull request is closed', () => {
+  const workflow = readFileSync(
+    resolve(root, '.github/workflows/dependabot-merge.yml'),
+    'utf8',
+  );
+
+  assert.match(workflow, /github\.event\.workflow_run\.conclusion != 'success'/);
+  assert.match(workflow, /github\.event\.workflow_run\.actor\.login == 'dependabot\[bot\]'/);
+  assert.match(workflow, /^\s*issues: write$/m);
+  assert.match(workflow, /RUN_ATTEMPT:.*workflow_run\.run_attempt/);
+  assert.match(workflow, /gh run rerun/);
+  assert.match(workflow, /gh issue create/);
+  assert.match(workflow, /gh pr close/);
+  assert.match(workflow, /head\.sha == env\.HEAD_SHA/);
+  assert.match(workflow, /^\s*schedule:\s*$/m);
+  assert.match(workflow, /^\s*reconcile:\s*$/m);
+  assert.match(workflow, /age < 86400/);
+  assert.match(workflow, /select\(\.name == "CI gate" and \.app\.slug == "github-actions"\)/);
+  assert.match(workflow, /gh pr merge/);
+});

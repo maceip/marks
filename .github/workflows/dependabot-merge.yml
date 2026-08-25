@@ -1,6 +1,7 @@
 # A dependency bump that passes the complete classified CI gate is merged
-# and deployed without a human in the loop; one that fails stays open as
-# the signal that it needs attention. Merges made with the workflow token
+# and deployed without a human in the loop. One that fails becomes a durable
+# issue and is closed, so stale red bot PRs cannot accumulate unnoticed.
+# Merges made with the workflow token
 # do not retrigger push workflows, so this job dispatches CI on main
 # explicitly; the production workflow accepts that dispatched success and
 # still re-computes deployed-to-head impact before deploying anything.
@@ -10,13 +11,145 @@ on:
   workflow_run:
     workflows: [CI]
     types: [completed]
+  schedule:
+    # Reconcile cases where CI or this workflow never emitted the expected
+    # follow-up event (invalid workflow, stalled check, conflict, or outage).
+    - cron: '23 10 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
   pull-requests: write
+  issues: write
   actions: write
 
 jobs:
+  close-failed:
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion != 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Record the failure and close the dependabot pull request
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: |
+          set -euo pipefail
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          pull=$(gh api "repos/$REPO/pulls?state=open&head=${REPO%%/*}:$HEAD_BRANCH" \
+            --jq '[.[] | select(.head.sha == env.HEAD_SHA and .user.login == "dependabot[bot]"
+                              and .head.repo.full_name == env.REPO)][0].number // empty')
+          if [[ -z "$pull" ]]; then
+            echo "no open dependabot pull request matches the failed revision; nothing to close"
+            exit 0
+          fi
+
+          # A first failure may be runner or network noise. Retry the complete
+          # gate once; only a repeated failure becomes remediation work.
+          if (( RUN_ATTEMPT < 2 )); then
+            echo "retrying CI run $RUN_ID after $CONCLUSION on attempt $RUN_ATTEMPT"
+            gh run rerun "$RUN_ID" -R "$REPO"
+            exit 0
+          fi
+
+          title=$(gh pr view "$pull" -R "$REPO" --json title --jq .title)
+          marker="<!-- dependabot-ci-failure:pr-${pull} -->"
+          body=$(cat <<EOF
+          $marker
+          Dependabot PR #$pull (\`$title\`) failed required CI and was closed automatically.
+
+          - Failed revision: \`$HEAD_SHA\`
+          - Failed run: $RUN_URL
+          - Branch: \`$HEAD_BRANCH\`
+
+          This issue is the durable remediation queue. Fix or group the incompatible update, then close this issue when the replacement reaches \`main\`.
+          EOF
+          )
+          issue=$(gh issue list -R "$REPO" --state all --limit 1000 --json number,body \
+            --jq "[.[] | select(.body // \"\" | contains(\"$marker\"))][0].number // empty")
+          if [[ -z "$issue" ]]; then
+            issue_url=$(gh issue create -R "$REPO" \
+              --title "Remediate failed Dependabot PR #$pull" \
+              --body "$body")
+            issue=${issue_url##*/}
+            [[ "$issue" =~ ^[0-9]+$ ]]
+          fi
+          gh pr close "$pull" -R "$REPO" \
+            --comment "Required CI failed at $HEAD_SHA. This PR is being closed automatically so failed bot updates do not accumulate; remediation is tracked in #$issue."
+
+  reconcile:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Reconcile dependabot pull requests missed by event automation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          now=$(date +%s)
+          gh pr list -R "$REPO" --state open --author 'app/dependabot' --limit 100 \
+            --json number,title,headRefOid,createdAt \
+            --jq '.[] | [.number, .headRefOid, .createdAt, (.title | @base64)] | @tsv' |
+          while IFS=$'\t' read -r pull sha created encoded_title; do
+            [[ "$pull" =~ ^[0-9]+$ && "$sha" =~ ^[0-9a-f]{40}$ ]]
+            title=$(printf '%s' "$encoded_title" | base64 --decode)
+            age=$(( now - $(date -d "$created" +%s) ))
+            if (( age < 86400 )); then
+              echo "PR #$pull is only ${age}s old; event automation still owns it"
+              continue
+            fi
+            gate=$(gh api "repos/$REPO/commits/$sha/check-runs?per_page=100" \
+              --jq '[.check_runs[] | select(.name == "CI gate" and .app.slug == "github-actions")]
+                    | sort_by(.completed_at // .started_at) | last
+                    | if . == null then "missing" else (.status + ":" + (.conclusion // "")) end')
+            case "$gate" in
+              completed:success)
+                if gh pr merge "$pull" -R "$REPO" --squash --match-head-commit "$sha"; then
+                  gh workflow run CI -R "$REPO" --ref main -f coverage=full
+                  continue
+                fi
+                reason="green CI could not be auto-merged (usually conflict or repository policy)"
+                ;;
+              completed:*)
+                reason="required CI remained $gate"
+                ;;
+              *)
+                reason="required CI was $gate for more than 24 hours"
+                ;;
+            esac
+
+            marker="<!-- dependabot-reconcile:pr-${pull} -->"
+            issue=$(gh issue list -R "$REPO" --state all --limit 1000 --json number,body \
+              --jq "[.[] | select(.body // \"\" | contains(\"$marker\"))][0].number // empty")
+            if [[ -z "$issue" ]]; then
+              issue_url=$(gh issue create -R "$REPO" \
+                --title "Remediate stuck Dependabot PR #$pull" \
+                --body "$marker
+          Dependabot PR #$pull (\`$title\`) was closed by the daily reconciler: $reason.
+
+          Head revision: \`$sha\`")
+              issue=${issue_url##*/}
+              [[ "$issue" =~ ^[0-9]+$ ]]
+            fi
+            gh pr close "$pull" -R "$REPO" \
+              --comment "Closing this stuck bot update; remediation is tracked in #$issue. Reason: $reason."
+          done
+
   merge:
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
