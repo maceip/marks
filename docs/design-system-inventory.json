@@ -2291,7 +2291,7 @@
       "surfaceMaterialTags": 0,
       "surfaceMaterialHostReferences": 0,
       "materialVariants": [],
-      "sha256": "ac6fad0e581a631e87b595eecc41738279ce77f26e0910be44268c90be64287b"
+      "sha256": "63c77ec7ed57d62f9ce6249eff294c45014d13e32f919ee92d75bcf7ae868f74"
     },
     {
       "path": "client/src/components/practical/PracticalInspector.tsx",
