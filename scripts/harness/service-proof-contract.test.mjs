@@ -47,6 +47,8 @@ test('the current service proof owns the migrated two-browser scenarios', () => 
     'current service editor scrolling moves the preview',
     'supported document drag shows the Markdown import target',
     'document drop converts and creates one populated public page',
+    'browser Wasm PDF drop creates a populated public Markdown page',
+    'PDF drop stays in browser Wasm and never uploads to the server',
   ]) {
     assert.match(serviceProof, new RegExp(assertion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }

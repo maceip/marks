@@ -74,6 +74,31 @@ function pathnameOf(url) {
 }
 
 const SCRATCH_STORAGE_KEY = 'marks.auth.scratch.v1';
+function textPdf(text) {
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ];
+  const stream = `BT /F1 24 Tf 72 720 Td (${text}) Tj ET`;
+  objects.push(`<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`);
+
+  let pdf = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((body, index) => {
+    offsets.push(Buffer.byteLength(pdf));
+    pdf += `${index + 1} 0 obj\n${body}\nendobj\n`;
+  });
+  const xref = Buffer.byteLength(pdf);
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  pdf += offsets.slice(1)
+    .map((offset) => `${String(offset).padStart(10, '0')} 00000 n \n`)
+    .join('');
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(pdf);
+}
+
 const SCROLL_PROSE = Array.from(
   { length: 24 },
   (_, index) => `Paragraph ${index + 1}: enough current-service prose to make both panes scroll.`,
@@ -868,6 +893,58 @@ try {
   const downloadPath = await download.path();
   const downloaded = downloadPath ? readFileSync(downloadPath, 'utf8') : '';
   check('Markdown export returns the current source', downloaded === importedMarkdown, download.suggestedFilename());
+
+  const pdfText = `Browser Wasm ${args.browser} PDF drop proof`;
+  const pdfImportsBefore = v1.filter((entry) =>
+    entry.method === 'POST' && entry.path === '/v1/import/file').length;
+  const pdfCreatedResponse = trackWait(page.waitForResponse(
+    (response) => response.request().method() === 'POST' && pathnameOf(response.url()) === '/v1/documents',
+    { timeout: 45_000 },
+  ));
+  const pdfFixture = {
+    name: `browser-wasm-${args.browser}.pdf`,
+    base64: textPdf(pdfText).toString('base64'),
+  };
+  await page.evaluate(({ name, base64 }) => {
+    const binary = atob(base64);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([bytes], name, { type: 'application/pdf' }));
+    document.querySelector('.app')?.dispatchEvent(new DragEvent('dragenter', {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: transfer,
+    }));
+    document.querySelector('.app')?.dispatchEvent(new DragEvent('drop', {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: transfer,
+    }));
+  }, pdfFixture);
+  const pdfCreated = await pdfCreatedResponse;
+  const pdfBody = await pdfCreated.json();
+  const pdfDocumentId = pdfBody?.document?.id;
+  requireCheck(
+    check,
+    'browser Wasm PDF drop creates a populated public Markdown page',
+    pdfCreated.status() === 201 &&
+      typeof pdfDocumentId === 'string' &&
+      pdfBody?.document?.public === true,
+    `${pdfCreated.status()} / ${String(pdfDocumentId)}`,
+  );
+  await page.waitForURL((url) => url.pathname === `/d/${pdfDocumentId}`, { timeout: 45_000 });
+  await page.waitForFunction(
+    (expected) => document.querySelector('.cm-content')?.textContent?.includes(expected),
+    pdfText,
+    { timeout: 45_000 },
+  );
+  const pdfImportsAfter = v1.filter((entry) =>
+    entry.method === 'POST' && entry.path === '/v1/import/file').length;
+  check(
+    'PDF drop stays in browser Wasm and never uploads to the server',
+    pdfImportsAfter === pdfImportsBefore,
+    `${pdfImportsBefore} before / ${pdfImportsAfter} after`,
+  );
 
   check(
     'no Node /api alias',
