@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily off-host replication of Marks backups
+
+[Timer]
+OnCalendar=*-*-* 08:47:00 UTC
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

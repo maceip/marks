@@ -1,0 +1,18 @@
+[Unit]
+Description=Replicate Marks backups off-host to S3
+Documentation=https://github.com/maceip/marks
+
+[Service]
+Type=oneshot
+User=devuser
+Group=devuser
+# The backup directory holds verified snapshots written by marks-server and
+# pre-activation snapshots written by the release helper. Deletions are not
+# mirrored: the off-host copy only accumulates and bucket lifecycle owns
+# expiry, so host-side loss or compromise cannot empty the replica.
+ExecStart=/usr/local/bin/aws s3 sync /var/lib/marks/backups s3://blobs-secure-build-095713295645/marks/backups --region us-east-1 --no-progress
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/var/lib/marks/backups
