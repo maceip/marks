@@ -8,6 +8,7 @@ use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
+use std::future::Future;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -304,11 +305,28 @@ pub async fn run(
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                match create_once(db.clone(), assets.clone(), root.clone(), artifact.clone()).await {
+                let created = complete_or_stop(
+                    &mut stop,
+                    create_once(db.clone(), assets.clone(), root.clone(), artifact.clone()),
+                ).await;
+                let Some(created) = created else {
+                    return;
+                };
+                match created {
                     Ok(path) => {
                         tracing::info!(target: "marks_server::backup", backup = %path.display(), "backup verified and published");
                         let prune_root = root.clone();
-                        match tokio::task::spawn_blocking(move || prune(&prune_root, retain)).await {
+                        let mut pruning = tokio::task::spawn_blocking(move || prune(&prune_root, retain));
+                        let pruned = complete_or_stop(&mut stop, &mut pruning).await;
+                        let Some(pruned) = pruned else {
+                            // A running blocking syscall cannot be cancelled,
+                            // but the backup owner and `serve` no longer wait
+                            // for it. The binary runtime has its own final
+                            // shutdown deadline.
+                            pruning.abort();
+                            return;
+                        };
+                        match pruned {
                             Ok(Ok(())) => {}
                             Ok(Err(error)) => tracing::error!(target: "marks_server::backup", %error, "backup retention failed"),
                             Err(error) => tracing::error!(target: "marks_server::backup", %error, "backup retention task failed"),
@@ -323,5 +341,49 @@ pub async fn run(
                 }
             }
         }
+    }
+}
+
+/// Poll stop concurrently with one backup phase. Keeping the stop branch at
+/// this level matters: awaiting a `spawn_blocking` join inside a selected timer
+/// branch otherwise prevents the watch receiver from being polled at all.
+async fn complete_or_stop<T>(
+    stop: &mut tokio::sync::watch::Receiver<bool>,
+    work: impl Future<Output = T>,
+) -> Option<T> {
+    if *stop.borrow() {
+        return None;
+    }
+    tokio::pin!(work);
+    loop {
+        tokio::select! {
+            result = &mut work => return Some(result),
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow() {
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn stop_interrupts_an_uncooperative_backup_phase() {
+        let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
+        let proof = tokio::spawn(async move {
+            complete_or_stop(&mut stop_rx, std::future::pending::<()>()).await
+        });
+        tokio::task::yield_now().await;
+        stop_tx.send(true).unwrap();
+
+        let result = tokio::time::timeout(Duration::from_secs(1), proof)
+            .await
+            .expect("backup owner must observe stop")
+            .expect("backup proof task");
+        assert!(result.is_none());
     }
 }

@@ -15,6 +15,10 @@ fn main() {
         }
     };
     runtime.block_on(server_main());
+    // `spawn_blocking` cannot cancel an in-progress filesystem syscall. Consume
+    // the runtime with a deadline so a detached backup/export worker cannot
+    // turn an otherwise completed SIGTERM into an unbounded process wait.
+    runtime.shutdown_timeout(marks_server::RUNTIME_SHUTDOWN_TIMEOUT);
 }
 
 async fn server_main() {
