@@ -107,9 +107,10 @@ people to expect:
 - **Public anonymous collaboration by opaque page slug** — every service-mode
   anonymous page is saved immediately, joins without sharing settings, and
   records a persistence milestone after its seventh committed edit
-- **Import-first ribbon** with Notes app, Meeting, and GitHub README templates,
-  protected web-page→Markdown import, and drop/picker conversion for PDF, Word,
-  and table-only Excel files
+- **Start-from-template ribbon** with Notes, Meeting, and GitHub README,
+  followed by Log In for anonymous clients, protected web-page→Markdown
+  import, browser-Wasm PDF drop/picker conversion, and Word plus table-only
+  Excel conversion
 - **Light/dark themes, compact density, reduced glass and reduced motion**, with
   explicit phone, foldable, tablet, and desktop postures
 - **Export** to `.md`, public anonymous page URLs, and revocable,

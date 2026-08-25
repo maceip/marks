@@ -457,6 +457,14 @@ text (no OCR). Word import keeps document structure as Markdown. Excel import
 emits bounded pipe tables from displayed/cached cell values only; formulas,
 formula source, scripts, macros, charts, and drawings are not imported.
 
+The web UI intercepts PDF picker and drop imports before this route. It reads
+the bytes locally and runs the MIT-licensed `@firecrawl/anydoc-wasm` converter
+in a disposable module worker, so PDF bytes are not uploaded. The browser path
+shares the 12 MiB limit and has a hard 35-second deadline; timing out terminates
+the worker, including a synchronous Wasm conversion. The native route remains
+available to non-browser API clients and as a separately bounded service
+capability. Neither path performs OCR.
+
 Both routes authenticate, rate-limit, and reserve bounded capacity before body
 upload or outbound work. Capacity exhaustion is rejected immediately. One
 30-second deadline covers upload, DNS, cumulative redirects, body streaming,
