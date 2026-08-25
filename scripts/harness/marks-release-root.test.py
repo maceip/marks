@@ -579,6 +579,8 @@ class ReleaseRootContract(unittest.TestCase):
             "Name": mod.CARGO_FETCH_NETWORK,
             "Driver": "bridge",
             "Scope": "local",
+            "EnableIPv4": True,
+            "EnableIPv6": False,
             "Internal": False,
             "Attachable": False,
             "Ingress": False,
@@ -606,6 +608,17 @@ class ReleaseRootContract(unittest.TestCase):
         self.assertEqual(calls[0][0][:4], [
             "/usr/bin/timeout", "--signal=KILL", "15s", "/usr/bin/docker"
         ])
+
+        for field, unsafe in (("EnableIPv4", False), ("EnableIPv6", True)):
+            expected = network[field]
+            network[field] = unsafe
+            with (
+                self.subTest(field=field),
+                patch.object(mod, "run", side_effect=fake_run),
+                self.assertRaisesRegex(RuntimeError, "fixed egress policy"),
+            ):
+                mod.validate_fetch_egress_policy()
+            network[field] = expected
 
         marker.write_text("unattested\n", encoding="utf-8")
         with self.assertRaisesRegex(RuntimeError, "unsupported"):

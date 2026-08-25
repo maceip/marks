@@ -105,7 +105,11 @@ async fn liveness_polling_is_read_only_and_readiness_tracks_writer_heartbeat() {
     })
     .await;
     let http = reqwest::Client::new();
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let initial_heartbeat = server.app.health.last_database_write_ms();
+    assert_ne!(
+        initial_heartbeat, 0,
+        "app startup must commit its write probe"
+    );
     let before = server
         .app
         .db
@@ -117,6 +121,7 @@ async fn liveness_polling_is_read_only_and_readiness_tracks_writer_heartbeat() {
             )?)
         })
         .unwrap();
+    assert_eq!(before as u64, initial_heartbeat);
 
     for _ in 0..20 {
         let response = http

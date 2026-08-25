@@ -54,7 +54,11 @@ impl Health {
         interval_ms: u64,
         mut stop: tokio::sync::watch::Receiver<bool>,
     ) {
-        let mut interval = tokio::time::interval(Duration::from_millis(interval_ms));
+        let period = Duration::from_millis(interval_ms);
+        // App construction already commits the first durable write probe. The
+        // periodic owner starts one full period later instead of immediately
+        // duplicating that startup write and racing early health checks.
+        let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {

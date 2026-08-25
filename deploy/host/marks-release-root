@@ -1620,6 +1620,8 @@ def validate_fetch_egress_policy():
         network.get("Name") != CARGO_FETCH_NETWORK
         or network.get("Driver") != "bridge"
         or network.get("Scope") != "local"
+        or network.get("EnableIPv4") is not True
+        or network.get("EnableIPv6") is not False
         or network.get("Internal") is not False
         or network.get("Attachable") is not False
         or network.get("Ingress") is not False

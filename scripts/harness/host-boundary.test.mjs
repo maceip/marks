@@ -219,6 +219,8 @@ test('every untrusted build process has a wall-clock and resource bound', () => 
   assert.match(releaseRoot, /cargo build[\s\S]{0,160}--offline/u);
   assert.match(releaseRoot, /cargo fetch --locked/u);
   assert.match(releaseRoot, /def validate_fetch_egress_policy\(/u);
+  assert.match(releaseRoot, /network\.get\("EnableIPv4"\) is not True/u);
+  assert.match(releaseRoot, /network\.get\("EnableIPv6"\) is not False/u);
   assert.match(releaseRoot, /timeout=DOCKER_RUNTIME_SECONDS/u);
   assert.match(releaseRoot, /\["\/usr\/bin\/docker", "rm", "--force", container\]/u);
   for (const property of [
