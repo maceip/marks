@@ -18,7 +18,7 @@ import {
 } from './profile.ts';
 import { getCommand } from './registry.ts';
 import { CommandRuntime } from './runtime.ts';
-import { RIBBON_WILD_ENABLED } from '../lib/product.ts';
+import { AGENT_CHAT_ENABLED } from '../lib/product.ts';
 import type {
   CommandEnvironment,
   CommandId,
@@ -27,8 +27,11 @@ import type {
 } from './types.ts';
 import { CommandCenter, type CommandCenterValue } from './context.tsx';
 
-const wildObservations = RIBBON_WILD_ENABLED
+const wildObservations = __MARKS_RIBBON_WILD_ENABLED__
   ? import('../wild/observations.ts')
+  : null;
+const loadAgentWebMcp = __MARKS_AGENT_CHAT_ENABLED__
+  ? () => import('./webmcp.ts')
   : null;
 
 export interface CommandProviderProps {
@@ -238,6 +241,7 @@ export function CommandProvider({ documentId, environment: providedEnvironment, 
   }, []);
 
   const activeRaised = useMemo(() => {
+    if (!AGENT_CHAT_ENABLED) return new Set<CommandId>();
     const next = new Set(directed);
     for (const run of snapshot.runs) {
       if (run.source === 'agent' || run.source === 'bridge') {
@@ -313,9 +317,11 @@ export function CommandProvider({ documentId, environment: providedEnvironment, 
     runs: snapshot.runs,
     receipts: snapshot.receipts,
     ribbon: composeRibbon(environment, { expanded: profile.expanded, agentRaised: activeRaised }),
-    commands: (surface) => projectCommands(environment, surface, { agentRaised: activeRaised }),
+    commands: (surface) => !AGENT_CHAT_ENABLED && surface === 'agent'
+      ? []
+      : projectCommands(environment, surface, { agentRaised: activeRaised }),
     quickAccess: projectQuickAccess(environment, profile.pinned),
-    agentTools: toAgentTools(environment),
+    agentTools: AGENT_CHAT_ENABLED ? toAgentTools(environment) : [],
     invoke,
     start: (id, source = 'human', input = {}) => runtime.start(id, { source, input }),
     propose: (id, input = {}) => runtime.propose(id, input),
@@ -335,6 +341,7 @@ export function CommandProvider({ documentId, environment: providedEnvironment, 
   valueRef.current = value;
 
   useEffect(() => {
+    if (!AGENT_CHAT_ENABLED) return;
     const bridge: MarksRibbonBridge = {
       version: 1,
       listTools: () => toAgentTools(valueRef.current.environment),
@@ -351,9 +358,10 @@ export function CommandProvider({ documentId, environment: providedEnvironment, 
   }, []);
 
   useEffect(() => {
+    if (!AGENT_CHAT_ENABLED || !loadAgentWebMcp) return;
     let active = true;
     let dispose: () => void = () => undefined;
-    void import('./webmcp.ts').then(({ registerMarksWebMcp }) => registerMarksWebMcp({
+    void loadAgentWebMcp().then(({ registerMarksWebMcp }) => registerMarksWebMcp({
       tools: () => toAgentTools(environmentRef.current),
       focus: (commandIds, ttlMs) => valueRef.current.focusCommands(commandIds, ttlMs),
       execute: async (commandId, input, signal) => {

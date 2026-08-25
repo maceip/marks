@@ -39,7 +39,7 @@ Tokens are a public interface within the client. Before changing one, inventory 
 
 - [Foundations: intent roles, elevation, radius, isometric icons](/design-system#foundations)
 - [Controls: buttons, icon buttons, pills, tabs, size-stable loading](/design-system#controls)
-- [Ribbon and agent-chat chrome](/design-system#chrome)
+- [Ribbon chrome; agent-chat patterns appear only in an explicitly enabled agent-chat build](/design-system#chrome)
 - [Presence and comments](/design-system#collaboration)
 - [Menus, popovers, and dialogs](/design-system#overlays)
 - [Material recipes and rendering tiers](/design-system#materials)

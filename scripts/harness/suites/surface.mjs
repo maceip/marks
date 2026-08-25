@@ -8,6 +8,7 @@
 
 import { parseBooleanFlag } from '../env.mjs';
 
+const EXPECT_AGENT_CHAT = parseBooleanFlag(process.env.MARKS_EXPECT_AGENT_CHAT);
 const EXPECT_RIBBON_WILD = parseBooleanFlag(process.env.MARKS_EXPECT_RIBBON_WILD);
 
 const FIXTURE = `# Surface harness
@@ -23,6 +24,20 @@ async function proposeFromInPageAgent(session, commandId) {
     window.marksRibbon.focus([id], 5_000);
     return window.marksRibbon.propose(id).id;
   }, commandId);
+}
+
+async function openDesktopWildSurface(session, commandId) {
+  await session.evaluate(() => {
+    const all = document.querySelector('.ribbon-profile-toggle');
+    if (all instanceof HTMLButtonElement && all.getAttribute('aria-pressed') !== 'true') all.click();
+    const review = [...document.querySelectorAll('.ribbon-tab')]
+      .find((button) => button.textContent?.trim() === 'Review');
+    if (!(review instanceof HTMLButtonElement)) throw new Error('Review ribbon tab not found');
+    review.click();
+  });
+  const selector = `.ribbon-body [data-command-id="${commandId}"]`;
+  await session.waitForSelector(selector, { timeout: 10_000 });
+  await session.click(selector);
 }
 
 async function waitForAbsent(session, selector, { timeout = 10_000 } = {}) {
@@ -186,25 +201,56 @@ export async function runSurface(session, { check }) {
   check('ribbon KeyTips are keyboard discoverable', (await session.count('.ribbon-keytip')) >= 2);
   await session.press('Escape');
 
-  await session.click('.agent-orb');
-  const localPrivacy = await session.textContent('.agent-privacy');
-  check('local agent privacy disclosure is truthful',
-    String(localPrivacy).includes('do not leave this browser'), String(localPrivacy));
-  await session.fill('.agent-pill-compose input', 'Show rendered view');
-  await session.press('Enter');
-  await session.wait(500);
-  check('agent visibly raises the relevant ribbon task',
-    (await session.count('.ribbon-tab.agent-raised')) >= 1);
-  check('agent command changes to rendered-only mode',
-    !(await session.isVisible('.editor-pane')) && (await session.isVisible('.preview-pane')));
-  check('rendered-only ribbon removes text mutation controls',
-    (await session.count('.ribbon-body [data-command-id="format.bold"]')) === 0);
+  const agentChatState = await session.evaluate(() =>
+    document.documentElement.dataset.marksAgentChat ?? 'missing');
+  const agentChatEnabled = agentChatState === 'enabled';
+  check('agent-chat build flag matches the expected state',
+    agentChatEnabled === EXPECT_AGENT_CHAT,
+    `expected=${EXPECT_AGENT_CHAT ? 'enabled' : 'disabled'} actual=${agentChatState}`);
 
-  await session.fill('.agent-pill-compose input', 'Show source and rendering together');
-  await session.press('Enter');
-  await session.wait(500);
-  check('agent can restore split mode through the same command runtime',
-    (await session.isVisible('.editor-pane')) && (await session.isVisible('.preview-pane')));
+  if (agentChatEnabled) {
+    await session.click('.agent-orb');
+    const localPrivacy = await session.textContent('.agent-privacy');
+    check('local agent privacy disclosure is truthful',
+      String(localPrivacy).includes('do not leave this browser'), String(localPrivacy));
+    check('enabled agent chat exposes the guarded command bridge',
+      await session.evaluate(() => Boolean(window.marksRibbon)));
+    await session.fill('.agent-pill-compose input', 'Show rendered view');
+    await session.press('Enter');
+    await session.wait(500);
+    check('agent visibly raises the relevant ribbon task',
+      (await session.count('.ribbon-tab.agent-raised')) >= 1);
+    check('agent command changes to rendered-only mode',
+      !(await session.isVisible('.editor-pane')) && (await session.isVisible('.preview-pane')));
+    check('rendered-only ribbon removes text mutation controls',
+      (await session.count('.ribbon-body [data-command-id="format.bold"]')) === 0);
+
+    await session.fill('.agent-pill-compose input', 'Show source and rendering together');
+    await session.press('Enter');
+    await session.wait(500);
+    check('agent can restore split mode through the same command runtime',
+      (await session.isVisible('.editor-pane')) && (await session.isVisible('.preview-pane')));
+  } else {
+    const disabledAgentState = await session.evaluate(() => {
+      const resourceNames = performance.getEntriesByType('resource').map((entry) => entry.name);
+      return {
+        ui: document.querySelectorAll('.agent-pill, .agent-chat-host').length,
+        bridge: Boolean(window.marksRibbon),
+        choreography: document.querySelectorAll('.agent-raised, [data-agent-state]').length,
+        network: resourceNames.filter((name) => /\/v1\/agent(?:\/|\?|$)/u.test(name)),
+        assets: resourceNames.filter((name) =>
+          /\/assets\/[^/?]*(?:AgentPill|AgentChatPill|agent-chat|webmcp|gateway|run-store)[^/?]*\.(?:css|js)(?:\?|$)/iu.test(name)),
+      };
+    });
+    check('disabled agent chat exposes no UI, command bridge, or ribbon choreography',
+      disabledAgentState.ui === 0 &&
+      disabledAgentState.bridge === false &&
+      disabledAgentState.choreography === 0,
+      JSON.stringify(disabledAgentState));
+    check('disabled agent chat makes no agent network or lazy-asset requests',
+      disabledAgentState.network.length === 0 && disabledAgentState.assets.length === 0,
+      JSON.stringify(disabledAgentState));
+  }
 
   await session.click('.preview-pane');
   await session.wait(100);
@@ -234,15 +280,19 @@ export async function runSurface(session, { check }) {
     `expected=${EXPECT_RIBBON_WILD ? 'enabled' : 'disabled'} actual=${ribbonWildState}`);
 
   if (ribbonWildEnabled) {
-    const horizonRunId = await proposeFromInPageAgent(session, 'wild.intent-horizon');
+    let horizonRunId = null;
+    if (agentChatEnabled) horizonRunId = await proposeFromInPageAgent(session, 'wild.intent-horizon');
+    else await openDesktopWildSurface(session, 'wild.intent-horizon');
     await session.waitForSelector('.wild-studio[data-wild-capability="intent"]', { timeout: 10_000 });
-    const horizonReceipt = await session.evaluate((runId) => {
-      const receipt = window.marksRibbon?.state().receipts.find((item) => item.id === runId);
-      return receipt ? { source: receipt.source, status: receipt.status } : null;
-    }, horizonRunId);
-    check('in-page agent can visibly operate the possibility ribbon layer',
-      typeof horizonRunId === 'string' && horizonReceipt?.source === 'agent' && horizonReceipt?.status === 'succeeded',
-      JSON.stringify(horizonReceipt));
+    if (agentChatEnabled) {
+      const horizonReceipt = await session.evaluate((runId) => {
+        const receipt = window.marksRibbon?.state().receipts.find((item) => item.id === runId);
+        return receipt ? { source: receipt.source, status: receipt.status } : null;
+      }, horizonRunId);
+      check('in-page agent can visibly operate the possibility ribbon layer',
+        typeof horizonRunId === 'string' && horizonReceipt?.source === 'agent' && horizonReceipt?.status === 'succeeded',
+        JSON.stringify(horizonReceipt));
+    }
     check('wild studio exposes all five integrated capabilities',
       (await session.count('.wild-nav [data-wild-nav]')) === 5 &&
       (await session.count('.intent-horizon')) === 1);
@@ -265,12 +315,17 @@ export async function runSurface(session, { check }) {
 
     await session.click('.cm-content');
     await session.press('Control+A');
-    const boldRunId = await proposeFromInPageAgent(session, 'format.bold');
+    let boldRunId = null;
+    if (agentChatEnabled) boldRunId = await proposeFromInPageAgent(session, 'format.bold');
+    else await session.click('.quick-access [data-command-id="format.bold"]');
     await session.waitForSelector('.causal-lightpath[data-command-id="format.bold"][data-command-phase="finished"]', { timeout: 10_000 });
-    check('source-changing agent work paints a live causal lightpath',
-      typeof boldRunId === 'string' && (await session.isVisible('.causal-lightpath')));
+    if (agentChatEnabled) {
+      check('source-changing agent work paints a live causal lightpath',
+        typeof boldRunId === 'string' && (await session.isVisible('.causal-lightpath')));
+    }
 
-    await proposeFromInPageAgent(session, 'wild.counterfactual-shelf');
+    if (agentChatEnabled) await proposeFromInPageAgent(session, 'wild.counterfactual-shelf');
+    else await openDesktopWildSurface(session, 'wild.counterfactual-shelf');
     await session.waitForSelector('.wild-studio[data-wild-capability="counterfactuals"] .shelf-cards > button', { timeout: 10_000 });
     check('successful source commands capture a reversible counterfactual',
       (await session.count('.shelf-cards > button')) >= 1 &&
@@ -279,7 +334,7 @@ export async function runSurface(session, { check }) {
   } else {
     const disabledState = await session.evaluate(() => ({
       dom: document.querySelectorAll('.wild-studio, .causal-lightpath').length,
-      tools: window.marksRibbon?.listTools().filter((tool) => tool.commandId.startsWith('wild.')).length ?? -1,
+      tools: window.marksRibbon?.listTools().filter((tool) => tool.commandId.startsWith('wild.')).length ?? 0,
       commands: document.querySelectorAll('[data-command-id^="wild."]').length,
     }));
     check('disabled ribbon-wild exposes no commands, agent tools, or surfaces',
@@ -287,6 +342,9 @@ export async function runSurface(session, { check }) {
       JSON.stringify(disabledState));
   }
 
+  // The wild receipt is an intentional transient button over the top chrome.
+  // Let it settle out before isolating the mini-toolbar's hit-target contract.
+  await waitForAbsent(session, '.causal-lightpath');
   const homeTabOwnsHitTarget = await session.evaluate(() => {
     const home = [...document.querySelectorAll('.ribbon-tab')]
       .find((tab) => tab.textContent?.trim() === 'Home');
@@ -777,6 +835,26 @@ export async function runSurface(session, { check }) {
       wildAssets.length === 0,
       JSON.stringify(wildAssets));
   }
+
+  await session.goto('/design-system');
+  await session.waitForSelector('.design-system', { timeout: 20_000 });
+  if (agentChatEnabled) {
+    await session.waitForSelector('.agent-chat-host', { timeout: 10_000 });
+  }
+  const designSystemAgentState = await session.evaluate(() => ({
+    host: document.querySelectorAll('.agent-chat-host').length,
+    control: document.querySelectorAll('[aria-label="Agent-chat pattern state"]').length,
+    assets: performance.getEntriesByType('resource')
+      .map((entry) => entry.name)
+      .filter((name) => /\/assets\/[^/?]*(?:AgentChatPill|agent-chat)[^/?]*\.(?:css|js)(?:\?|$)/iu.test(name)),
+  }));
+  check('design-system agent chat catalog follows the product flag',
+    agentChatEnabled
+      ? designSystemAgentState.host === 1 && designSystemAgentState.control === 1
+      : designSystemAgentState.host === 0 &&
+        designSystemAgentState.control === 0 &&
+        designSystemAgentState.assets.length === 0,
+    JSON.stringify(designSystemAgentState));
 }
 
 export const SURFACE_CHECK_NAMES = [
@@ -791,11 +869,15 @@ export const SURFACE_CHECK_NAMES = [
   'document renders blocks',
   'desktop ribbon is registry-driven',
   'ribbon KeyTips are keyboard discoverable',
+  'agent-chat build flag matches the expected state',
   'local agent privacy disclosure is truthful',
+  'enabled agent chat exposes the guarded command bridge',
   'agent visibly raises the relevant ribbon task',
   'agent command changes to rendered-only mode',
   'rendered-only ribbon removes text mutation controls',
   'agent can restore split mode through the same command runtime',
+  'disabled agent chat exposes no UI, command bridge, or ribbon choreography',
+  'disabled agent chat makes no agent network or lazy-asset requests',
   'desktop split inspects the rendered pane from a preview click',
   'desktop split restores compose commands from an editor click',
   'ribbon-wild build flag matches the expected state',
@@ -843,4 +925,5 @@ export const SURFACE_CHECK_NAMES = [
   'disabled ribbon-wild requests no lazy code or style assets',
   'phone Review ribbon exposes all five possibility tools',
   'possibility layer becomes a focused phone surface',
+  'design-system agent chat catalog follows the product flag',
 ];

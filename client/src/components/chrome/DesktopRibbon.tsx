@@ -19,6 +19,7 @@ import type {
   RibbonTabId,
 } from '../../commands/types.ts';
 import { clearFormatPreview, showFormatPreview, type FormatPreviewKind } from '../../editor/format-preview';
+import { AGENT_CHAT_ENABLED } from '../../lib/product';
 import type { UiActionId } from '../../lib/ui-actions';
 import type { ViewMode } from '../shell/TopBar';
 import { Glyph } from '../glyphs/Glyph';
@@ -138,6 +139,7 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
   }, [props.mode]);
 
   useEffect(() => {
+    if (!AGENT_CHAT_ENABLED) return;
     const active = center.runs.findLast((run) =>
       (run.source === 'agent' || run.source === 'bridge') &&
       (run.status === 'proposed' || run.status === 'awaiting-approval' || run.status === 'running'));
@@ -439,8 +441,10 @@ function CommandControl({ command, keyTip, keySequence = '', compact = false }: 
   compact?: boolean;
 }) {
   const center = useCommandCenter();
-  const active = center.runs.findLast((run) => run.commandId === command.id &&
-    (run.status === 'proposed' || run.status === 'awaiting-approval' || run.status === 'running'));
+  const active = AGENT_CHAT_ENABLED
+    ? center.runs.findLast((run) => run.commandId === command.id &&
+        (run.status === 'proposed' || run.status === 'awaiting-approval' || run.status === 'running'))
+    : undefined;
   const label = dynamicLabel(command, center.environment.theme);
   return (
     <RibbonCommand

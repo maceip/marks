@@ -5,6 +5,35 @@ left the Rust server, SQLite schema, authentication protocol, collaboration
 engine, ESBT artifacts, and deployment files unchanged. This document records
 every exception introduced by practical capabilities and the reason it exists.
 
+## Agent-chat activation contract
+
+Agent chat is merged but off by default. It uses an independent build-time gate
+that follows the ribbon-wild convention:
+
+- Development: `VITE_MARKS_AGENT_CHAT=1 npm run dev`
+- Production build: `VITE_MARKS_AGENT_CHAT=1 npm run build`
+- Any missing value, including `0`, leaves agent chat disabled.
+- The resolved state is inspectable as `data-marks-agent-chat="enabled|disabled"`
+  on the document root.
+
+In a disabled build, the product and design-system agent chat UIs do not render;
+the local and hosted planners do not load; no hosted capability probe or run
+recovery starts; agent tool projection is empty; and neither `window.marksRibbon`
+nor the experimental WebMCP page tools are registered. The lazy `AgentPill`,
+`AgentChatPill`, planner, gateway, run-store, and agent-style modules are omitted
+from the built artifact rather than merely left as unreachable chunks. Human
+ribbon, palette, shortcut, and KeyTip commands remain available.
+
+Every Vite build checks the final Rolldown module graph: disabled features fail
+the build if any gated source module is emitted, and enabled features fail if a
+required lazy entry is missing. This assertion uses source module IDs rather
+than hashed filenames, so chunk renaming or merging cannot bypass it.
+
+This browser gate and the server provider policy are independent. Hosted planning
+requires both `VITE_MARKS_AGENT_CHAT=1` in the client artifact and an explicitly
+enabled `MARKS_AGENT_PROVIDER`; enabling either one alone cannot activate the
+hosted path. The checked-in build and deployment configuration enables neither.
+
 ## In-page agent gateway
 
 The agent pill needs a deployable hosted-planner option in addition to the
@@ -54,10 +83,12 @@ from a regular file that is not group/world accessible and is redacted from
 debug output. The provider and model are deployment policy; they are never
 browser parameters.
 
-The gateway is disabled by default. When disabled—or while offline—the local
-planner remains the pill's available provider. The capabilities response sets
-`webMcp: false`: the in-page command registry is the authoritative tool surface
-for this implementation, and no external WebMCP authority is implied.
+The server gateway is disabled by default. In an explicitly enabled agent-chat
+build, disabling the hosted provider—or going offline—leaves the deterministic
+local planner available. In the default agent-chat-off build there is no pill or
+planner surface. The capabilities response sets `webMcp: false`: the in-page
+command registry is the authoritative tool surface for this implementation, and
+no external provider-supplied WebMCP authority is implied.
 
 Cursor's public cloud-agent SDK/API is intentionally not wired as a drop-in
 planner. Its present contract runs repository-editing agents in managed
@@ -73,6 +104,7 @@ The new variables are additive and all retain a safe disabled default:
 
 | Variable | Default | Boundary |
 | --- | --- | --- |
+| `VITE_MARKS_AGENT_CHAT` | unset | Client build gate; only exact value `1` exposes agent chat and browser agent command entry points. |
 | `MARKS_AGENT_PROVIDER` | `disabled` | `disabled` or `openai`; server-owned. |
 | `MARKS_OPENAI_API_KEY_FILE` | unset | Required for OpenAI; regular file, at most 16 KiB, mode `0600` or stricter. |
 | `MARKS_OPENAI_MODEL` | unset | Required for OpenAI; validated server-owned model identifier. |
@@ -159,9 +191,10 @@ also carries its expected source text and fails closed if that text has moved.
 | Audience/Quality Contract | Persists audience, target grade, and sentence length in front matter, then compares current local readability metrics to that explicit contract. |
 
 All eighteen capabilities are registry commands, so desktop, phone, unfolded
-foldable, palette, local agent, hosted agent, and the in-page command bridge use
-the same availability, authority, consequence, visual-focus, and receipt path.
-Clipboard access remains intentionally unavailable to remote agents.
+foldable, and palette use the same availability, authority, consequence,
+visual-focus, and receipt path. When the independent agent-chat build gate is
+enabled, local agent, hosted agent, and the in-page command bridge join that same
+path. Clipboard access remains intentionally unavailable to remote agents.
 
 ## Verification boundaries
 
@@ -170,6 +203,7 @@ operations, DOI normalization, cross-document parsing, and the complete action
 map. Rust integration coverage owns real cookie/CSRF/ACL behavior, asset
 metadata disclosure, input limits, and refusal of private or credentialed link
 destinations. The browser gate owns responsive inspector placement and the
-human/agent command path. It must not characterize a successful build or a
+human command path and, in an enabled agent-chat build, the agent command path.
+It must not characterize a successful build or a
 mock provider as proof of an external OpenAI, Crossref, or arbitrary public-link
 transaction; those are separate opt-in live checks.

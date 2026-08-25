@@ -38,7 +38,7 @@ import { useTheme } from './hooks/useTheme';
 import { useUiPreferences } from './hooks/useUiPreferences';
 import { EMPTY_SNAPSHOT, type HudSnapshot } from './lib/hud';
 import { LatencyTracker } from './lib/latency';
-import { RIBBON_WILD_ENABLED, UI_DATA_MODE, UI_MEDIA } from './lib/product';
+import { AGENT_CHAT_ENABLED, RIBBON_WILD_ENABLED, UI_DATA_MODE, UI_MEDIA } from './lib/product';
 import { ScrollSync } from './lib/scroll-sync';
 import type { UiActionId } from './lib/ui-actions';
 import { practicalCapabilityForAction } from './lib/practical.ts';
@@ -66,9 +66,9 @@ const CommandProvider = lazy(() =>
 const AppRail = lazy(() =>
   import('./components/chrome/AppRail').then((module) => ({ default: module.AppRail })),
 );
-const AgentPill = lazy(() =>
-  import('./components/agent/AgentPill').then((module) => ({ default: module.AgentPill })),
-);
+const AgentPill = __MARKS_AGENT_CHAT_ENABLED__
+  ? lazy(() => import('./components/agent/AgentPill').then((module) => ({ default: module.AgentPill })))
+  : null;
 const DraftToolsSheet = lazy(() =>
   import('./components/chrome/DraftToolsSheet').then((module) => ({ default: module.DraftToolsSheet })),
 );
@@ -90,10 +90,10 @@ const PerfHud = lazy(() =>
 const PracticalInspector = lazy(() =>
   import('./components/practical/PracticalInspector').then((module) => ({ default: module.PracticalInspector })),
 );
-const WildStudio = RIBBON_WILD_ENABLED
+const WildStudio = __MARKS_RIBBON_WILD_ENABLED__
   ? lazy(() => import('./components/wild/WildStudio').then((module) => ({ default: module.WildStudio })))
   : null;
-const WildTelemetry = RIBBON_WILD_ENABLED
+const WildTelemetry = __MARKS_RIBBON_WILD_ENABLED__
   ? lazy(() => import('./components/wild/WildTelemetry').then((module) => ({ default: module.WildTelemetry })))
   : null;
 
@@ -1435,7 +1435,7 @@ export function App() {
         </Suspense>
       )}
 
-      {route.name === 'document' && session && !focusMode && (
+      {AGENT_CHAT_ENABLED && AgentPill && route.name === 'document' && session && !focusMode && (
         <Suspense fallback={null}>
           <AgentPill documentId={route.id} linkedSurface={practicalSurface ?? wildSurface} />
         </Suspense>

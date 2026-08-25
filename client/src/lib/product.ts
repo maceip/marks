@@ -25,6 +25,14 @@ export const UI_DATA_MODE =
 export const RIBBON_WILD_ENABLED =
   import.meta.env?.VITE_MARKS_RIBBON_WILD === '1';
 
+/**
+ * Agent chat is merged but intentionally dormant. Keep this build-time so an
+ * unflagged artifact cannot expose chat UI, planners, or browser agent bridges
+ * through runtime state left behind by another release.
+ */
+export const AGENT_CHAT_ENABLED =
+  import.meta.env?.VITE_MARKS_AGENT_CHAT === '1';
+
 export const ENGINE = {
   id: 'esbt' as const,
   label: 'ESBT',

@@ -11,6 +11,7 @@ import { useCommandCenter } from '../../commands/context';
 import { ribbonTask } from '../../commands/projection';
 import type { ProjectedCommand, ProjectedRibbonTab, RibbonTabId } from '../../commands/types.ts';
 import type { Posture } from '../../lib/posture';
+import { AGENT_CHAT_ENABLED } from '../../lib/product';
 import type { UiActionId } from '../../lib/ui-actions';
 import type { ViewMode } from '../shell/TopBar';
 import { Glyph } from '../glyphs/Glyph';
@@ -73,6 +74,7 @@ export function PhoneComposer(props: PhoneComposerProps) {
   }, [center.environment.context, tabs]);
 
   useEffect(() => {
+    if (!AGENT_CHAT_ENABLED) return;
     const active = center.runs.findLast((run) =>
       (run.source === 'agent' || run.source === 'bridge') &&
       (run.status === 'proposed' || run.status === 'awaiting-approval' || run.status === 'running'));

@@ -67,6 +67,7 @@ npm run preview      # static preview only; no API or collaboration backend
 | --- | --- | --- |
 | `MARKS_SERVER` | `http://localhost:3000` | Rust API/WebSocket target used by the Vite development proxy |
 | `VITE_MARKS_DATA_MODE` | `local` | Set to `service` when building against a runnable document service |
+| `VITE_MARKS_AGENT_CHAT` | unset (disabled) | Set to `1` at build time to activate agent chat UI and browser agent command entry points |
 | `VITE_MARKS_RIBBON_WILD` | unset (disabled) | Set to `1` at build time to activate the ribbon possibility layer |
 
 `marks-server` reads its own environment (`MARKS_LISTEN`, `MARKS_DB`,

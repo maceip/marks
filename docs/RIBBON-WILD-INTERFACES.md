@@ -13,7 +13,7 @@ The layer is merged but off by default while product and design review is pendin
 - Any missing value, including `0`, leaves the layer disabled.
 - The resolved build state is inspectable as `data-marks-ribbon-wild="enabled|disabled"` on the document root.
 
-In a disabled build, wild commands are omitted from the active command registry and legacy palette, the agent keeps its stable suggestions, command execution does not capture source observations, telemetry does not scan or open IndexedDB, and the lazy Wild Studio/Telemetry assets are not requested. Enabling the flag restores the five commands and all responsive/agent integration described below. This activation gate is not a substitute for the planned visual and interaction review.
+In a disabled build, wild commands are omitted from the active command registry and legacy palette, an independently enabled agent-chat build keeps its stable non-wild suggestions, command execution does not capture source observations, telemetry does not scan or open IndexedDB, and the Wild Studio, Telemetry, observation, store, and style modules are omitted from the built artifact. Enabling the flag restores the five commands and responsive integration described below; agent integration additionally requires `VITE_MARKS_AGENT_CHAT=1`. This activation gate is not a substitute for the planned visual and interaction review.
 
 ## Capability contracts
 
@@ -73,14 +73,14 @@ The command-observation backlog exists only before the telemetry listener mounts
 
 ## Responsive ribbon integration
 
-- **Desktop:** all five commands live under Review in `Possibility` and `Time & alternatives` groups. The studio docks to the right and the agent pill contracts into a linked receipt dock instead of covering it.
+- **Desktop:** all five commands live under Review in `Possibility` and `Time & alternatives` groups. The studio docks to the right. In an enabled agent-chat build, the agent pill contracts into a linked receipt dock instead of covering it.
 - **Phone:** all five commands are in the Document intelligence sheet. The studio becomes a bottom sheet above the composer and safe area. The live causal path moves above the phone controls.
 - **Unfolded book posture:** a 72px view rail switches Markdown / Split / Preview. All five possibility commands live in the full-width Review ribbon. The studio is constrained to the companion physical segment rather than crossing the hinge.
 - **Unfolded laptop posture:** the same view rail and full-width ribbon. The studio occupies the lower segment beneath the horizontal hinge, leaving the upper reading/editing segment intact.
 
 ## Agent and WebMCP boundary
 
-The five opener commands are ordinary registered tools, so the existing local planner, hosted OpenAI gateway, in-page `window.marksRibbon` bridge, and WebMCP registration discover the same schemas. The agent can open a capability, focus relevant controls, and receive a normal command receipt. It cannot bypass consequence staging, version authority, stale-patch checks, or the runtime’s external/destructive approval policy.
+The five opener commands are ordinary registered tools. When both build flags are enabled, the local planner, hosted OpenAI gateway, in-page `window.marksRibbon` bridge, and WebMCP registration discover the same schemas. The agent can open a capability, focus relevant controls, and receive a normal command receipt. With agent chat disabled, those browser agent entry points are absent while the human wild ribbon remains usable. Neither mode can bypass consequence staging, version authority, stale-patch checks, or the runtime’s external/destructive approval policy.
 
 Document source still is not sent to the hosted planner by this layer. Agent-originated command effects are observed locally after execution and labeled `agent` in the causal receipt. Selecting another future provider does not require a second ribbon integration: it must propose registered command IDs through the same command-center boundary.
 

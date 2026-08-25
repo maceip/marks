@@ -2,9 +2,8 @@ import '../styles/foundation-tokens.css';
 import '../styles/components.css';
 import '../styles/overlays.css';
 import '../styles/chrome.css';
-import { useEffect, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import { RibbonCommand } from '../components/chrome/RibbonCommand';
-import { AgentChatPill } from '../components/agent/AgentChatPill';
 import type { AgentChatState } from '../components/agent/agent-chat-model';
 import { ICON_NAMES, Icon } from '../components/ui/Icon';
 import { Button } from '../components/ui/Button';
@@ -18,6 +17,7 @@ import { CommentCard, CommentCompose, Avatar } from '../components/ui/Comment';
 import { PresenceBar } from '../components/shell/PresenceBar';
 import { LiquidDock } from '../components/shell/LiquidDock';
 import { SurfaceMaterial } from '../components/ui/SurfaceMaterial';
+import { AGENT_CHAT_ENABLED } from '../lib/product';
 import { catalogPeers, catalogStates, catalogThread, palette, sectionLinks } from './fixtures';
 import type { Peer } from '../collab/types';
 import '../styles/motion.css';
@@ -26,12 +26,56 @@ import './design-system.css';
 type Toggle = 'light' | 'dark';
 type Material = 'cinematic' | 'balanced' | 'foundation' | 'opaque';
 
+const AgentChatPill = __MARKS_AGENT_CHAT_ENABLED__
+  ? lazy(() => import('../components/agent/AgentChatPill').then((module) => ({ default: module.AgentChatPill })))
+  : null;
+
 function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
   return (
     <section id={id} className="ds-section" aria-labelledby={`${id}-title`}>
       <h2 id={`${id}-title`}>{title}</h2>
       {children}
     </section>
+  );
+}
+
+function AgentChatCatalog() {
+  const [state, setState] = useState<AgentChatState>('collapsed');
+  const [prompt, setPrompt] = useState('Summarize this document');
+  if (!AgentChatPill) return null;
+  return (
+    <>
+      <label>
+        Pattern state
+        <select
+          aria-label="Agent-chat pattern state"
+          value={state}
+          onChange={(event) => setState(event.target.value as AgentChatState)}
+        >
+          {['collapsed', 'focused', 'submitting', 'working', 'result', 'error', 'expanded'].map((value) => (
+            <option key={value}>{value}</option>
+          ))}
+        </select>
+      </label>
+      <div className="ds-agent-live">
+        <Suspense fallback={null}>
+          <AgentChatPill
+            state={state}
+            shell="desktop"
+            prompt={prompt}
+            result={state === 'result' || state === 'expanded' ? 'The document has three main sections.' : undefined}
+            error={state === 'error' ? 'The assistant could not finish.' : undefined}
+            onOpen={() => setState('focused')}
+            onPromptChange={setPrompt}
+            onSubmit={() => setState('working')}
+            onCancel={() => setState('focused')}
+            onRetry={() => setState('submitting')}
+            onClose={() => setState('collapsed')}
+            onExpand={() => setState('expanded')}
+          />
+        </Suspense>
+      </div>
+    </>
   );
 }
 
@@ -71,8 +115,6 @@ export function DesignSystem({ onBack }: { onBack: () => void }) {
   const [glass, setGlass] = useState('full');
   const [motion, setMotion] = useState('full');
   const [material, setMaterial] = useState<Material>('balanced');
-  const [agentState, setAgentState] = useState<AgentChatState>('collapsed');
-  const [agentPrompt, setAgentPrompt] = useState('Summarize this document');
   const [catalogTab, setCatalogTab] = useState('write');
   const [menuOpen, setMenuOpen] = useState(true);
   const [popoverOpen, setPopoverOpen] = useState(true);
@@ -149,13 +191,12 @@ export function DesignSystem({ onBack }: { onBack: () => void }) {
           <Tabs label="Document views" selectedId={catalogTab} onChange={setCatalogTab} items={['write', 'preview', 'review', 'history'].map((id) => ({ id, label: id[0].toUpperCase() + id.slice(1) }))} />
         </Section>
 
-        <Section id="chrome" title="Ribbon and agent chat">
+        <Section id="chrome" title={AGENT_CHAT_ENABLED ? 'Ribbon and agent chat' : 'Ribbon'}>
           <div className="ds-ribbon">
             <div className="ds-titlebar">Quick access <b>Document title</b> Presence</div>
             <div className="ds-ribbon-tabs">File　 <b>Home</b>　Insert　Review　View</div>
             <div className="ds-ribbon-commands">{catalogStates.slice(0, 8).map((s, i) => <RibbonCommand key={s.id} glyph={i % 2 ? 'italic' : 'bold'} label={s.label} disabled={s.id === 'disabled'} pressed={s.id === 'selected'} danger={s.id === 'danger'} onClick={() => undefined} />)}</div>
           </div>
-          <label>Pattern state<select aria-label="Agent-chat pattern state" value={agentState} onChange={(event) => setAgentState(event.target.value as AgentChatState)}>{['collapsed', 'focused', 'submitting', 'working', 'result', 'error', 'expanded'].map((state) => <option key={state}>{state}</option>)}</select></label>
           <div className="ds-dock-preview">
             <LiquidDock
               onCommands={() => undefined}
@@ -164,22 +205,7 @@ export function DesignSystem({ onBack }: { onBack: () => void }) {
               voiceSupported
             />
           </div>
-          <div className="ds-agent-live">
-            <AgentChatPill
-              state={agentState}
-              shell="desktop"
-              prompt={agentPrompt}
-              result={agentState === 'result' || agentState === 'expanded' ? 'The document has three main sections.' : undefined}
-              error={agentState === 'error' ? 'The assistant could not finish.' : undefined}
-              onOpen={() => setAgentState('focused')}
-              onPromptChange={setAgentPrompt}
-              onSubmit={() => setAgentState('working')}
-              onCancel={() => setAgentState('focused')}
-              onRetry={() => setAgentState('submitting')}
-              onClose={() => setAgentState('collapsed')}
-              onExpand={() => setAgentState('expanded')}
-            />
-          </div>
+          {AGENT_CHAT_ENABLED && <AgentChatCatalog />}
         </Section>
 
         <Section id="collaboration" title="Presence and comments">
