@@ -560,7 +560,8 @@ jobs:
           set -euo pipefail
           node -e '
             const { readFileSync } = require("node:fs");
-            const receipt = JSON.parse(readFileSync(`${process.env.MARKS_CLIENT_DIST}/marks-product-build.json`, "utf8"));
+            const { join } = require("node:path");
+            const receipt = JSON.parse(readFileSync(join(process.env.MARKS_CLIENT_DIST, "marks-product-build.json"), "utf8"));
             if (receipt.schema !== "marks.product-build-receipt.v1") throw new Error("unexpected client receipt schema");
             if (receipt.buildPlan.productVariant !== process.env.MARKS_EXPECT_PRODUCT_VARIANT) throw new Error("client variant differs from matrix request");
             if (receipt.buildPlanSha256 !== process.env.MARKS_EXPECT_BUILD_PLAN_SHA256) throw new Error("client digest differs from matrix request");
