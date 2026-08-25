@@ -22,9 +22,10 @@ use marks_auth::{
     require_deleted_document_owner, require_principal_document, require_scratch_document,
     resolve_document_role,
 };
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 /// The caller's document authority: a rotating principal session or a live
@@ -230,6 +231,7 @@ pub async fn trash_list(State(app): State<Arc<App>>, headers: HeaderMap) -> ApiR
 }
 
 #[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateBody {
     pub title: Option<String>,
     /// Optional canonical Markdown used to initialize a document atomically.
@@ -237,6 +239,9 @@ pub struct CreateBody {
     /// would expose a transient blank document to collaborators and make a
     /// failed second request indistinguishable from a blank template.
     pub markdown: Option<String>,
+    /// Authority-scoped retry identity. Reusing it with the exact normalized
+    /// payload returns the original slug; rebinding it is a conflict.
+    pub request_id: Option<String>,
 }
 
 pub async fn create(
@@ -257,6 +262,31 @@ pub async fn create(
     let chars = markdown.encode_utf16().count();
     if chars > app.limits.max_document_units {
         return Err(ApiError::bad_request("document is too large"));
+    }
+    if body.request_id.as_deref().is_some_and(|request_id| {
+        request_id.is_empty()
+            || request_id.len() > 128
+            || !request_id.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+            })
+    }) {
+        return Err(ApiError::bad_request("invalid request id"));
+    }
+    let request_hash = body
+        .request_id
+        .as_ref()
+        .map(|_| create_request_hash(title, &markdown));
+
+    // The common ambiguous-commit path is a retry after process restart. Do
+    // the durable lookup before reconstructing a potentially large CRDT seed;
+    // the transaction below repeats it to close concurrent-create races.
+    if let (Some(request_id), Some(request_hash)) =
+        (body.request_id.as_deref(), request_hash.as_ref())
+        && let Some(row) = app
+            .db
+            .read(|conn| load_create_replay(conn, &caller, request_id, request_hash))?
+    {
+        return Ok(Json(json!({ "document": meta(&row), "replayed": true })).into_response());
     }
 
     // Construct the initial state before opening the SQLite transaction. The
@@ -289,7 +319,13 @@ pub async fn create(
     };
     let now = now_ms();
     let id = new_id("document");
-    let row = app.db.tx(|conn| {
+    let (row, replayed) = app.db.tx(|conn| {
+        if let (Some(request_id), Some(request_hash)) =
+            (body.request_id.as_deref(), request_hash.as_ref())
+            && let Some(row) = load_create_replay(conn, &caller, request_id, request_hash)?
+        {
+            return Ok((row, true));
+        }
         let (scratch_id, owner_id) = match &caller {
             Caller::Scratch(scratch) => (Some(scratch.as_str()), None),
             Caller::Principal(session) => (None, Some(session.principal_id().as_str())),
@@ -297,8 +333,9 @@ pub async fn create(
         conn.execute(
             "INSERT INTO documents
                 (id, scratch_id, owner_principal_id, title, title_explicit, engine, chars,
-                 auth_epoch, snapshot, snapshot_revision, created_at, updated_at, public_edit)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'esbt', ?6, 1, ?7, 0, ?8, ?8, ?9)",
+                 auth_epoch, snapshot, snapshot_revision, created_at, updated_at, public_edit,
+                 create_request_id, create_request_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'esbt', ?6, 1, ?7, 0, ?8, ?8, ?9, ?10, ?11)",
             params![
                 id,
                 scratch_id,
@@ -309,6 +346,8 @@ pub async fn create(
                 snapshot,
                 store::ms(now),
                 i64::from(matches!(&caller, Caller::Scratch(_))),
+                body.request_id,
+                request_hash.as_ref().map(<[u8; 32]>::as_slice),
             ],
         )?;
         let id = DocumentId::new(id.clone()).map_err(|_| ApiError::internal())?;
@@ -349,9 +388,68 @@ pub async fn create(
                 ],
             )?;
         }
-        load_live_document(conn, &id)
+        Ok((load_live_document(conn, &id)?, false))
     })?;
-    Ok((StatusCode::CREATED, Json(json!({ "document": meta(&row) }))).into_response())
+    let status = if replayed {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    };
+    Ok((
+        status,
+        Json(json!({ "document": meta(&row), "replayed": replayed })),
+    )
+        .into_response())
+}
+
+fn create_request_hash(title: Option<&str>, markdown: &str) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(b"marks-document-create-v1\0");
+    match title {
+        Some(title) => {
+            hash.update([1]);
+            hash.update((title.len() as u64).to_be_bytes());
+            hash.update(title.as_bytes());
+        }
+        None => hash.update([0]),
+    }
+    hash.update((markdown.len() as u64).to_be_bytes());
+    hash.update(markdown.as_bytes());
+    hash.finalize().into()
+}
+
+fn load_create_replay(
+    conn: &Connection,
+    caller: &Caller,
+    request_id: &str,
+    request_hash: &[u8; 32],
+) -> ApiResult<Option<store::DocumentMetaRow>> {
+    let found: Option<(String, Vec<u8>)> = match caller {
+        Caller::Scratch(scratch) => conn
+            .query_row(
+                "SELECT id, create_request_hash FROM documents
+                 WHERE scratch_id = ?1 AND create_request_id = ?2",
+                params![scratch.as_str(), request_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?,
+        Caller::Principal(session) => conn
+            .query_row(
+                "SELECT id, create_request_hash FROM documents
+                 WHERE owner_principal_id = ?1 AND create_request_id = ?2",
+                params![session.principal_id().as_str(), request_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?,
+    };
+    let Some((id, stored_hash)) = found else {
+        return Ok(None);
+    };
+    if stored_hash.as_slice() != request_hash {
+        return Err(ApiError::conflict());
+    }
+    let id = DocumentId::new(id).map_err(|_| ApiError::internal())?;
+    Ok(Some(load_live_document(conn, &id)?))
 }
 
 pub async fn get(

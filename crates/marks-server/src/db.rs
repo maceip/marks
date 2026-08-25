@@ -782,6 +782,23 @@ const MIGRATIONS: &[(i64, &str)] = &[
        AND anonymous_edit_count > 6;
     ",
     ),
+    (
+        14,
+        "
+    -- Document creation is an atomic, authority-scoped idempotent operation.
+    -- A browser keeps one request id across reload until it receives the
+    -- committed slug, so a lost response cannot publish a second starter.
+    ALTER TABLE documents ADD COLUMN create_request_id TEXT;
+    ALTER TABLE documents ADD COLUMN create_request_hash BLOB
+        CHECK(create_request_hash IS NULL OR length(create_request_hash) = 32);
+    CREATE UNIQUE INDEX documents_create_request_by_scratch
+        ON documents(scratch_id, create_request_id)
+        WHERE scratch_id IS NOT NULL AND create_request_id IS NOT NULL;
+    CREATE UNIQUE INDEX documents_create_request_by_owner
+        ON documents(owner_principal_id, create_request_id)
+        WHERE owner_principal_id IS NOT NULL AND create_request_id IS NOT NULL;
+    ",
+    ),
 ];
 
 #[cfg(test)]
