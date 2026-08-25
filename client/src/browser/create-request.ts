@@ -17,8 +17,9 @@ export function anonymousStarterRequestId(
   try {
     stored = storage.getItem(ANONYMOUS_STARTER_REQUEST_KEY);
   } catch {
-    stored = volatilePendingRequest;
+    stored = null;
   }
+  stored ??= volatilePendingRequest;
   if (stored && UUID.test(stored)) return stored;
   const created = makeId();
   if (!UUID.test(created)) throw new TypeError('anonymous starter request id must be a UUID');

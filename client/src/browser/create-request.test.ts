@@ -36,6 +36,7 @@ test('anonymous starter retries keep one request id until a confirmed response',
   assert.equal(generated, 1);
   confirmAnonymousStarterRequest(first, storage);
   assert.equal(anonymousStarterRequestId(storage, makeId), second);
+  confirmAnonymousStarterRequest(second, storage);
 });
 
 test('a stale response cannot clear a newer pending create request', () => {
@@ -60,4 +61,19 @@ test('storage denial does not crash anonymous starter creation', () => {
   assert.equal(anonymousStarterRequestId(denied, () => id), id);
   assert.equal(anonymousStarterRequestId(denied, () => assert.fail('must reuse volatile id')), id);
   assert.doesNotThrow(() => confirmAnonymousStarterRequest(id, denied));
+});
+
+test('a failed storage write still reuses the volatile request on this page', () => {
+  const writeDenied = {
+    getItem(): string | null { return null; },
+    setItem(): void { throw new DOMException('full', 'QuotaExceededError'); },
+    removeItem(): void {},
+  };
+  const id = '44444444-4444-4444-8444-444444444444';
+  assert.equal(anonymousStarterRequestId(writeDenied, () => id), id);
+  assert.equal(
+    anonymousStarterRequestId(writeDenied, () => assert.fail('must reuse volatile id')),
+    id,
+  );
+  confirmAnonymousStarterRequest(id, writeDenied);
 });
