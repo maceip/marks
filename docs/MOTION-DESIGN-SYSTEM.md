@@ -1,8 +1,8 @@
 # Motion design system
 
-Motion communicates state without delaying work. Entrances use only `transform` and `opacity`; never animate layout dimensions. The single exception is the tightly bounded agent pill: `.motion-pill` clips its contents and uses `contain: layout paint`, so its inline-size transition cannot reflow the document.
+Motion communicates state without delaying work. Entrances use only `transform` and `opacity`; production UI does not animate layout dimensions. The agent pill changes between its compact and expanded geometries discretely, then animates only owned visual state within that geometry.
 
-Durations, easings, travel, scale, and stagger must come from `tokens.css`. Shared styles must use the contracts and keyframes in `motion.css`, rather than local keyframes or time literals.
+Durations, easings, travel, scale, and stagger must come from `tokens.css`. Reusable cross-pattern recipes belong in `motion.css`; a pattern-specific keyframe may live with its registered stylesheet owner. Both routes are scanned for unregistered duration literals. `motion.css` contains only recipes used by production components, so this document must not promise a utility class that has no consumer.
 
 ## Interaction and interruption contract
 
@@ -52,7 +52,7 @@ Reduced motion is selected either by `prefers-reduced-motion: reduce` or `data-m
 
 | Trigger | Property | Start | End | Duration | Easing | Delay/stagger | Interruption | Reduced-motion replacement |
 |---|---|---|---|---|---|---|---|---|
-| Agent details expand/collapse | bounded inline-size, opacity, transform | compact; 0; subtle X scale | content size; 1; rest | medium expand, fast collapse | emphasized expand, accelerate collapse | none | Transition reverses from computed size/opacity; no queued toggles | Switch size and content instantly |
+| Agent details expand/collapse | discrete geometry, then opacity/transform inside the owned surface | compact; hidden detail | expanded geometry; visible detail | pattern-owned tokenized motion | pattern-owned easing | none | A repeated action replaces the requested state; it does not queue a second expansion | Switch geometry and content instantly |
 
 ### Ribbon deck
 

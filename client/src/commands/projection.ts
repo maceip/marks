@@ -4,10 +4,12 @@ import type {
   CommandDefinition,
   CommandEnvironment,
   CommandId,
+  CommandSource,
   CommandSurface,
   ProjectedCommand,
   ProjectedCommandGroup,
   ProjectedRibbonTab,
+  RibbonPresentationSurface,
   RibbonTabId,
   RibbonTask,
 } from './types.ts';
@@ -45,16 +47,89 @@ const TAB_ORDER: RibbonTabId[] = [
 
 const ESSENTIAL_TABS = new Set<RibbonTabId>(['import', 'login', 'file', 'home', 'insert', 'review', 'view']);
 
+/** A phone deck is a focused Office-mobile command row, not a shrunken desktop tab. */
+const PHONE_ESSENTIAL_COMMANDS = new Set<CommandId>([
+  'import.notes-app',
+  'import.meeting',
+  'import.github-readme',
+  'import.url',
+  'document.import',
+  'identity.keep',
+  'document.new',
+  'document.templates',
+  'document.rename',
+  'document.export-markdown',
+  'document.share',
+  'workspace.trash',
+  'identity.account',
+  'identity.pairing',
+  'format.bold',
+  'format.italic',
+  'format.underline',
+  'format.inline-code',
+  'format.heading-1',
+  'paragraph.bullets',
+  'paragraph.numbered',
+  'paragraph.tasks',
+  'edit.find',
+  'insert.link',
+  'insert.picture-file',
+  'insert.table',
+  'insert.code-block',
+  'insert.math',
+  'insert.mermaid',
+  'insert.callout-info',
+  'review.comments',
+  'review.history',
+  'review.document-health',
+  'review.accessibility',
+  'review.privacy-exposure',
+  'review.quality-contract',
+  'view.ghost-overlay',
+  'view.outline',
+  'view.focus',
+  'view.preferences',
+  'view.theme',
+  'view.reader-simulation',
+]);
+
+/** Office-like reading order is explicit; command importance remains a separate concern. */
+const GROUP_ORDER: Partial<Record<RibbonTabId, readonly string[]>> = {
+  import: ['Templates', 'Sources'],
+  login: ['Account'],
+  file: ['Create', 'Account', 'Publish', 'Document', 'Export', 'Access', 'Workspace'],
+  home: ['Clipboard', 'Font', 'Styles', 'Paragraph', 'Editing'],
+  insert: ['Links', 'Illustrations', 'Table', 'Blocks'],
+  draw: ['Shapes', 'Notes'],
+  tools: ['Transforms', 'Document model'],
+  review: ['Review', 'Assurance', 'Evidence', 'Live document', 'Inspect', 'Possibility', 'Time & alternatives'],
+  view: ['Layout', 'Workspace', 'Reading', 'Navigate'],
+  picture: ['Size', 'Position', 'Replace'],
+  table: ['Rows and columns'],
+  shape: ['Change shape'],
+};
+
 export interface ProjectionOptions {
   expanded?: boolean;
   agentRaised?: ReadonlySet<CommandId>;
   pinned?: readonly CommandId[];
 }
 
+export interface RibbonProjectionOptions extends ProjectionOptions {
+  surface?: RibbonPresentationSurface;
+}
+
 export interface CommandAvailability {
   visible: boolean;
   enabled: boolean;
   reason?: string;
+}
+
+interface EvaluatedCommandAvailability {
+  reason?: string;
+  contextualMismatch: boolean;
+  modalityMismatch: boolean;
+  identityMismatch: boolean;
 }
 
 /**
@@ -68,19 +143,47 @@ export function ribbonTask(environment: CommandEnvironment): RibbonTask {
   return environment.activePane === 'preview' ? 'inspect' : 'compose';
 }
 
-function ribbonCommandMode(environment: CommandEnvironment, surface: CommandSurface): CommandEnvironment['mode'] {
-  if (surface === 'ribbon' && ribbonTask(environment) === 'inspect') return 'preview';
+export function ribbonSurfaceForShell(shell: CommandEnvironment['shell']): RibbonPresentationSurface {
+  if (shell === 'phone') return 'phone';
+  if (shell === 'fold-book' || shell === 'fold-laptop') return 'foldable';
+  return 'ribbon';
+}
+
+function isRibbonPresentationSurface(surface: CommandSurface): surface is RibbonPresentationSurface {
+  return surface === 'ribbon' || surface === 'phone' || surface === 'foldable';
+}
+
+function presentationCommandMode(environment: CommandEnvironment, surface: CommandSurface): CommandEnvironment['mode'] {
+  if (isRibbonPresentationSurface(surface) && ribbonTask(environment) === 'inspect') return 'preview';
   return environment.mode;
 }
 
-export function commandAvailability(
+function presentationContext(environment: CommandEnvironment, surface: CommandSurface): CommandEnvironment['context'] {
+  return isRibbonPresentationSurface(surface) && ribbonTask(environment) === 'inspect'
+    ? 'text'
+    : environment.context;
+}
+
+function invocationCommandMode(environment: CommandEnvironment, source: CommandSource): CommandEnvironment['mode'] {
+  // Preserve the existing human ribbon behavior without treating `human` as
+  // a fake desktop presentation surface. Palette, keyboard, agent, and bridge
+  // calls continue to operate against the explicit document mode.
+  if (source === 'human' && ribbonTask(environment) === 'inspect') return 'preview';
+  return environment.mode;
+}
+
+function invocationContext(environment: CommandEnvironment, source: CommandSource): CommandEnvironment['context'] {
+  return source === 'human' && ribbonTask(environment) === 'inspect'
+    ? 'text'
+    : environment.context;
+}
+
+function evaluateAvailability(
   command: CommandDefinition,
   environment: CommandEnvironment,
-  surface: CommandSurface,
-): CommandAvailability {
-  if (!command.surfaces.includes(surface)) return { visible: false, enabled: false };
-
-  const commandMode = ribbonCommandMode(environment, surface);
+  commandMode: CommandEnvironment['mode'],
+  visibleContext: CommandEnvironment['context'],
+): EvaluatedCommandAvailability {
   let reason: string | undefined;
   if (command.requiresDocument && !environment.hasDocument) reason = 'Open a document first.';
   else if (command.requiresDocument && !environment.hydrated) reason = 'The document is still opening.';
@@ -109,21 +212,58 @@ export function commandAvailability(
     reason = 'Split view is not available in the phone shell.';
   }
 
-  const inspectRibbon = surface === 'ribbon' && ribbonTask(environment) === 'inspect';
-  const context = inspectRibbon ? 'text' : environment.context;
-  const contextualMismatch = Boolean(command.contexts && !command.contexts.includes(context));
-  const modalityMismatch = Boolean(command.modes && !command.modes.includes(commandMode));
-  const identityMismatch = Boolean(
-    (command.workspaceKinds && !command.workspaceKinds.includes(environment.workspaceKind)) ||
-    (command.roles && !command.roles.includes(environment.capabilities?.role as never)),
-  );
-  const visible = !command.hiddenWhenUnavailable || !reason
-    ? surface === 'ribbon' || surface === 'phone' || surface === 'foldable' || surface === 'mini'
-      ? !contextualMismatch && !modalityMismatch
-      : true
-    : !identityMismatch && !contextualMismatch && !modalityMismatch;
+  return {
+    reason,
+    contextualMismatch: Boolean(command.contexts && !command.contexts.includes(visibleContext)),
+    modalityMismatch: Boolean(command.modes && !command.modes.includes(commandMode)),
+    identityMismatch: Boolean(
+      (command.workspaceKinds && !command.workspaceKinds.includes(environment.workspaceKind)) ||
+      (command.roles && !command.roles.includes(environment.capabilities?.role as never)),
+    ),
+  };
+}
 
-  return { visible, enabled: !reason, reason };
+export function commandAvailability(
+  command: CommandDefinition,
+  environment: CommandEnvironment,
+  surface: CommandSurface,
+): CommandAvailability {
+  if (!command.surfaces.includes(surface)) return { visible: false, enabled: false };
+
+  const evaluated = evaluateAvailability(
+    command,
+    environment,
+    presentationCommandMode(environment, surface),
+    presentationContext(environment, surface),
+  );
+  const visible = !command.hiddenWhenUnavailable || !evaluated.reason
+    ? surface === 'ribbon' || surface === 'phone' || surface === 'foldable' || surface === 'mini'
+      ? !evaluated.contextualMismatch && (surface === 'phone' || !evaluated.modalityMismatch)
+      : true
+    : !evaluated.identityMismatch && !evaluated.contextualMismatch && !evaluated.modalityMismatch;
+
+  return { visible, enabled: !evaluated.reason, reason: evaluated.reason };
+}
+
+/**
+ * Runtime admission is intentionally independent from presentation. The
+ * command's invocation-source allowlist is checked first, followed by the
+ * same live hydration, role, capability, mode, context, and selection gates
+ * used by projections. Risk approval remains owned by CommandRuntime.
+ */
+export function commandInvocationAvailability(
+  command: CommandDefinition,
+  environment: CommandEnvironment,
+  source: CommandSource,
+): CommandAvailability {
+  if (!command.invocationSources.includes(source)) return { visible: false, enabled: false };
+  const evaluated = evaluateAvailability(
+    command,
+    environment,
+    invocationCommandMode(environment, source),
+    invocationContext(environment, source),
+  );
+  return { visible: true, enabled: !evaluated.reason, reason: evaluated.reason };
 }
 
 function capabilityReason(capability: NonNullable<CommandDefinition['capability']>): string {
@@ -176,11 +316,12 @@ export function projectCommands(
 
 export function composeRibbon(
   environment: CommandEnvironment,
-  options: ProjectionOptions = {},
+  options: RibbonProjectionOptions = {},
 ): ProjectedRibbonTab[] {
   const expanded = options.expanded ?? false;
-  const projected = projectCommands(environment, 'ribbon', options).filter((command) => {
+  const projected = projectCommands(environment, options.surface ?? 'ribbon', options).filter((command) => {
     if (expanded || command.contextual || command.agentRaised) return true;
+    if (options.surface === 'phone') return PHONE_ESSENTIAL_COMMANDS.has(command.id);
     if (!ESSENTIAL_TABS.has(command.tab)) return false;
     return command.priority >= 54;
   });
@@ -197,6 +338,7 @@ export function composeRibbon(
   return TAB_ORDER.flatMap((tabId) => {
     const groups = tabs.get(tabId);
     if (!groups) return [];
+    const preferredGroups = GROUP_ORDER[tabId] ?? [];
     const projectedGroups: ProjectedCommandGroup[] = [...groups.entries()].map(([label, commands]) => ({
       id: `${tabId}:${slug(label)}`,
       label,
@@ -204,7 +346,16 @@ export function composeRibbon(
       contextual: commands.some((command) => command.contextual),
       agentRaised: commands.some((command) => command.agentRaised),
       commands: commands.sort((a, b) => b.priority - a.priority),
-    })).sort((a, b) => b.priority - a.priority);
+    })).sort((a, b) => {
+      const aOrder = preferredGroups.indexOf(a.label);
+      const bOrder = preferredGroups.indexOf(b.label);
+      if (aOrder >= 0 || bOrder >= 0) {
+        if (aOrder < 0) return 1;
+        if (bOrder < 0) return -1;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+      }
+      return b.priority - a.priority;
+    });
     return [{
       id: tabId,
       label: TAB_LABELS[tabId],
@@ -222,7 +373,7 @@ export function projectQuickAccess(
   return pinned.flatMap((id) => {
     const command = COMMANDS.find((candidate) => candidate.id === id);
     if (!command) return [];
-    const availability = commandAvailability(command, environment, 'palette');
+    const availability = commandAvailability(command, environment, 'quick-access');
     return [{
       ...command,
       enabled: availability.enabled,

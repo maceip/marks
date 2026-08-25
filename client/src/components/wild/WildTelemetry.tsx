@@ -18,7 +18,7 @@ import type {
   CommandEffectObservation,
   ConsequenceLane,
 } from '../../wild/types.ts';
-import { SurfaceMaterial } from '../ui/SurfaceMaterial.tsx';
+import { SurfaceMaterial } from '../ui';
 import '../../styles/wild.css';
 
 interface ActivePath {

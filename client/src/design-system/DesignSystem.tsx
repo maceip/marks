@@ -1,26 +1,49 @@
-import '../styles/foundation-tokens.css';
-import '../styles/components.css';
 import '../styles/overlays.css';
 import '../styles/chrome.css';
+import '../styles/components/ribbon.css';
 import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
-import { RibbonCommand } from '../components/chrome/RibbonCommand';
+import {
+  RibbonCommand,
+  RibbonDeck,
+  RibbonGroup,
+  RibbonTabButton,
+  RibbonTabList,
+  RibbonToolbar,
+} from '../components/chrome/RibbonCommand';
 import type { AgentChatState } from '../components/agent/agent-chat-model';
-import { ICON_NAMES, Icon } from '../components/ui/Icon';
-import { Button } from '../components/ui/Button';
-import { IconButton } from '../components/ui/IconButton';
-import { Spinner } from '../components/ui/Spinner';
-import { Tabs } from '../components/ui/Tabs';
-import { Menu } from '../components/ui/Menu';
-import { Modal } from '../components/ui/Modal';
-import { Popover } from '../components/ui/Popover';
-import { CommentCard, CommentCompose, Avatar } from '../components/ui/Comment';
+import {
+  Avatar,
+  Button,
+  CommentCard,
+  CommentCompose,
+  Divider,
+  ICON_NAMES,
+  Icon,
+  IconButton,
+  MarksMark,
+  Menu,
+  Modal,
+  Pill,
+  Popover,
+  Spinner,
+  SurfaceMaterial,
+  Tabs,
+  Tooltip,
+} from '../components/ui';
 import { PresenceBar } from '../components/shell/PresenceBar';
 import { LiquidDock } from '../components/shell/LiquidDock';
-import { SurfaceMaterial } from '../components/ui/SurfaceMaterial';
 import { AGENT_CHAT_ENABLED } from '../lib/product';
 import { catalogPeers, catalogStates, catalogThread, palette, sectionLinks } from './fixtures';
+import {
+  DESIGN_SYSTEM_CONTRACT_VERSION,
+  DESIGN_SYSTEM_ENTRY_POINTS,
+  DESIGN_SYSTEM_EXCEPTIONS,
+  DESIGN_SYSTEM_FOUNDATIONS,
+  DESIGN_SYSTEM_PATTERNS,
+  DESIGN_SYSTEM_PRIMITIVES,
+  DESIGN_SYSTEM_RULES,
+} from './contract';
 import type { Peer } from '../collab/types';
-import '../styles/motion.css';
 import './design-system.css';
 
 type Toggle = 'light' | 'dark';
@@ -29,6 +52,13 @@ type Material = 'cinematic' | 'balanced' | 'foundation' | 'opaque';
 const AgentChatPill = __MARKS_AGENT_CHAT_ENABLED__
   ? lazy(() => import('../components/agent/AgentChatPill').then((module) => ({ default: module.AgentChatPill })))
   : null;
+
+const CATALOG_POSTURES = [
+  ['phone', 'Phone', 'task picker + one command deck', 'pencil'],
+  ['studio', 'Studio', 'compact task ribbon', 'split'],
+  ['desktop', 'Desktop', 'task tabs + full ribbon', 'bold'],
+  ['fold', 'Fold book', 'hinge-safe task ribbon', 'sidebar'],
+] as const;
 
 function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
   return (
@@ -147,7 +177,7 @@ export function DesignSystem({ onBack }: { onBack: () => void }) {
           <h1>Marks design system</h1>
           <p>Production tokens, isometric icons, liquid materials, and the chrome that owns writing, review, and presence.</p>
         </div>
-        <button type="button" onClick={onBack}>← Back to Marks</button>
+        <button type="button" className="ds-back" onClick={onBack}><Icon name="chevron" size={16} /> Back to Marks</button>
       </header>
       <div className="ds-controls" aria-label="Catalog simulation controls">
         <label>Theme<select value={theme} onChange={(e) => setTheme(e.target.value as Toggle)}><option>light</option><option>dark</option></select></label>
@@ -158,6 +188,43 @@ export function DesignSystem({ onBack }: { onBack: () => void }) {
       </div>
       <nav className="ds-nav" aria-label="Catalog sections">{sectionLinks.map(([id, label]) => <a key={id} href={`#${id}`}>{label}</a>)}</nav>
       <main>
+        <Section id="governance" title="One-stop ownership and enforcement">
+          <div className="ds-governance-lead">
+            <MarksMark size={48} label="Marks design system" />
+            <div>
+              <Pill>Contract v{DESIGN_SYSTEM_CONTRACT_VERSION}</Pill>
+              <p>Start here for every UI modification, addition, or clarification. Each concern has one source owner, an executable production example, and a check that rejects unregistered machinery.</p>
+            </div>
+          </div>
+          <h3>Entry points</h3>
+          <div className="ds-governance-grid">
+            {DESIGN_SYSTEM_ENTRY_POINTS.map((entry) => (
+              <article key={entry.id} data-design-system-entry={entry.id}>
+                <b>{entry.label}</b><code>{entry.location}</code><p>{entry.purpose}</p>
+              </article>
+            ))}
+          </div>
+          <h3>Canonical owners</h3>
+          <div className="ds-owner-list">
+            {[...DESIGN_SYSTEM_FOUNDATIONS, ...DESIGN_SYSTEM_PRIMITIVES, ...DESIGN_SYSTEM_PATTERNS].map((owner) => (
+              <article key={owner.id} data-design-system-owner={owner.id}>
+                <b>{owner.label}</b>
+                <code>{owner.source}</code>
+                <p>{owner.scope}</p>
+                {owner.styles?.map((style) => <code key={style}>{style}</code>)}
+              </article>
+            ))}
+          </div>
+          <h3>Non-negotiable rules</h3>
+          <ol className="ds-contract-list">
+            {DESIGN_SYSTEM_RULES.map((rule) => <li key={rule.id} data-design-system-rule={rule.id}><b>{rule.requirement}</b><code>{rule.enforcedBy.join(' · ')}</code></li>)}
+          </ol>
+          <h3>Explicit exceptions</h3>
+          <div className="ds-exception-list">
+            {DESIGN_SYSTEM_EXCEPTIONS.map((exception) => <article key={exception.id} data-design-system-exception={exception.id}><b>{exception.scope}</b><p>{exception.reason}</p><code>Owner: {exception.owner}</code></article>)}
+          </div>
+        </Section>
+
         <Section id="foundations" title="Foundations">
           <h3>Intent roles</h3>
           <div className="ds-swatches">{palette.map(([name, token]) => <div key={token}><span style={{ background: `var(${token})` }} /><b>{name}</b><code>{token}</code></div>)}</div>
@@ -184,9 +251,21 @@ export function DesignSystem({ onBack }: { onBack: () => void }) {
           </div>
           <StateMatrix />
           <div className="ds-icon-buttons">{catalogStates.map((state) => <IconButton key={state.id} label={`${state.label} settings`} disabled={state.id === 'disabled'} loading={state.id === 'loading'} className={`state-${state.id}`} icon={<Icon name="settings" />} />)}</div>
+          <h3>Primitive API</h3>
+          <div className="ds-primitive-row" data-ui-primitive-examples>
+            <MarksMark size={36} label="Marks product mark" />
+            <Pill><Icon name="check" size={16} interactive={false} /> Canonical primitive</Pill>
+            <Tooltip content="Shared tooltip behavior and styling"><Button variant="subtle">Hover for help</Button></Tooltip>
+          </div>
+          <Divider aria-label="Primitive examples divider" />
           <h3>Pills, spinner, tabs</h3>
           <StateMatrix kind="pill" />
-          <div className="ds-status"><span>● Connected</span><span><Spinner aria-label="Saving" /> Saving</span><span>▲ Attention</span><span>● Offline</span></div>
+          <div className="ds-status">
+            <Pill><Icon name="check" size={16} interactive={false} /> Connected</Pill>
+            <Pill><Spinner aria-label="Saving" /> Saving</Pill>
+            <Pill><Icon name="bolt" size={16} interactive={false} /> Attention</Pill>
+            <Pill><Icon name="close" size={16} interactive={false} /> Offline</Pill>
+          </div>
           <StateMatrix kind="input" />
           <Tabs label="Document views" selectedId={catalogTab} onChange={setCatalogTab} items={['write', 'preview', 'review', 'history'].map((id) => ({ id, label: id[0].toUpperCase() + id.slice(1) }))} />
         </Section>
@@ -194,8 +273,21 @@ export function DesignSystem({ onBack }: { onBack: () => void }) {
         <Section id="chrome" title={AGENT_CHAT_ENABLED ? 'Ribbon and agent chat' : 'Ribbon'}>
           <div className="ds-ribbon">
             <div className="ds-titlebar">Quick access <b>Document title</b> Presence</div>
-            <div className="ds-ribbon-tabs">File　 <b>Home</b>　Insert　Review　View</div>
-            <div className="ds-ribbon-commands">{catalogStates.slice(0, 8).map((s, i) => <RibbonCommand key={s.id} glyph={i % 2 ? 'italic' : 'bold'} label={s.label} disabled={s.id === 'disabled'} pressed={s.id === 'selected'} danger={s.id === 'danger'} onClick={() => undefined} />)}</div>
+            <div className="ribbon-body">
+              <RibbonTabList>
+                {['File', 'Home', 'Insert', 'Review', 'View'].map((label) => <RibbonTabButton key={label} selected={label === 'Home'}>{label}</RibbonTabButton>)}
+              </RibbonTabList>
+              <RibbonDeck>
+                <RibbonToolbar aria-label="Catalog production ribbon">
+                  <RibbonGroup label="Clipboard">
+                    {catalogStates.slice(0, 4).map((state, index) => <RibbonCommand key={state.id} glyph={index % 2 ? 'italic' : 'bold'} label={state.label} disabled={state.id === 'disabled'} pressed={state.id === 'selected'} danger={state.id === 'danger'} onClick={() => undefined} />)}
+                  </RibbonGroup>
+                  <RibbonGroup label="Formatting">
+                    {catalogStates.slice(4, 8).map((state, index) => <RibbonCommand key={state.id} glyph={index % 2 ? 'highlight' : 'heading'} label={state.label} disabled={state.id === 'disabled'} pressed={state.id === 'selected'} danger={state.id === 'danger'} onClick={() => undefined} />)}
+                  </RibbonGroup>
+                </RibbonToolbar>
+              </RibbonDeck>
+            </div>
           </div>
           <div className="ds-dock-preview">
             <LiquidDock
@@ -252,7 +344,7 @@ export function DesignSystem({ onBack }: { onBack: () => void }) {
                 </div>
               </Modal>
             </div>
-            <output role="status">✓ Changes saved locally</output>
+            <output role="status"><Icon name="check" size={18} interactive={false} /> Changes saved locally</output>
           </div>
         </Section>
 
@@ -277,10 +369,12 @@ export function DesignSystem({ onBack }: { onBack: () => void }) {
 
         <Section id="responsive" title="Responsive postures and accessibility">
           <div className="ds-postures">
-            <article className="phone">Phone<br /><small>composer + sheet</small></article>
-            <article className="studio">Studio<br /><small>compact ribbon</small></article>
-            <article className="desktop">Desktop<br /><small>rail + full ribbon</small></article>
-            <article className="fold">Fold book<br /><small>editor │ companion</small></article>
+            {CATALOG_POSTURES.map(([posture, label, detail, glyph]) => (
+              <article className={posture} data-posture={posture} key={posture}>
+                <b>{label}</b><small>{detail}</small>
+                <RibbonCommand glyph={glyph} label="Production command" onClick={() => undefined} />
+              </article>
+            ))}
           </div>
           <ul>
             <li>All controls have visible keyboard focus and a minimum 44px comfortable target.</li>

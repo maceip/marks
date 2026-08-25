@@ -2,9 +2,7 @@ import type { DocumentMeta } from '../lib/api';
 import { formatCount, formatRelativeTime } from '../lib/format';
 import { ABOUT_DOCUMENT_ID, DOCUMENT_TEMPLATES, type TemplateId } from '../demo/workspace';
 import { UI_PERFORMANCE_RECEIPT } from '../lib/product';
-import { Icon, icons } from '../components/ui/Icon';
-import { MarksMark } from '../components/ui/MarksMark';
-import { SurfaceMaterial } from '../components/ui/SurfaceMaterial';
+import { Icon, MarksMark, SurfaceMaterial } from '../components/ui';
 import '../styles/home.css';
 
 interface HomeProps {
@@ -52,24 +50,24 @@ export function Home({
               : 'Your durable Marks documents are available through the Rust service, with live collaboration, role-based review, and named versions.'}</p>
           <div className="home-actions">
             <button type="button" className="button primary" onClick={onCreate}>
-              <Icon path={icons.plus} /> New document
+              <Icon name="plus" /> New document
             </button>
             <button type="button" className="button" onClick={onOpenTemplates}>
-              <Icon path={icons.template} /> Browse templates
+              <Icon name="template" /> Browse templates
             </button>
             <button type="button" className="button" onClick={onImport}>
-              <Icon path={icons.download} /> Import document
+              <Icon name="download" /> Import document
             </button>
             {temporary && <button type="button" className="button" onClick={onKeepWorkspace}>Log In</button>}
           </div>
         </div>
         <div className="home-receipt surface-material-host" aria-label="Performance promise">
           <SurfaceMaterial variant="floating" />
-          <div className="receipt-orbit"><Icon path={icons.sparkles} size={19} /></div>
+          <div className="receipt-orbit"><Icon name="sparkles" size={19} /></div>
           <span>Critical app shell</span>
           <strong>{UI_PERFORMANCE_RECEIPT.appCriticalKb}<small> KB</small></strong>
           <p>Glass at the edges. No editor, renderer, or collaboration engine until a page opens.</p>
-          <button type="button" onClick={onOpenBenchmark}>Open performance receipt <Icon path={icons.chevron} size={13} /></button>
+          <button type="button" onClick={onOpenBenchmark}>Open performance receipt <Icon name="chevron" size={13} /></button>
         </div>
       </section>
 
@@ -87,12 +85,12 @@ export function Home({
                 <strong>{document.title}</strong>
                 <small>{formatCount(document.chars)} characters · {formatRelativeTime(document.updated_at)}</small>
               </span>
-              <Icon path={icons.chevron} size={14} />
+              <Icon name="chevron" size={14} />
             </button>
           ))}
           {!loading && recent.length === 0 && (
             <button type="button" className="recent-card recent-empty" onClick={onCreate}>
-              <Icon path={icons.plus} />
+              <Icon name="plus" />
               <span><strong>Create the first page</strong><small>It will be saved in this browser.</small></span>
             </button>
           )}
@@ -107,7 +105,7 @@ export function Home({
         <div className="home-template-grid">
           {DOCUMENT_TEMPLATES.slice(1).map((template) => (
             <button key={template.id} type="button" className={`home-template template-${template.accent}`} onClick={() => onCreateFromTemplate(template.id)}>
-              <span><Icon path={icons.document} /></span>
+              <span><Icon name="document" /></span>
               <strong>{template.name}</strong>
               <small>{template.description}</small>
             </button>
@@ -116,10 +114,10 @@ export function Home({
       </section>
 
       <footer className="home-footer-card">
-        <span><Icon path={icons.check} size={14} /> <strong>{local ? 'Browser-local mode' : temporary ? 'Anonymous service mode' : 'Logged-in service mode'}</strong> · {local ? 'local persistence' : 'Rust persistence and ESBT collaboration'}</span>
+        <span><Icon name="check" size={14} /> <strong>{local ? 'Browser-local mode' : temporary ? 'Anonymous service mode' : 'Logged-in service mode'}</strong> · {local ? 'local persistence' : 'Rust persistence and ESBT collaboration'}</span>
         <div className="home-footer-actions">
           <button type="button" onClick={() => onOpen(ABOUT_DOCUMENT_ID)}>Google Docs for Markdown</button>
-          <button type="button" onClick={onOpenPreferences}><Icon path={icons.settings} size={14} /> Appearance</button>
+          <button type="button" onClick={onOpenPreferences}><Icon name="settings" size={14} /> Appearance</button>
         </div>
       </footer>
     </div>

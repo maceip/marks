@@ -1,9 +1,12 @@
 # Ribbon pattern
 
-The ribbon is the desktop/studio command surface. `DesktopRibbon.tsx` and
-`RibbonCommand.tsx` are the reference product implementation; consumers compose
-the exported tab list, tab button, deck, toolbar, group, gallery, and command
-components rather than adding selectors.
+The ribbon is the shared task-command system across desktop, studio, phone, and
+foldable shells. `DesktopRibbon.tsx`, `PhoneComposer.tsx`,
+`FoldableRibbon.tsx`, and `RibbonCommand.tsx` are the reference product
+implementations. Consumers compose the exported production components rather
+than adding selectors. All ribbon-family selectors live in
+`styles/components/ribbon.css`; the design-system contract rejects a second
+owner.
 
 ## Anatomy
 
@@ -19,15 +22,18 @@ components rather than adding selectors.
    compact, visually comparable collection of choices in a group.
 6. In **collapsed state**, desktop retains the titlebar and hides the tab/deck
    region. **Focus mode** does the same while also removing nonessential chrome.
-7. On phone or short coarse-pointer viewports, the desktop pattern is replaced
-   by the fixed-bottom tab/deck composer. This **mobile substitution** uses
-   the same projected tabs, groups, availability rules, profile, contextual
-   tabs, agent relevance, and feature flags as desktop. The active command deck
-   stays visible above its horizontally scrollable task tabs, so common actions
-   remain one tap away instead of opening a second grid of buttons. **More** is
-   the phone label for the desktop **File** task, and **All** exposes the same
-   expanded profile—including optional commands only when their build-time
-   configuration is enabled.
+7. On phone or short coarse-pointer viewports, the desktop tab row is replaced
+   by a fixed-bottom task ribbon. Its header has one **category trigger** and a
+   persistent **Edit / Preview** mode switch; its deck shows exactly one task's
+   command groups at a time. Opening the trigger presents the task picker in a
+   labelled sheet, with **All commands** as the explicit expanded path. This
+   keeps navigation and commands causally related instead of presenting two
+   unrelated rows. The phone projection uses the same command registry,
+   availability rules, profile, contextual state, agent relevance, and feature
+   flags as desktop. The **View** task owns the Ghost overlay control.
+8. Foldable book and laptop postures keep the same task/deck anatomy but segment
+   it around the reported hinge. Commands and flyouts may not occupy the hinge
+   gap; companion space is presentation-only and cannot steal ribbon hit targets.
 
 ## States
 
@@ -45,15 +51,15 @@ components rather than adding selectors.
 | Collapsed | Titlebar remains; deck/tabs are absent on desktop. |
 | Focus mode | Titlebar-only command chrome; workspace receives focus. |
 | Compact density | Compact height, tab, command, and gap tokens are selected without changing anatomy. |
-| Coarse pointer | Minimum 54px command width, fixed bottom mobile substitute, scrollable groups. |
+| Coarse pointer | Minimum touch target, fixed-bottom phone task ribbon, and horizontally scrollable command groups. |
 
 ## Sizing tokens
 
-Do not encode ribbon sizing in components. `tokens.css` defines comfortable and
-compact ribbon heights, tab heights, command heights, group gaps, regular/large
-icon sizes, and label size/weight. `data-density="compact"` switches the active
-aliases. Mobile substitution deliberately retains its own safe-area-aware
-height and touch geometry.
+Do not encode shared ribbon sizing in components. `tokens.css` defines reusable
+shell and interaction values; `ribbon.css` owns pattern-local aliases for tab,
+command, gap, icon, and label geometry. `data-density="compact"` switches those
+aliases. Phone substitution deliberately retains safe-area-aware height and
+touch geometry in the same canonical stylesheet.
 
 ## Motion
 
@@ -79,6 +85,11 @@ prop or `data-*` state, but must not require a one-off descendant selector.
 ## Visual regression matrix
 
 Run `npm run visual:ribbon` against a live app. Coverage captures light and dark
-themes, comfortable and compact density, a contextual tab, collapsed state, and
-1024px desktop / 1440px studio widths. Set `UPDATE_RIBBON_SCREENSHOTS=1` only
-when intentionally accepting new baselines.
+themes across 320×568 and 390×844 phone portrait, 844×390 phone landscape,
+1280×800 fold-book, 840×1100 fold-laptop, 1024×800 studio, and 1440×900 desktop
+postures. The phone matrix also captures the category picker and the View deck
+containing the Ghost overlay control. Desktop/studio coverage retains comfortable
+and compact density, a contextual tab, and collapsed state. Every case uses an
+explicit `marks-posture` query override so the baseline name matches the shell
+under test. Set `UPDATE_RIBBON_SCREENSHOTS=1` only when intentionally accepting
+new baselines.

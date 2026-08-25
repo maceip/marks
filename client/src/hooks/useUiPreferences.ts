@@ -1,26 +1,23 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  parseUiPreferences,
+  type UiPreferences,
+} from '../lib/ui-preferences';
 
-export interface UiPreferences {
-  density: 'comfortable' | 'compact';
-  glass: boolean;
-  motion: boolean;
-  /** Shared document-presence override; omitted retains pane-aware defaults. */
-  documentPresence?: 'exact' | 'section' | 'off';
-}
+export type { UiPreferences } from '../lib/ui-preferences';
 
 const KEY = 'marks:ui-preferences:v1';
-const DEFAULTS: UiPreferences = { density: 'comfortable', glass: true, motion: true };
 
 function load(): UiPreferences {
-  try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) ?? '{}') };
-  } catch {
-    return DEFAULTS;
-  }
+  return parseUiPreferences(localStorage.getItem(KEY));
 }
 
 export function useUiPreferences(): [UiPreferences, (patch: Partial<UiPreferences>) => void] {
   const [preferences, setPreferences] = useState<UiPreferences>(load);
+  const updatePreferences = useCallback(
+    (patch: Partial<UiPreferences>) => setPreferences((current) => ({ ...current, ...patch })),
+    [],
+  );
 
   useEffect(() => {
     const root = document.documentElement;
@@ -30,5 +27,5 @@ export function useUiPreferences(): [UiPreferences, (patch: Partial<UiPreference
     localStorage.setItem(KEY, JSON.stringify(preferences));
   }, [preferences]);
 
-  return [preferences, (patch) => setPreferences((current) => ({ ...current, ...patch }))];
+  return [preferences, updatePreferences];
 }

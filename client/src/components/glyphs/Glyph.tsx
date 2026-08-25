@@ -1,4 +1,4 @@
-import { Icon, type IconName } from '../ui/Icon';
+import { Icon, type IconName } from '../ui';
 
 export type GlyphTone = 'navy' | 'blue' | 'green' | 'teal' | 'amber';
 export type GlyphName = IconName;

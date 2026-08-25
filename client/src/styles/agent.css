@@ -25,7 +25,7 @@
   right: 24px;
   width: 34px;
   height: 3px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: linear-gradient(90deg, transparent, var(--color-action));
   content: '';
   opacity: .72;
@@ -79,7 +79,7 @@
   max-width: 84px;
   padding: 3px 7px;
   border: 1px solid var(--material-border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   outline: 0;
   background: color-mix(in srgb, var(--color-bg-surface) 72%, transparent);
   color: var(--color-fg-subtle);
@@ -118,7 +118,7 @@
 .agent-run-stop {
   padding: 4px 8px;
   border: 1px solid color-mix(in srgb, var(--color-feedback-danger) 42%, var(--material-border));
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--color-feedback-danger-soft);
   color: var(--color-feedback-danger);
   font-size: 9px;
@@ -167,7 +167,7 @@
 .agent-step-cancel {
   padding: 4px 7px;
   border: 1px solid var(--material-border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--color-bg-surface);
   color: var(--color-fg-muted);
   font-size: 9px;
@@ -179,7 +179,7 @@
 .agent-suggestions button {
   padding: 5px 8px;
   border: 1px solid var(--material-border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: transparent;
   color: var(--color-fg-muted);
   font-size: 10px;

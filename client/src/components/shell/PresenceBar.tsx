@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import type { Peer } from '../../collab/types';
 import { colorVar, initials } from '../../collab/user';
+import { Icon } from '../ui';
 
 export interface ActiveParticipant extends Peer {
   activity: 'editing' | 'active';
@@ -76,7 +77,7 @@ export function PresenceBar({ peers, max = 5, onJump }: Props) {
     {shown.map((person) => <button type="button" className="presence-avatar-button" key={person.participantId || person.id} title={`${person.name}${person.self ? ' (you)' : ''}, ${person.activity}`} onClick={() => setOpen(true)}><Avatar person={person} /><span className="sr-only">{person.name}, {person.activity}</span></button>)}
     {people.length > shown.length && <button type="button" className="avatar avatar-overflow" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}>+{people.length - shown.length}</button>}
     {open && <div className="presence-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setOpen(false); }}><div className="presence-panel" role="dialog" aria-modal="true" aria-label="Active participants" ref={panel} onKeyDown={keyNav}>
-      <header><strong>People here</strong><button type="button" onClick={() => setOpen(false)} aria-label="Close participant list">×</button></header>
+      <header><strong>People here</strong><button type="button" onClick={() => setOpen(false)} aria-label="Close participant list"><Icon name="close" size={14} /></button></header>
       <ul>{people.map((person) => { const id = person.participantId || person.id; return <li key={id}><Avatar person={person} /><div className="presence-details"><strong>{person.name}{person.self ? ' (you)' : ''}</strong><span>{person.authenticated === false ? 'Guest · ' : person.authenticated ? 'Signed in · ' : ''}{person.activity} · {person.section || 'Document'}{person.connectionIds.length > 1 ? ` · ${person.connectionIds.length} tabs` : ''}</span></div>{!person.self && <div className="presence-actions"><button type="button" onClick={() => onJump?.(person)}>Jump</button><button type="button" aria-pressed={following === id} onClick={() => { const next = following === id ? undefined : id; setFollowing(next); setAnnouncement(next ? `Following ${person.name}` : `Stopped following ${person.name}`); }}>{following === id ? 'Stop following' : 'Follow'}</button></div>}</li>; })}</ul>
     </div></div>}
   </div>;

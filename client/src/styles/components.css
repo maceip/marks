@@ -1,4 +1,14 @@
 /* Shared interactive contracts. Feature styles may change geometry, but states live here. */
+.glyph {
+  --tilt-x: 0;
+  --tilt-y: 0;
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  pointer-events: none;
+}
+
 .ui-control {
   position: relative;
   border: 1px solid transparent;

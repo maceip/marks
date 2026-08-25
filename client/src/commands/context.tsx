@@ -10,6 +10,7 @@ import type {
   CommandSurface,
   ProjectedCommand,
   ProjectedRibbonTab,
+  RibbonPresentationSurface,
 } from './types.ts';
 
 /**
@@ -21,6 +22,7 @@ export interface CommandCenterValue {
   environment: CommandEnvironment;
   profile: RibbonProfile;
   ribbon: ProjectedRibbonTab[];
+  ribbonFor: (surface: RibbonPresentationSurface, expanded?: boolean) => ProjectedRibbonTab[];
   raised: ReadonlySet<CommandId>;
   runs: readonly CommandRun[];
   receipts: readonly CommandReceipt[];

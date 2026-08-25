@@ -6,11 +6,13 @@ import {
   PhoneGhostGesture,
   clampGhostPercent,
   formatGhostPercent,
+  ghostShiftForDocument,
   ghostPercentFromDrag,
   isHorizontalPan,
   isPinchGesture,
   percentToShift,
   pinchRatio,
+  resetGhostPositionForDocument,
   shiftToPercent,
 } from './phone-ghost.ts';
 
@@ -34,6 +36,20 @@ describe('phone ghost geometry', () => {
     assert.equal(ghostPercentFromDrag(50, -200, 400), 0);
     assert.equal(ghostPercentFromDrag(0, 200, 400), 50);
     assert.equal(ghostPercentFromDrag(50, 80, 400), 50);
+  });
+
+  it('keeps a committed half for the same document and resets it for another', () => {
+    const position = { documentId: 'doc-a', shift: 'end' as const };
+    assert.equal(ghostShiftForDocument(position, 'doc-a'), 'end');
+    assert.equal(ghostShiftForDocument(position, 'doc-b'), 'start');
+    assert.equal(ghostShiftForDocument(position, null), 'start');
+
+    const inDocumentB = resetGhostPositionForDocument(position, 'doc-b');
+    assert.deepEqual(inDocumentB, { documentId: 'doc-b', shift: 'start' });
+    assert.equal(
+      ghostShiftForDocument(resetGhostPositionForDocument(inDocumentB, 'doc-a'), 'doc-a'),
+      'start',
+    );
   });
 
   it('treats scale changes as pinch and horizontal travel as pan', () => {

@@ -1,5 +1,4 @@
-import '../../styles/components/ribbon.css';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { EditorView } from '@codemirror/view';
 import {
   getPresenceDisplay,
@@ -23,6 +22,7 @@ import { AGENT_CHAT_ENABLED } from '../../lib/product';
 import type { UiActionId } from '../../lib/ui-actions';
 import type { ViewMode } from '../shell/TopBar';
 import { Glyph } from '../glyphs/Glyph';
+import { Icon } from '../ui';
 import {
   RibbonCommand,
   RibbonDeck,
@@ -34,7 +34,7 @@ import {
 
 export type RibbonTab = RibbonTabId;
 
-interface DesktopRibbonProps {
+export interface DesktopRibbonProps {
   documentId: string;
   session: CollabSession | null;
   documentReady: boolean;
@@ -61,6 +61,15 @@ interface DesktopRibbonProps {
 
 type KeyTipLayer = 'tabs' | 'commands' | null;
 
+// The layout solver receives the ribbon body's content-box width, while the
+// command toolbar owns 8px of inline padding on each side. The View tab also
+// renders the local Presence group below, outside the registry projection, so
+// reserve its measured command-group width before deciding which projected
+// groups stay visible. Without this reservation a narrow book posture can put
+// the overflow trigger across the physical hinge.
+const RIBBON_TOOLBAR_INLINE_PADDING = 16;
+const VIEW_PRESENCE_GROUP_WIDTH = 176;
+
 const TAB_PREFERRED: Partial<Record<RibbonTabId, string>> = {
   import: 'S',
   login: 'L',
@@ -78,13 +87,14 @@ const TAB_PREFERRED: Partial<Record<RibbonTabId, string>> = {
 
 export function DesktopRibbon(props: DesktopRibbonProps) {
   const center = useCommandCenter();
-  const [tab, setTab] = useState<RibbonTabId>('import');
+  const [tab, setTab] = useState<RibbonTabId>(() => props.mode === 'preview' ? 'view' : 'home');
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [galleryOpen, setGalleryOpen] = useState<string | null>(null);
   const [keyTipLayer, setKeyTipLayer] = useState<KeyTipLayer>(null);
   const [keySequence, setKeySequence] = useState('');
   const [width, setWidth] = useState(1200);
   const rootRef = useRef<HTMLDivElement>(null);
+  const profileToggleRef = useRef<HTMLButtonElement>(null);
   const lastLayout = useRef<RibbonLayout | undefined>(undefined);
   const lastManualTabAt = useRef(0);
   const [presenceDisplay, setPresenceState] = useState<DocumentPresenceDisplay>(() =>
@@ -105,10 +115,12 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
   const selectedTab = tabs.find((candidate) => candidate.id === tab) ?? tabs[0];
   const groups = selectedTab?.groups ?? [];
   const layout = useMemo(() => {
-    const next = solveRibbonLayout(groups, width, lastLayout.current);
+    const reservedWidth = RIBBON_TOOLBAR_INLINE_PADDING
+      + (selectedTab?.id === 'view' ? VIEW_PRESENCE_GROUP_WIDTH : 0);
+    const next = solveRibbonLayout(groups, Math.max(160, width - reservedWidth), lastLayout.current);
     lastLayout.current = next;
     return next;
-  }, [groups, width]);
+  }, [groups, selectedTab?.id, width]);
   const visibleGroups = groups.filter((group) => layout.visible.includes(group.id));
   const collapsedGroups = groups.filter((group) => layout.collapsed.includes(group.id));
 
@@ -130,6 +142,12 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    const toggle = profileToggleRef.current;
+    if (!toggle || document.activeElement !== toggle) return;
+    toggle.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [center.profile.expanded]);
 
   useEffect(() => {
     const sync = () => setPresenceState(getPresenceDisplay(props.mode === 'preview'));
@@ -222,6 +240,23 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
     }
   };
 
+  const moveTabFocus = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const current = Math.max(0, tabs.findIndex((item) => item.id === selectedTab?.id));
+    const next = event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? tabs.length - 1
+        : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    const destination = tabs[next];
+    if (!destination) return;
+    event.preventDefault();
+    selectTab(destination.id);
+    requestAnimationFrame(() => {
+      rootRef.current?.querySelector<HTMLElement>(`[data-ribbon-tab="${destination.id}"]`)?.focus();
+    });
+  };
+
   const changePresence = (value: DocumentPresenceDisplay) => {
     setPresenceDisplay(value);
     setPresenceState(value);
@@ -230,17 +265,20 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
   return (
     <div
       ref={rootRef}
-      className={`ribbon-body${keyTipLayer ? ' keytips-visible' : ''}`}
+      className={`ribbon-body${overflowOpen ? ' ribbon-overflow-open' : ''}${overflowOpen || galleryOpen ? ' ribbon-flyout-open' : ''}${keyTipLayer ? ' keytips-visible' : ''}`}
       data-command-context={center.environment.context}
       data-ribbon-task={task}
       data-agent-active={center.raised.size > 0 ? 'true' : undefined}
     >
-      <RibbonTabList role="tablist">
+      <RibbonTabList role="tablist" onKeyDown={moveTabFocus}>
         {tabs.map((item) => (
           <RibbonTabButton
             key={item.id}
             data-ribbon-tab={item.id}
             selected={tab === item.id}
+            id={`ribbon-tab-${item.id}`}
+            aria-controls="ribbon-command-panel"
+            tabIndex={tab === item.id ? 0 : -1}
             contextual={item.contextual}
             className={item.agentRaised ? 'agent-raised' : undefined}
             onClick={() => selectTab(item.id)}
@@ -251,6 +289,7 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
           </RibbonTabButton>
         ))}
         <button
+          ref={profileToggleRef}
           type="button"
           className="ribbon-profile-toggle"
           aria-pressed={center.profile.expanded}
@@ -261,7 +300,11 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
         </button>
       </RibbonTabList>
 
-      <RibbonDeck>
+      <RibbonDeck
+        id="ribbon-command-panel"
+        role="tabpanel"
+        aria-labelledby={`ribbon-tab-${selectedTab?.id ?? 'home'}`}
+      >
         <RibbonToolbar
           key={`${task}-${selectedTab?.id ?? 'home'}`}
           className={`ribbon-deck-enter${taskMotion.current ? ` ribbon-deck-${taskMotion.current}` : ''}`}
@@ -363,7 +406,7 @@ function CommandGroup({
           </div>
           {galleryCommands.length > 3 && (
             <button type="button" className="ribbon-gallery-expand" aria-label={`Expand ${group.label} gallery`} aria-expanded={galleryOpen} onClick={() => onGallery(!galleryOpen)}>
-              ⌄
+              <Icon name="chevron" size={12} />
             </button>
           )}
           {galleryOpen && (
@@ -493,7 +536,7 @@ export function QuickAccess({ disabled: _disabled, getView: _getView }: {
 }) {
   const center = useCommandCenter();
   const [open, setOpen] = useState(false);
-  const available = center.commands('palette')
+  const available = center.commands('quick-access')
     .filter((command) => command.risk !== 'destructive')
     .sort((a, b) => b.priority - a.priority)
     .slice(0, 24);
@@ -514,14 +557,14 @@ export function QuickAccess({ disabled: _disabled, getView: _getView }: {
         </button>
       ))}
       <button type="button" className="quick-access-customize" aria-label="Customize Quick Access" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
-        ⌄
+        <Icon name="chevron" size={12} />
       </button>
       {open && (
         <div className="quick-access-menu" role="menu" aria-label="Customize Quick Access">
           <header><strong>Quick Access</strong><span>Pin up to 12 commands</span></header>
           {available.map((command) => (
             <button key={command.id} type="button" role="menuitemcheckbox" aria-checked={center.profile.pinned.includes(command.id)} onClick={() => center.togglePin(command.id)}>
-              <span>{center.profile.pinned.includes(command.id) ? '✓' : ''}</span>
+              <span>{center.profile.pinned.includes(command.id) && <Icon name="check" size={12} interactive={false} />}</span>
               <Glyph name={command.glyph} size={16} />
               {command.label}
             </button>

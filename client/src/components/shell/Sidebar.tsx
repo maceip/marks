@@ -1,9 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import type { DocumentMeta } from '../../lib/api';
 import { formatCount, formatRelativeTime } from '../../lib/format';
-import { Icon, icons } from '../ui/Icon';
-import { MarksMark } from '../ui/MarksMark';
-import { SurfaceMaterial } from '../ui/SurfaceMaterial';
+import { Icon, MarksMark, SurfaceMaterial } from '../ui';
 
 interface SidebarProps {
   documents: DocumentMeta[];
@@ -110,14 +108,14 @@ export function Sidebar({
                 aria-label="Close documents"
                 onClick={onClose}
               >
-                <Icon path={icons.close} />
+                <Icon name="close" />
               </button>
             )}
           </div>
 
           <div className="new-doc">
             <button type="button" className="button primary" onClick={onCreate}>
-              <Icon path={icons.plus} />
+              <Icon name="plus" />
               New
             </button>
           </div>
@@ -161,7 +159,7 @@ export function Sidebar({
                   onDelete(doc.id);
                 }}
               >
-                <Icon path={icons.trash} size={14} />
+                <Icon name="trash" size={14} />
               </button>
             </div>
           ))}
@@ -169,11 +167,11 @@ export function Sidebar({
 
         <div className="sidebar-foot">
           <button type="button" onClick={onOpenTrash}>
-            <Icon path={icons.trash} />
+            <Icon name="trash" />
             Trash
           </button>
           <button type="button" onClick={onOpenBenchmark}>
-            <Icon path={icons.gauge} />
+            <Icon name="gauge" />
             Benchmark
           </button>
           <a href="/d/about-marks" onClick={(event) => { event.preventDefault(); onOpenAbout(); }}>

@@ -27,7 +27,11 @@ do not mirror CSS values merely for convenience.
 
 ## Enforcement
 
-Run `npm run test:tokens`. The static contract scans shared and route CSS for
-retired variable names, primitive consumption, and common raw literals that
-have semantic equivalents. Extend the check when a newly retired spelling or
+Run `npm run test:tokens`. The static contract scans every first-party CSS file
+recursively for retired variable names, primitive consumption, and common raw
+literals that have semantic equivalents. `npm run check:motion` independently
+scans every first-party stylesheet plus TypeScript Web Animation options.
+Numeric Web Animation timing is allowed only in a registered typed recipe owner
+such as `components/icons/motion.ts`; renderers consume the recipe rather than
+embedding their own timing. Extend the checks when a newly retired spelling or
 frequently repeated literal is discovered.

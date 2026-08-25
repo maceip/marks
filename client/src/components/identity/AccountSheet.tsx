@@ -5,7 +5,7 @@ import { keys } from 'idb-keyval';
 import { LOGOUT_LOCAL_LINE, RETURN_VISIT_STEPS, REVOKE_LOCAL_LINE, ROLE_COPY, SCRATCH_HONEST_LINE } from '../../lib/identity-copy';
 import { UI_DATA_MODE } from '../../lib/product';
 import { SERVICE_ERROR_COPY } from '../../lib/service-errors';
-import { Icon, icons } from '../ui/Icon';
+import { Icon } from '../ui';
 
 interface AccountSheetProps {
   onNotify: (title: string, detail?: string, tone?: 'neutral' | 'success' | 'danger') => void;
@@ -81,7 +81,7 @@ export function AccountSheet({ onNotify, onSignedOut }: AccountSheetProps) {
   return (
     <div className="identity-dialog">
       <div className="local-notice">
-        <Icon path={icons.check} size={15} />
+        <Icon name="check" size={15} />
         <span>
           <strong>{session ? 'Logged In' : 'Not Logged In'}</strong>
           {session

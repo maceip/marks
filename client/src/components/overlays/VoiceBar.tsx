@@ -1,5 +1,5 @@
 import type { VoiceStatus } from '../../browser';
-import { Button } from '../ui/Button';
+import { Button } from '../ui';
 
 interface VoiceBarProps {
   status: VoiceStatus;

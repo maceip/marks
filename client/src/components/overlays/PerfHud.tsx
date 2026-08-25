@@ -1,6 +1,6 @@
 import { formatBytes, formatCount, formatMs } from '../../lib/format';
 import type { HudSnapshot } from '../../lib/hud';
-import { Icon, icons } from '../ui/Icon';
+import { Icon } from '../ui';
 
 interface PerfHudProps {
   snapshot: HudSnapshot;
@@ -24,10 +24,10 @@ export function PerfHud({ snapshot, onClose, onOpenBenchmark }: PerfHudProps) {
     <aside className="hud" aria-label="Performance">
       <header className="hud-head">
         <h2>
-          <Icon path={icons.gauge} size={14} /> Performance
+          <Icon name="gauge" size={14} /> Performance
         </h2>
         <button type="button" className="icon-button" onClick={onClose} aria-label="Close">
-          <Icon path={icons.close} size={14} />
+          <Icon name="close" size={14} />
         </button>
       </header>
 

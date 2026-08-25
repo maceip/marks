@@ -197,13 +197,16 @@ Device Posture API, pointer type, and the visual viewport. Width is only a
 fallback when those signals are absent. Shared fallback widths live in
 `client/src/lib/product.ts`.
 
-- **phone** — a distinct composer: swipe between Write and Preview, chip
-  formatting, and bottom-sheet Insert / AI / More grids. Not a squeezed
-  desktop ribbon. Virtual-keyboard inset parks chrome above the keyboard and
-  pauses liquid-glass shaders. Write mode keeps a full-width editor and paints
-  a low-opacity ghost of the full-measure preview in a right-hand viewfinder
+- **phone** — a distinct fixed-bottom task ribbon, not a squeezed desktop
+  ribbon. Its header pairs one task/category trigger with a persistent Edit /
+  Preview switch; its deck shows the selected task's related command groups.
+  The trigger opens a labelled task picker and an explicit All commands path.
+  Virtual-keyboard inset compacts the ribbon above the keyboard and pauses
+  liquid-glass shaders. Edit mode keeps a full-width editor and paints a
+  low-opacity ghost of the full-measure preview in a right-hand viewfinder
   (never crossing the midline). Two-finger horizontal pan snaps the ghost
-  between the left and right halves of that page; pinch-zoom is not stolen.
+  between the left and right halves of that page; the View task turns Ghost on
+  or off, and the preference remains on by default. Pinch-zoom is not stolen.
   Foldable unfolded shells keep a real split and never use the ghost.
 - **studio** — tablet mid-width: compact top ribbon, modal document drawer.
 - **desktop** — persistent document rail, full ribbon, selection mini-toolbar,

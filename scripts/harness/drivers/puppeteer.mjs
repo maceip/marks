@@ -108,6 +108,9 @@ export function wrap({ browser, page, base, chrome }) {
     async wait(ms) {
       await new Promise((resolve) => setTimeout(resolve, ms));
     },
+    async setViewport(viewport) {
+      await page.setViewport(viewport);
+    },
     async setOffline(offline) {
       await page.setOfflineMode(Boolean(offline));
     },

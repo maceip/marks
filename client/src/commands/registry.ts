@@ -5,6 +5,7 @@ import type {
   CommandId,
   CommandModality,
   CommandOperation,
+  CommandSource,
   CommandSurface,
   EditorOperation,
   RibbonTabId,
@@ -23,13 +24,29 @@ const IMAGE_URL_PARAMETERS = {
   additionalProperties: false as const,
 };
 
-type Seed = Omit<CommandDefinition, 'description' | 'risk' | 'priority' | 'surfaces' | 'agent'> &
-  Partial<Pick<CommandDefinition, 'description' | 'risk' | 'priority' | 'surfaces' | 'agent'>>;
+type Seed = Omit<CommandDefinition, 'description' | 'risk' | 'priority' | 'surfaces' | 'invocationSources' | 'agent'> &
+  Partial<Pick<CommandDefinition, 'description' | 'risk' | 'priority' | 'surfaces' | 'invocationSources' | 'agent'>>;
+
+const HUMAN_SURFACES = new Set<CommandSurface>(['ribbon', 'phone', 'foldable', 'mini', 'quick-access']);
+
+/**
+ * Preserve the established entry-point contract while keeping it distinct
+ * from presentation. A future phone-only command is human-invokable without
+ * pretending it belongs on the desktop ribbon; agent and palette admission
+ * remain exactly as narrow as their registered surfaces.
+ */
+function defaultInvocationSources(surfaces: readonly CommandSurface[]): readonly CommandSource[] {
+  const sources: CommandSource[] = [];
+  if (surfaces.some((surface) => HUMAN_SURFACES.has(surface))) sources.push('human');
+  if (surfaces.includes('palette')) sources.push('keyboard', 'palette');
+  if (surfaces.includes('agent')) sources.push('agent', 'bridge');
+  return sources;
+}
 
 function define(seed: Seed): CommandDefinition {
   const requestedSurfaces = seed.surfaces ?? ALL;
   const surfaces: readonly CommandSurface[] = requestedSurfaces.includes('foldable') ||
-    (!requestedSurfaces.includes('ribbon') && !requestedSurfaces.includes('phone'))
+    !requestedSurfaces.includes('ribbon')
     ? requestedSurfaces
     : [...requestedSurfaces, 'foldable' as const];
   return {
@@ -38,6 +55,7 @@ function define(seed: Seed): CommandDefinition {
     risk: seed.risk ?? 'write',
     priority: seed.priority ?? 50,
     surfaces,
+    invocationSources: seed.invocationSources ?? defaultInvocationSources(surfaces),
     agent: seed.agent ?? { exposed: true, parameters: EMPTY_PARAMETERS },
   };
 }
@@ -90,12 +108,12 @@ function ui(
 
 const definitions: CommandDefinition[] = [
   ui('import.notes-app', 'Notes', 'template-notes', 'import', 'Templates', 'file', { description: 'Create a lightweight notes page', keyTip: 'N', priority: 100, presentation: 'large', requiresDocument: false }),
-  ui('import.meeting', 'Meeting', 'template-meeting', 'import', 'Templates', 'comment', { description: 'Create a meeting page for notes, decisions, and actions', keyTip: 'M', priority: 98, presentation: 'large', requiresDocument: false }),
-  ui('import.github-readme', 'GitHub README', 'template-github-readme', 'import', 'Templates', 'code', { description: 'Create a README with installation, usage, and contribution sections', keyTip: 'G', priority: 96, presentation: 'large', requiresDocument: false }),
-  ui('import.url', 'Import web page', 'import-url', 'import', 'Sources', 'link', { description: 'Convert a public web page to Markdown', keyTip: 'U', priority: 94, presentation: 'large', requiresDocument: false, risk: 'external', agent: { exposed: false } }),
+  ui('import.meeting', 'Meeting', 'template-meeting', 'import', 'Templates', 'meetingNotes', { description: 'Create a meeting page for notes, decisions, and actions', keyTip: 'M', priority: 98, presentation: 'large', requiresDocument: false }),
+  ui('import.github-readme', 'GitHub README', 'template-github-readme', 'import', 'Templates', 'githubReadme', { description: 'Create a README with installation, usage, and contribution sections', keyTip: 'G', priority: 96, presentation: 'large', requiresDocument: false }),
+  ui('import.url', 'Import web page', 'import-url', 'import', 'Sources', 'importWebsite', { description: 'Convert a public web page to Markdown', keyTip: 'U', priority: 94, presentation: 'large', requiresDocument: false, risk: 'external', agent: { exposed: false } }),
   ui('document.import', 'From file', 'import', 'import', 'Sources', 'download', { description: 'Import Markdown, PDF, Word, or Excel', keyTip: 'F', priority: 92, requiresDocument: false, risk: 'external', agent: { exposed: false } }),
   ui('document.new', 'New', 'new', 'file', 'Create', 'plus', { description: 'Create a blank document', keyTip: 'N', priority: 100, requiresDocument: false }),
-  ui('document.templates', 'Template', 'templates', 'file', 'Create', 'template', { description: 'Create from a structured template', keyTip: 'T', requiresDocument: false }),
+  ui('document.templates', 'Template', 'templates', 'file', 'Create', 'startTemplate', { description: 'Create from a structured template', keyTip: 'T', requiresDocument: false }),
   ui('document.rename', 'Rename', 'rename', 'file', 'Document', 'pencil', { description: 'Rename the current document', keyTip: 'R', roles: ['owner', 'local'], requiresDocument: true, hiddenWhenUnavailable: true }),
   ui('document.duplicate', 'Duplicate', 'duplicate', 'file', 'Document', 'duplicate', { description: 'Create an independent copy', keyTip: 'D', requiresDocument: true }),
   ui('document.export-markdown', 'Markdown', 'download', 'file', 'Export', 'download', { description: 'Download the Markdown source', keyTip: 'M', requiresDocument: true, risk: 'external' }),
@@ -190,6 +208,7 @@ const definitions: CommandDefinition[] = [
   define({ id: 'view.editor', label: 'Editor', description: 'Show only the Markdown source', category: 'View', tab: 'view', group: 'Layout', glyph: 'pencil', operation: { kind: 'mode', mode: 'edit' }, surfaces: ALL, requiresDocument: true, risk: 'read', priority: 90, keyTip: 'E', agent: { exposed: true, parameters: EMPTY_PARAMETERS } }),
   define({ id: 'view.split', label: 'Split', description: 'Show source and rendered output together', category: 'View', tab: 'view', group: 'Layout', glyph: 'split', operation: { kind: 'mode', mode: 'split' }, surfaces: ALL, requiresDocument: true, risk: 'read', priority: 100, keyTip: 'S', agent: { exposed: true, parameters: EMPTY_PARAMETERS } }),
   define({ id: 'view.preview', label: 'Preview', description: 'Show only the compiled Markdown rendering', category: 'View', tab: 'view', group: 'Layout', glyph: 'eye', operation: { kind: 'mode', mode: 'preview' }, surfaces: ALL, requiresDocument: true, risk: 'read', priority: 95, keyTip: 'P', agent: { exposed: true, parameters: EMPTY_PARAMETERS } }),
+  ui('view.ghost-overlay', 'Ghost overlay', 'ghost-overlay', 'view', 'Layout', 'ghostOverlay', { description: 'Explain and control the rendered Markdown guide while editing on a phone', surfaces: ['phone'], requiresDocument: true, priority: 92, presentation: 'large', agent: { exposed: false } }),
   define({ id: 'view.outline', label: 'Outline', description: 'Toggle the document outline', category: 'View', tab: 'view', group: 'Workspace', glyph: 'outline', operation: { kind: 'toggle', target: 'outline' }, surfaces: ALL, requiresDocument: true, risk: 'read', priority: 85, agent: { exposed: true, parameters: EMPTY_PARAMETERS } }),
   ui('view.focus', 'Focus', 'focus', 'view', 'Workspace', 'focus', { description: 'Hide chrome and focus on the page', requiresDocument: true, priority: 72 }),
   ui('view.preferences', 'Appearance', 'preferences', 'view', 'Workspace', 'settings', { description: 'Tune density, material, and motion', requiresDocument: false, priority: 60 }),
@@ -247,6 +266,7 @@ export const LEGACY_ACTION_TO_COMMAND: Readonly<Record<UiActionId, CommandId>> =
   history: 'review.history',
   'command-palette': 'workspace.command-palette',
   preferences: 'view.preferences',
+  'ghost-overlay': 'view.ghost-overlay',
   focus: 'view.focus',
   benchmark: 'review.performance',
   about: 'workspace.about',

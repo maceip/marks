@@ -4,7 +4,7 @@ import {
   superviseBenchmarkWorker,
   type BenchmarkWorkerSupervisor,
 } from '../bench/worker-run.ts';
-import { Icon, icons } from '../components/ui/Icon';
+import { Icon } from '../components/ui';
 import { formatBytes, formatCount, formatMs } from '../lib/format';
 import BenchWorker from '../workers/bench.worker?worker';
 import '../styles/benchmark.css';
@@ -170,7 +170,7 @@ export function Benchmark({ onBack }: BenchmarkProps) {
           </div>
 
           <button type="button" className="button primary" onClick={run} disabled={phase !== null}>
-            <Icon path={icons.gauge} />
+            <Icon name="gauge" />
             {phase ? 'Running…' : 'Run and record'}
           </button>
         </div>

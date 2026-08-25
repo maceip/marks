@@ -7,7 +7,10 @@ const projectRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const distRoot = join(projectRoot, 'client', 'dist');
 
 const limits = {
-  app: { javascript: 100 * 1024, css: 10 * 1024 },
+  // Leave bounded room for the shared UI contract while keeping the entry
+  // shell below a 125 KB compressed critical path. Route-owned ribbon CSS and
+  // activation-only icon motion must remain split out of these totals.
+  app: { javascript: 110 * 1024, css: 12 * 1024 },
   marketing: { javascript: 5 * 1024, total: 25 * 1024 },
 };
 

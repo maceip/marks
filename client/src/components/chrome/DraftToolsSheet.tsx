@@ -3,7 +3,7 @@ import type { EditorView } from '@codemirror/view';
 import { DRAFT_TOOL_MODES, applyDraftTool, type DraftToolMode } from '../../lib/draft-tools';
 import { insertDraftToolResult } from '../../editor/actions';
 import { Glyph, type GlyphName } from '../glyphs/Glyph';
-import { SurfaceMaterial } from '../ui/SurfaceMaterial';
+import { SurfaceMaterial } from '../ui';
 import '../../styles/chrome.css';
 
 const MODE_COPY: Record<DraftToolMode, { label: string; glyph: GlyphName; detail: string }> = {

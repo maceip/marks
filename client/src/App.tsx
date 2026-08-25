@@ -11,7 +11,7 @@ import {
 import { createMarksDocumentAccess } from './auth/room-access';
 import { loadUser } from './collab/user';
 import type { AppDialog, ReviewSurface } from './components/overlays/AppOverlays';
-import { Icon, icons } from './components/ui/Icon';
+import { Icon } from './components/ui';
 import { OpeningShell } from './components/shell/OpeningShell';
 import { Sidebar } from './components/shell/Sidebar';
 import type { CursorInfo } from './components/workspace/EditorPane';
@@ -39,6 +39,13 @@ import { useUiPreferences } from './hooks/useUiPreferences';
 import { EMPTY_SNAPSHOT, type HudSnapshot } from './lib/hud';
 import { LatencyTracker } from './lib/latency';
 import { AGENT_CHAT_ENABLED, RIBBON_WILD_ENABLED, UI_DATA_MODE, UI_MEDIA } from './lib/product';
+import {
+  ghostShiftForDocument,
+  resetGhostPositionForDocument,
+  type GhostShift,
+  type PhoneGhostControl,
+  type PhoneGhostSessionPosition,
+} from './lib/phone-ghost';
 import { ScrollSync } from './lib/scroll-sync';
 import type { UiActionId } from './lib/ui-actions';
 import { practicalCapabilityForAction } from './lib/practical.ts';
@@ -225,6 +232,29 @@ export function App() {
 
   const documents = useDocuments(route.name !== 'benchmark' && route.name !== 'design-system');
   const docId = route.name === 'document' ? route.id : null;
+  const [phoneGhostPosition, setPhoneGhostPosition] = useState<PhoneGhostSessionPosition>({
+    documentId: null,
+    shift: 'start',
+  });
+  const phoneGhostShift = ghostShiftForDocument(phoneGhostPosition, docId);
+  useEffect(() => {
+    setPhoneGhostPosition((current) => resetGhostPositionForDocument(current, docId));
+  }, [docId]);
+  const setPhoneGhostEnabled = useCallback((enabled: boolean) => {
+    setPreferences({ phoneGhost: enabled });
+  }, [setPreferences]);
+  const setPhoneGhostShift = useCallback((shift: GhostShift) => {
+    setPhoneGhostPosition((current) =>
+      current.documentId === docId && current.shift === shift
+        ? current
+        : { documentId: docId, shift });
+  }, [docId]);
+  const phoneGhostControl = useMemo<PhoneGhostControl>(() => ({
+    enabled: preferences.phoneGhost,
+    shift: phoneGhostShift,
+    setEnabled: setPhoneGhostEnabled,
+    setShift: setPhoneGhostShift,
+  }), [phoneGhostShift, preferences.phoneGhost, setPhoneGhostEnabled, setPhoneGhostShift]);
   const { meta, engine, supported, resolved, error: metadataError } = useDocumentMeta(docId);
   const metadataIdentifiesMarketingDocument =
     meta?.id === docId && meta.public === true && meta.title === ABOUT_DOCUMENT_TITLE;
@@ -816,6 +846,9 @@ export function App() {
         case 'preferences':
           openDialog({ type: 'preferences' });
           break;
+        case 'ghost-overlay':
+          openDialog({ type: 'ghost-overlay' });
+          break;
         case 'focus':
           setFocusMode((current) => {
             if (!current) {
@@ -1106,7 +1139,7 @@ export function App() {
     >
       {dragImportActive && (
         <div className="document-drop-target" role="status" aria-live="polite">
-          <span><Icon path={icons.download} size={24} /></span>
+          <span><Icon name="download" size={24} /></span>
           <strong>Drop to import as Markdown</strong>
           <small>PDF, Word, Excel, or Markdown</small>
         </div>
@@ -1158,6 +1191,7 @@ export function App() {
           sidebarOpen={sidebarOpen}
           hudOpen={hudOpen}
           outlineOpen={outlineOpen}
+          phoneGhost={phoneGhostControl}
           reviewOpen={reviewSurface?.type ?? null}
           localMode={UI_DATA_MODE === 'local'}
           workspaceKind={workspaceKind}
@@ -1249,6 +1283,7 @@ export function App() {
                 session={session}
                 mode={mode}
                 posture={posture}
+                phoneGhost={phoneGhostControl}
                 getView={getView}
                 documentTitle={title}
                 onModeChange={setMode}
@@ -1328,7 +1363,7 @@ export function App() {
         <aside className="outline-drawer" aria-label="Outline">
           <header className="drawer-head">
             <h2>
-              <Icon path={icons.outline} size={14} /> Outline
+              <Icon name="outline" size={14} /> Outline
             </h2>
             <button
               type="button"
@@ -1336,7 +1371,7 @@ export function App() {
               onClick={() => setOutlineOpen(false)}
               aria-label="Close outline"
             >
-              <Icon path={icons.close} size={14} />
+              <Icon name="close" size={14} />
             </button>
           </header>
           <Suspense fallback={null}>
@@ -1450,6 +1485,7 @@ export function App() {
             userName={user.name}
             theme={theme}
             preferences={preferences}
+            phoneGhost={phoneGhostControl}
             hasDocument={Boolean(docId && session)}
             phone={phone}
             dataMode={UI_DATA_MODE}

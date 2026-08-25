@@ -1,6 +1,5 @@
-import { SurfaceMaterial } from '../components/ui/SurfaceMaterial';
+import { MarksMark, SurfaceMaterial } from '../components/ui';
 import { PairingInspect } from '../components/identity/PairingInspect';
-import { MarksMark } from '../components/ui/MarksMark';
 import type { PairingLink } from '../auth/protocol';
 import '../styles/home.css';
 

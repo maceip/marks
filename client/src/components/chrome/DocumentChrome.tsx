@@ -1,12 +1,15 @@
 import type { EditorView } from '@codemirror/view';
 import type { CollabSession } from '../../collab/types';
 import type { Posture } from '../../lib/posture';
+import type { PhoneGhostControl } from '../../lib/phone-ghost';
 import type { UiActionId } from '../../lib/ui-actions';
 import type { ViewMode } from '../shell/TopBar';
-import { DesktopRibbon } from './DesktopRibbon';
+import { DesktopRibbon, type DesktopRibbonProps } from './DesktopRibbon';
+import { FoldableRibbon } from './FoldableRibbon';
 import { MiniToolbar } from './MiniToolbar';
 import { PhoneComposer } from './PhoneComposer';
 import '../../styles/chrome.css';
+import '../../styles/components/ribbon.css';
 
 export interface DocumentChromeProps {
   documentId: string;
@@ -18,6 +21,7 @@ export interface DocumentChromeProps {
   theme: 'light' | 'dark';
   hudOpen: boolean;
   outlineOpen: boolean;
+  phoneGhost: PhoneGhostControl;
   reviewOpen?: 'comments' | 'history' | null;
   focusMode?: boolean;
   selected: number;
@@ -52,6 +56,7 @@ export function DocumentChrome(props: DocumentChromeProps) {
         onModeChange={props.onModeChange}
         onAction={props.onAction}
         onToggleOutline={props.onToggleOutline}
+        phoneGhost={props.phoneGhost}
         onVoice={props.onVoice}
         voiceActive={props.voiceActive}
         voiceSupported={props.voiceSupported}
@@ -61,32 +66,36 @@ export function DocumentChrome(props: DocumentChromeProps) {
     );
   }
 
+  const ribbonProps: DesktopRibbonProps = {
+    documentId: props.documentId,
+    session: props.session,
+    documentReady: props.documentReady,
+    mode: props.mode,
+    theme: props.theme,
+    hudOpen: props.hudOpen,
+    outlineOpen: props.outlineOpen,
+    reviewOpen: props.reviewOpen,
+    focusMode: props.focusMode,
+    phone: false,
+    selected: props.selected,
+    getView: props.getView,
+    onModeChange: props.onModeChange,
+    onToggleHud: props.onToggleHud,
+    onToggleOutline: props.onToggleOutline,
+    onAction: props.onAction,
+    onOpenDraftTools: props.onOpenDraftTools,
+    onToggleTheme: props.onToggleTheme,
+    onVoice: props.onVoice,
+    voiceActive: props.voiceActive,
+    voiceSupported: props.voiceSupported,
+    onNotify: props.onNotify,
+  };
+
   return (
     <>
-      <DesktopRibbon
-        documentId={props.documentId}
-        session={props.session}
-        documentReady={props.documentReady}
-        mode={props.mode}
-        theme={props.theme}
-        hudOpen={props.hudOpen}
-        outlineOpen={props.outlineOpen}
-        reviewOpen={props.reviewOpen}
-        focusMode={props.focusMode}
-        phone={false}
-        selected={props.selected}
-        getView={props.getView}
-        onModeChange={props.onModeChange}
-        onToggleHud={props.onToggleHud}
-        onToggleOutline={props.onToggleOutline}
-        onAction={props.onAction}
-        onOpenDraftTools={props.onOpenDraftTools}
-        onToggleTheme={props.onToggleTheme}
-        onVoice={props.onVoice}
-        voiceActive={props.voiceActive}
-        voiceSupported={props.voiceSupported}
-        onNotify={props.onNotify}
-      />
+      {props.posture.foldable
+        ? <FoldableRibbon {...ribbonProps} posture={props.posture} />
+        : <DesktopRibbon {...ribbonProps} />}
       <MiniToolbar selected={props.selected} disabled={!props.documentReady} getView={props.getView} />
     </>
   );

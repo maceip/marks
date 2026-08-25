@@ -124,7 +124,7 @@
   gap: 8px;
   padding: 8px 12px;
   border: 1px solid var(--color-border-default);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--color-bg-raised);
   box-shadow: var(--elevation-md);
   transform: translateX(-50%);

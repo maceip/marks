@@ -23,7 +23,7 @@ import {
 import { pairingLandingPath } from '../../lib/pairing-link';
 import { UI_DATA_MODE } from '../../lib/product';
 import { SERVICE_ERROR_COPY, copyForHttpStatus } from '../../lib/service-errors';
-import { Icon, icons } from '../ui/Icon';
+import { Icon } from '../ui';
 import { QrMark } from './QrMark';
 
 interface KeepWorkspaceProps {
@@ -157,7 +157,7 @@ export function KeepWorkspace({ onNotify, onPromoted, phone = false }: KeepWorks
       {phone && !loggedIn && (
         <div className="mobile-login-path">
           <div className="keep-stage laptop-login-stage">
-            <Icon path={icons.document} size={36} />
+            <Icon name="document" size={36} />
             <div>
               <strong>Open this page on a laptop</strong>
               <small>The page URL is already public. On the laptop, choose Log In and use the phone-link flow to join your account.</small>
@@ -172,7 +172,7 @@ export function KeepWorkspace({ onNotify, onPromoted, phone = false }: KeepWorks
               'Paste it into a browser on your laptop, then choose Log In.',
             )}
           >
-            <Icon path={icons.link} /> Copy page link for laptop
+            <Icon name="link" /> Copy page link for laptop
           </button>
         </div>
       )}
@@ -244,7 +244,7 @@ export function KeepWorkspace({ onNotify, onPromoted, phone = false }: KeepWorks
                 )
               }
             >
-              <Icon path={icons.link} /> {ticket ? 'Copy login link' : 'Copy login page'}
+              <Icon name="link" /> {ticket ? 'Copy login link' : 'Copy login page'}
             </button>
             {ticket && (
               <button

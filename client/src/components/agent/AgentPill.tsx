@@ -27,7 +27,7 @@ import { getCommand } from '../../commands/registry.ts';
 import type { CommandReceipt, CommandRun } from '../../commands/types.ts';
 import { RIBBON_WILD_ENABLED } from '../../lib/product.ts';
 import { Glyph } from '../glyphs/Glyph';
-import { SurfaceMaterial } from '../ui/SurfaceMaterial';
+import { Icon, SurfaceMaterial } from '../ui';
 import '../../styles/agent.css';
 
 const SUGGESTIONS = RIBBON_WILD_ENABLED
@@ -609,7 +609,11 @@ export function AgentPill({ documentId, linkedSurface = null }: AgentPillProps) 
               onClick={() => center.focusCommands([latestReceipt.commandId], 3_000)}
             >
               <span>
-                {latestReceipt.status === 'succeeded' ? '✓' : latestReceipt.status === 'cancelled' ? '—' : '!'}
+                <Icon
+                  name={latestReceipt.status === 'succeeded' ? 'check' : latestReceipt.status === 'cancelled' ? 'clear' : 'close'}
+                  size={14}
+                  interactive={false}
+                />
               </span>
               <span>
                 <strong>{latestReceipt.status === 'succeeded' ? 'Completed' : latestReceipt.status}</strong>
@@ -667,7 +671,7 @@ export function AgentPill({ documentId, linkedSurface = null }: AgentPillProps) 
           aria-label="Run matching ribbon commands"
           disabled={!input.trim() || busy}
         >
-          ↑
+          <Icon name="arrow" size={16} />
         </button>
       </form>
     </aside>

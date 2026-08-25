@@ -6,6 +6,35 @@
 
 export type GhostShift = 'start' | 'end';
 
+export interface PhoneGhostControl {
+  enabled: boolean;
+  shift: GhostShift;
+  setEnabled: (enabled: boolean) => void;
+  /** Non-gesture control used by accessible left/right-half buttons. */
+  setShift: (shift: GhostShift) => void;
+}
+
+export interface PhoneGhostSessionPosition {
+  documentId: string | null;
+  shift: GhostShift;
+}
+
+export function ghostShiftForDocument(
+  position: PhoneGhostSessionPosition,
+  documentId: string | null,
+): GhostShift {
+  return position.documentId === documentId ? position.shift : 'start';
+}
+
+export function resetGhostPositionForDocument(
+  position: PhoneGhostSessionPosition,
+  documentId: string | null,
+): PhoneGhostSessionPosition {
+  return position.documentId === documentId
+    ? position
+    : { documentId, shift: 'start' };
+}
+
 /** Left half of the typeset page, translated into the right-hand viewfinder. */
 export const GHOST_SHIFT_START_PERCENT = 50;
 /** Right half of the typeset page, aligned with the viewfinder. */
@@ -181,6 +210,8 @@ export interface PhoneGhostBindings {
   setPercent: (percent: number) => void;
   setDragging: (dragging: boolean) => void;
   setShift: (shift: GhostShift) => void;
+  /** Fires only after a pan snaps, never during live drag or pinch restore. */
+  onShiftCommit?: (shift: GhostShift) => void;
   onSuppressSwipe: (suppress: boolean) => void;
 }
 
@@ -238,6 +269,7 @@ export function bindPhoneGhostControls(root: HTMLElement, bindings: PhoneGhostBi
       bindings.setDragging(false);
       root.classList.remove('phone-ghost-dragging');
       applyPercent(result.percent, result.shift);
+      bindings.onShiftCommit?.(result.shift);
     } else if (result.type === 'restore') {
       bindings.setDragging(false);
       root.classList.remove('phone-ghost-dragging');

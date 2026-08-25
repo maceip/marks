@@ -225,6 +225,9 @@ export async function launch(options = {}) {
     async wait(ms) {
       await runCli(bin, ['wait', String(ms)], ctx);
     },
+    async setViewport(viewport) {
+      await runCli(bin, ['set', 'viewport', String(viewport.width), String(viewport.height)], ctx);
+    },
     async setOffline(offline) {
       await runCli(bin, ['set', 'offline', offline ? 'on' : 'off'], ctx);
     },

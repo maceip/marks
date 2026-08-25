@@ -1,4 +1,10 @@
-/* Ribbon pattern. Placement of the app header and workspace remains in layout.css. */
+/* Canonical ribbon, Quick Access, phone task picker, and foldable anatomy.
+   Shell CSS may compose these patterns but may not redefine their class family. */
+.app-ribbon.ribbon-home,
+.app-ribbon.ribbon-benchmark { grid-template-rows: var(--layout-titlebar-height); }
+.ribbon-home .titlebar,
+.ribbon-benchmark .titlebar { border-bottom: 0; }
+
 .ribbon-body {
   --ribbon-tab-height: 29px;
   --ribbon-command-height: 52px;
@@ -61,8 +67,8 @@
 .ribbon-command.danger-command, .ribbon-command[data-danger='true'] { color: var(--color-feedback-danger); }
 .ribbon-command[data-loading='true'] { cursor: wait; }
 .ribbon-command[data-loading='true'] > :not(.button-spinner) { visibility: hidden; }
-.ribbon-command .glyph { --marks-icon-size: var(--ribbon-icon-size); }
-.ribbon-command-large .glyph { --marks-icon-size: var(--ribbon-large-icon-size); }
+.ribbon-command .glyph { --marks-icon-size: var(--ribbon-icon-size, 32px); }
+.ribbon-command-large .glyph { --marks-icon-size: var(--ribbon-large-icon-size, 40px); }
 .ribbon-command-label { max-width: 68px; overflow: hidden; font-size: var(--ribbon-label-size); font-weight: var(--ribbon-label-weight); line-height: 1; white-space: nowrap; text-overflow: ellipsis; }
 .ribbon-group-label { display: inline-flex; align-items: center; justify-content: center; gap: 4px; align-self: end; color: var(--color-fg-subtle); font: 650 8px/11px var(--font-family-mono); text-align: center; text-transform: uppercase; letter-spacing: .08em; }
 .ribbon-launcher { width: 12px; height: 12px; padding: 0; border: 0; background: transparent; color: var(--color-fg-subtle); font-size: 8px; cursor: pointer; }
@@ -70,6 +76,251 @@
 .style-chip { display: grid; min-width: 46px; height: 46px; padding: 4px; border: 1px solid var(--material-border); border-radius: 12px; background: color-mix(in srgb, var(--color-bg-raised) 88%, transparent); color: var(--color-fg-muted); font-size: 8px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; cursor: pointer; }
 .style-chip span { color: var(--color-fg-default); font-size: 13px; font-weight: 720; letter-spacing: -.04em; text-transform: none; }
 .style-h1 span { font-size: 16px; } .style-h2 span { font-size: 14px; } .style-h3 span { color: var(--color-action); font-size: 12px; } .style-h4 span { font-size: 11px; }
+.quick-access {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 2px;
+}
+
+.ribbon-command .glyph,
+.phone-ribbon .glyph {
+  pointer-events: auto;
+}
+
+.quick-access > .icon-button .glyph { --marks-icon-size: 24px; }
+.quick-access-menu .glyph { --marks-icon-size: 20px; }
+
+.ribbon-command:active .glyph.marks-icon-live .marks-icon-body,
+.phone-ribbon button:active .glyph.marks-icon-live .marks-icon-body {
+  --icon-press: 1;
+}
+
+.ribbon-profile-toggle {
+  align-self: center;
+  margin-left: auto;
+  padding: 3px 8px;
+  border: 1px solid var(--material-border);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--color-bg-raised) 74%, transparent);
+  color: var(--color-fg-subtle);
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.ribbon-profile-toggle:hover { color: var(--color-fg-default); }
+
+.ribbon-gallery-control {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.ribbon-gallery-strip,
+.ribbon-gallery-popup {
+  display: flex;
+  gap: 4px;
+}
+
+.ribbon-gallery-expand {
+  width: 18px;
+  padding: 0;
+  border: 1px solid var(--material-border);
+  border-radius: 7px;
+  background: var(--color-bg-raised);
+  color: var(--color-fg-subtle);
+  cursor: pointer;
+}
+
+.ribbon-gallery-popup {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 90;
+  min-width: max-content;
+  padding: 8px;
+  border: 1px solid var(--material-border);
+  border-radius: 14px;
+  background: var(--material-tint-liquid);
+  box-shadow: var(--material-elevation);
+  backdrop-filter: blur(20px) saturate(1.2);
+}
+
+.format-heading-1 > span { font-size: 16px; }
+.format-heading-2 > span { font-size: 14px; }
+.format-heading-3 > span { font-size: 12px; color: var(--color-action); }
+.format-heading-4 > span { font-size: 11px; }
+
+.ribbon-overflow-trigger {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 58px;
+  height: 48px;
+  border: 1px solid var(--material-border);
+  border-radius: 14px;
+  background: var(--color-bg-raised);
+  color: var(--color-fg-muted);
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.ribbon-overflow-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 100;
+  display: grid;
+  gap: 10px;
+  width: min(560px, calc(100vw - 24px));
+  max-height: min(520px, calc(100vh - 160px));
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--material-border);
+  border-radius: 18px;
+  background: var(--material-tint-liquid);
+  box-shadow: var(--material-elevation);
+  backdrop-filter: blur(24px) saturate(1.25);
+}
+
+.ribbon-overflow-menu section { display: grid; gap: 6px; }
+.ribbon-overflow-menu h3 {
+  margin: 0;
+  color: var(--color-fg-subtle);
+  font: 650 9px/1 var(--font-family-mono);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.ribbon-overflow-menu section > div { display: flex; flex-wrap: wrap; gap: 5px; }
+
+.ribbon-keytip {
+  position: absolute;
+  right: 2px;
+  bottom: 1px;
+  z-index: 4;
+  min-width: 16px;
+  padding: 1px 3px;
+  border: 1px solid color-mix(in srgb, var(--color-action) 38%, var(--material-border));
+  border-radius: 4px;
+  background: var(--color-bg-surface);
+  color: var(--color-action);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 18%);
+  font: 750 9px/1.2 var(--font-family-mono);
+  text-align: center;
+}
+
+.ribbon-tab .ribbon-keytip { bottom: -7px; right: 50%; transform: translateX(50%); }
+
+.agent-tab-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: var(--color-brand-positive);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-brand-positive) 16%, transparent);
+}
+
+.ribbon-command.agent-raised,
+.style-chip.agent-raised,
+.quick-access .agent-raised {
+  border-color: color-mix(in srgb, var(--color-brand-positive) 52%, var(--material-border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-brand-positive) 14%, transparent), var(--material-elevation);
+}
+
+.ribbon-command.agent-running::after {
+  position: absolute;
+  inset: -3px;
+  border: 2px solid var(--color-brand-positive);
+  border-radius: inherit;
+  content: '';
+  animation: agent-command-pulse var(--motion-agent-command-pulse) ease-in-out infinite alternate;
+  pointer-events: none;
+}
+
+.ribbon-command.agent-awaiting-approval::after {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--color-bg-surface);
+  border-radius: 50%;
+  background: var(--color-feedback-warning);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-feedback-warning) 18%, transparent);
+  content: '';
+  pointer-events: none;
+}
+
+@keyframes agent-command-pulse {
+  from { opacity: .28; transform: scale(.98); }
+  to { opacity: .9; transform: scale(1.03); }
+}
+
+.quick-access-customize {
+  width: 16px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-fg-subtle);
+  cursor: pointer;
+}
+
+.quick-access-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 120;
+  display: grid;
+  width: 260px;
+  max-height: min(520px, calc(100vh - 80px));
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid var(--material-border);
+  border-radius: 15px;
+  background: var(--material-tint-liquid);
+  box-shadow: var(--material-elevation);
+  backdrop-filter: blur(24px) saturate(1.2);
+}
+
+.quick-access-menu header { display: grid; padding: 6px 8px 8px; }
+.quick-access-menu header span { color: var(--color-fg-subtle); font-size: 10px; }
+.quick-access-menu button {
+  display: grid;
+  grid-template-columns: 14px 20px 1fr;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 4px 7px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-fg-default);
+  text-align: left;
+  cursor: pointer;
+}
+.quick-access-menu button:hover { background: var(--color-bg-raised); }
+.quick-access-menu .quick-access-profile { grid-template-columns: 1fr; border-top: 1px solid var(--material-border); color: var(--color-action); }
+
+@media (prefers-reduced-motion: reduce) {
+  .ribbon-command.agent-running::after { animation: none; opacity: .8; }
+}
+
+/* Flyouts temporarily escape the deck's scroll clipping while remaining
+   contained by the measured ribbon rather than the trigger group. */
+.ribbon-body.ribbon-flyout-open .ribbon-deck,
+.ribbon-body.ribbon-flyout-open .ribbon-toolbar { overflow: visible; }
+.ribbon-body.ribbon-overflow-open .ribbon-overflow-group { position: static; }
+.ribbon-body.ribbon-overflow-open .ribbon-overflow-menu {
+  right: 8px;
+  left: auto;
+}
+
+
 .ribbon-loading { display: flex; align-items: center; height: 100%; padding: 0 18px; color: var(--color-fg-subtle); font-size: 11px; }
 
 .ribbon-collapse .icon { transform: rotate(-90deg); transition: transform var(--motion-fast) var(--ease-out); }
@@ -85,6 +336,7 @@
 :root[data-glass='reduced'] .ribbon-body { background: var(--color-bg-raised); backdrop-filter: none; }
 
 @media (min-width: 721px) { .ribbon-collapsed .app-ribbon.ribbon-document .ribbon-body { display: none; } }
+.focus-mode .app-ribbon.ribbon-document { grid-template-rows: var(--layout-titlebar-height); }
 .focus-mode .app-ribbon .ribbon-body { display: none; }
 @media (max-width: 720px), (max-height: 560px) and (pointer: coarse) {
   .ribbon-body { position: fixed; right: 0; bottom: 0; left: 0; z-index: 55; grid-template-rows: 34px 70px; min-height: calc(var(--layout-mobile-ribbon-height) + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom); overflow: hidden; border-top: 1px solid var(--material-border); background: var(--material-tint-strong); box-shadow: 0 -14px 32px -26px rgb(0 0 0 / 55%), inset 0 1px var(--material-highlight); }
@@ -98,8 +350,15 @@
   .ribbon-tabs { grid-template-columns: repeat(5, 1fr); }
 }
 @media (pointer: coarse) { .ribbon-command { min-width: 54px; } }
+@media (prefers-reduced-transparency: reduce) {
+  .ribbon-body {
+    background: var(--color-bg-raised);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
-  .ribbon-deck-enter, .ribbon-deck-exit, .ribbon-deck-inspect, .ribbon-deck-compose, .ribbon-tab.contextual { animation-duration: .01ms; transform: none; }
+  .ribbon-deck-enter, .ribbon-deck-exit, .ribbon-deck-inspect, .ribbon-deck-compose, .ribbon-tab.contextual { animation-duration: var(--motion-instant); transform: none; }
   .ribbon-command:active:not(:disabled) { transform: none; }
   .ribbon-command .marks-icon-live .marks-icon-body { transform: none; }
 }
@@ -110,3 +369,327 @@
 :root[data-motion='reduced'] .ribbon-command .marks-icon-live .marks-icon-body,
 :root[data-surface-tier='foundation'] .ribbon-command .marks-icon-live .marks-icon-body { transform: none; }
 @keyframes ribbon-deck-reduced { from { opacity: 1; } to { opacity: 1; } }
+
+/* Shell composition that directly controls ribbon pattern placement. */
+:root[data-shell='phone'] .app-ribbon.ribbon-document {
+  grid-template-rows: var(--layout-titlebar-height);
+  background: var(--material-tint-strong);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+:root[data-shell='phone'] .quick-access { display: none; }
+
+:root[data-shell='fold-book'] .app-ribbon.ribbon-document,
+:root[data-shell='fold-laptop'] .app-ribbon.ribbon-document {
+  grid-template-rows: var(--layout-titlebar-height) minmax(0, 1fr);
+  width: 100%;
+  background: var(--material-refraction), var(--material-tint-strong);
+}
+
+@media (min-width: 721px) {
+  :root[data-shell='fold-book'] .ribbon-collapsed .main.route-document,
+  :root[data-shell='fold-laptop'] .ribbon-collapsed .main.route-document {
+    --fold-top-chrome-height: var(--layout-titlebar-height);
+    grid-template-rows: var(--fold-top-chrome-height) minmax(0, 1fr) var(--layout-statusbar-height);
+  }
+}
+
+:root[data-glass='reduced'] .phone-ribbon {
+  background: var(--color-bg-raised);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+@media (max-width: 720px), (max-height: 560px) and (pointer: coarse) {
+  .app-ribbon.ribbon-document {
+    grid-template-rows: var(--layout-titlebar-height);
+    overflow: visible;
+    /* A filtered header would contain the fixed bottom ribbon. */
+    background: var(--material-tint-strong);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .ribbon-body {
+      background: var(--material-tint);
+      -webkit-backdrop-filter: blur(var(--material-blur-chrome)) saturate(var(--material-saturation));
+      backdrop-filter: blur(var(--material-blur-chrome)) saturate(var(--material-saturation));
+    }
+  }
+}
+
+@media (min-width: 721px) {
+  .ribbon-collapsed .main.route-document {
+    grid-template-rows: var(--layout-titlebar-height) minmax(0, 1fr) var(--layout-statusbar-height);
+  }
+  .ribbon-collapsed .app-ribbon.ribbon-document { grid-template-rows: var(--layout-titlebar-height); }
+  .ribbon-collapsed .workspace-shell { animation: focus-settle var(--duration-medium) var(--ease-out) both; }
+}
+
+/* Phone task ribbon and category chooser. Shell placement variables remain in chrome.css. */
+.phone-ribbon {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 56;
+  display: grid;
+  grid-template-rows: 52px 84px;
+  min-height: calc(var(--layout-mobile-ribbon-height) + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+  border-top: 1px solid var(--material-border);
+  background: var(--material-refraction), var(--material-tint-strong);
+  box-shadow: 0 -16px 36px -28px rgb(0 0 0 / 55%);
+  isolation: isolate;
+}
+
+.phone-ribbon-head {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+  min-width: 0;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--material-border);
+  background: color-mix(in srgb, var(--material-tint) 62%, transparent);
+}
+
+.phone-category-trigger {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 13px;
+  align-items: center;
+  gap: 5px;
+  width: min(48%, 190px);
+  min-width: 124px;
+  height: var(--control-height-touch);
+  padding: 2px 7px 2px 4px;
+  border: 1px solid color-mix(in srgb, var(--color-action) 24%, var(--color-border-default));
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--color-bg-raised) 76%, transparent);
+  color: var(--color-fg-default);
+  text-align: left;
+  box-shadow: 0 4px 14px -12px rgb(0 0 0 / 55%);
+}
+.phone-category-trigger > span { display: grid; min-width: 0; }
+.phone-category-trigger small { color: var(--color-fg-subtle); font: 700 7px/9px var(--font-family-mono); letter-spacing: .08em; text-transform: uppercase; }
+.phone-category-trigger strong { overflow: hidden; font-size: 11px; line-height: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.phone-category-trigger > b { color: var(--color-action); font-size: 13px; text-align: right; }
+
+.phone-mode-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  flex: 1;
+  max-width: 210px;
+  height: var(--control-height-touch);
+  padding: 1px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 11px;
+  background: var(--color-bg-sunken);
+}
+.phone-mode-switch button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-fg-muted);
+  font-size: 10px;
+  font-weight: 680;
+}
+.phone-mode-switch button[aria-pressed='true'] { background: var(--color-bg-raised); color: var(--color-action); box-shadow: var(--elevation-sm); }
+.phone-mode-switch .glyph { --marks-icon-size: 21px; }
+
+.phone-ribbon-deck {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: color-mix(in srgb, var(--material-tint) 58%, transparent);
+  scrollbar-width: none;
+  scroll-snap-type: x proximity;
+}
+.phone-ribbon-deck::-webkit-scrollbar { display: none; }
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .phone-ribbon {
+    background: var(--material-refraction), var(--material-tint);
+    -webkit-backdrop-filter: blur(var(--material-blur-chrome)) saturate(var(--material-saturation));
+    backdrop-filter: blur(var(--material-blur-chrome)) saturate(var(--material-saturation));
+  }
+}
+
+.phone-ribbon-group {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 12px;
+  flex: none;
+  min-width: max-content;
+  padding: 2px 7px 1px;
+  border-right: 1px solid var(--material-border);
+  scroll-snap-align: start;
+}
+.phone-ribbon-commands { display: flex; align-items: center; gap: 4px; }
+.phone-ribbon-commands .glyph { --marks-icon-size: 34px; }
+.phone-ribbon-commands button {
+  display: grid;
+  position: relative;
+  justify-items: center;
+  align-content: center;
+  gap: 1px;
+  min-width: 58px;
+  height: 58px;
+  padding: 2px 5px;
+  border: 1px solid transparent;
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--color-bg-raised) 52%, transparent);
+  color: var(--color-fg-muted);
+  font-size: 9.5px;
+  font-weight: 620;
+}
+.phone-ribbon-commands button > span:not(.marks-icon) { max-width: 68px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.phone-ribbon-commands button.active { border-color: color-mix(in srgb, var(--color-action) 28%, transparent); background: var(--color-action-soft); color: var(--color-action); }
+.phone-ribbon-commands button.contextual { color: var(--color-brand-positive); }
+.phone-ribbon-commands button:disabled { opacity: .36; }
+.phone-ribbon-group-label { align-self: end; color: var(--color-fg-subtle); font: 650 8px/10px var(--font-family-mono); text-align: center; text-transform: uppercase; letter-spacing: .07em; }
+.phone-command-status { position: absolute; top: 2px; right: 3px; min-width: 20px; padding: 1px 4px; border-radius: var(--radius-pill); background: var(--color-feedback-success-soft); color: var(--color-feedback-success); font: 750 7px/10px var(--font-family-mono); letter-spacing: .04em; text-transform: uppercase; }
+
+.phone-category-layer { position: fixed; inset: 0; z-index: 57; pointer-events: none; }
+.phone-category-scrim { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; background: rgb(8 17 49 / 36%); pointer-events: auto; }
+.phone-category-sheet {
+  position: fixed;
+  right: 6px;
+  bottom: calc(var(--layout-mobile-ribbon-height) + env(safe-area-inset-bottom) + 6px);
+  left: 6px;
+  z-index: 1;
+  display: grid;
+  max-height: min(62dvh, calc(100dvh - var(--layout-mobile-ribbon-height) - 16px));
+  overflow: hidden;
+  border: 1px solid var(--material-border);
+  border-radius: 20px;
+  background: var(--material-refraction), var(--material-tint-strong);
+  box-shadow: 0 24px 70px -28px rgb(0 0 0 / 68%);
+  isolation: isolate;
+  pointer-events: auto;
+}
+.phone-category-sheet > header { position: relative; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 13px 9px 15px; border-bottom: 1px solid var(--material-border); }
+.phone-category-sheet > header > span { display: grid; gap: 2px; }
+.phone-category-sheet > header strong { font-size: 13px; }
+.phone-category-sheet > header small { color: var(--color-fg-muted); font-size: 9.5px; }
+.phone-category-close { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 50%; background: var(--color-bg-sunken); color: var(--color-fg-muted); font-size: 20px; line-height: 1; }
+.phone-category-grid { position: relative; z-index: 1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; padding: 7px; overflow-y: auto; }
+.phone-category-grid > button,
+.phone-category-all {
+  position: relative;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 7px;
+  min-height: 58px;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--color-bg-raised) 58%, transparent);
+  color: var(--color-fg-default);
+  text-align: left;
+}
+.phone-category-grid > button[aria-pressed='true'] { border-color: color-mix(in srgb, var(--color-action) 35%, var(--color-border-default)); background: var(--color-action-soft); color: var(--color-action); }
+.phone-category-grid > button.contextual { color: var(--color-brand-positive); }
+.phone-category-grid > button > span,
+.phone-category-all > span { display: grid; min-width: 0; gap: 2px; }
+.phone-category-grid strong,
+.phone-category-all strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.phone-category-grid small,
+.phone-category-all small { overflow: hidden; color: var(--color-fg-subtle); font-size: 8px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+.phone-category-grid > button > b { color: var(--color-fg-subtle); font-size: 13px; text-align: center; }
+.phone-category-grid > button[aria-pressed='true'] > b { color: var(--color-action); }
+.phone-category-grid .agent-tab-dot { position: absolute; top: 6px; right: 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--color-brand-positive); }
+.phone-category-all { position: relative; z-index: 1; grid-template-columns: 34px minmax(0, 1fr); margin: 0 7px 7px; border-color: var(--material-border); }
+
+.phone-composer.keyboard-open .phone-ribbon {
+  grid-template-rows: 48px 58px;
+  min-height: calc(106px + env(safe-area-inset-bottom));
+}
+.phone-composer.keyboard-open .phone-ribbon-head { padding-block: 2px; }
+.phone-composer.keyboard-open .phone-category-trigger,
+.phone-composer.keyboard-open .phone-mode-switch { height: var(--control-height-touch); }
+.phone-composer.keyboard-open .phone-category-sheet { bottom: calc(106px + env(safe-area-inset-bottom) + 6px); }
+.phone-composer.keyboard-open .phone-ribbon-group { grid-template-rows: minmax(0, 1fr); padding-block: 3px; }
+.phone-composer.keyboard-open .phone-ribbon-group-label { display: none; }
+.phone-composer.keyboard-open .phone-ribbon-commands button { height: 52px; }
+
+/* Foldable ribbon segmentation. Workspace and titlebar placement remain in chrome.css. */
+.foldable-ribbon {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.foldable-ribbon-primary {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.foldable-ribbon-primary > .ribbon-body { height: 100%; }
+
+.foldable-ribbon-hinge,
+.foldable-ribbon-companion {
+  display: none;
+  min-width: 0;
+  min-height: 0;
+  pointer-events: none;
+}
+
+:root[data-shell='fold-book'] .foldable-ribbon {
+  grid-template-columns:
+    minmax(0, var(--fold-book-primary-command-width))
+    var(--hinge-gap, 28px)
+    minmax(0, var(--segment-1-width));
+}
+
+:root[data-shell='fold-book'] .foldable-ribbon-primary {
+  grid-column: 1;
+  overflow: visible;
+  /* Keep every ribbon hit target out of the hinge while allowing an open
+     menu to extend below the chrome row into the document workspace. */
+  clip-path: inset(0 0 -100vh 0);
+}
+:root[data-shell='fold-book'] .foldable-ribbon-hinge { display: block; grid-column: 2; grid-row: 1; }
+:root[data-shell='fold-book'] .foldable-ribbon-companion { display: block; grid-column: 3; grid-row: 1; }
+
+:root[data-shell='fold-book'] .foldable-ribbon .ribbon-tabs {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+:root[data-shell='fold-book'] .foldable-ribbon .ribbon-tabs::-webkit-scrollbar { display: none; }
+
+:root[data-shell='fold-book'] .foldable-ribbon .ribbon-gallery-popup {
+  right: 0;
+  left: auto;
+}
+
+:root[data-shell='fold-book'] .foldable-ribbon .ribbon-overflow-group {
+  /* Preserve the 58px touch target while reclaiming the generic group's
+     inline padding; coarse-pointer Presence controls are 12px wider. */
+  padding-inline: 2px;
+}
+
+:root[data-shell='fold-book'] .foldable-ribbon .ribbon-overflow-menu {
+  width: min(560px, max(0px, calc(var(--fold-book-primary-command-width) - 16px)));
+}

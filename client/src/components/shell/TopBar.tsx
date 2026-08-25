@@ -3,11 +3,10 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import type { CollabSession, ConnectionStatus, Peer } from '../../collab/types';
 import { useOptionalCommandCenter } from '../../commands/context';
 import type { Posture } from '../../lib/posture';
+import type { PhoneGhostControl } from '../../lib/phone-ghost';
 import type { UiActionId } from '../../lib/ui-actions';
-import { Icon, icons } from '../ui/Icon';
-import { MarksMark } from '../ui/MarksMark';
+import { Icon, MarksMark, SurfaceMaterial } from '../ui';
 import { PresenceBar } from './PresenceBar';
-import { SurfaceMaterial } from '../ui/SurfaceMaterial';
 
 export type ViewMode = 'edit' | 'split' | 'preview';
 export type SurfaceRoute = 'home' | 'document' | 'benchmark' | 'link';
@@ -36,6 +35,7 @@ interface TopBarProps {
   sidebarOpen: boolean;
   hudOpen: boolean;
   outlineOpen: boolean;
+  phoneGhost: PhoneGhostControl;
   reviewOpen?: 'comments' | 'history' | null;
   localMode?: boolean;
   workspaceKind: 'local' | 'scratch' | 'session';
@@ -114,7 +114,7 @@ export function TopBar(props: TopBarProps) {
             title="Toggle document list"
             onClick={props.onToggleSidebar}
           >
-            <Icon path={icons.sidebar} />
+            <Icon name="sidebar" />
           </button>
 
           <span className="product-mark" aria-hidden="true">
@@ -151,7 +151,7 @@ export function TopBar(props: TopBarProps) {
           <div className="topbar-right">
           {props.focusMode && (
             <button type="button" className="focus-exit" onClick={() => props.onAction('focus')}>
-              <Icon path={icons.focus} size={14} /> Exit focus
+              <Icon name="focus" size={14} /> Exit focus
             </button>
           )}
           {documentRoute && props.documentAvailable && <PresenceBar peers={props.peers} onJump={(peer) => {
@@ -172,7 +172,7 @@ export function TopBar(props: TopBarProps) {
               disabled={commandCenter ? !available('document.share')?.enabled : false}
               onClick={() => invoke('document.share', 'share')}
             >
-              <Icon path={icons.share} />
+              <Icon name="share" />
               <span>Share</span>
             </button>
           )}
@@ -187,12 +187,12 @@ export function TopBar(props: TopBarProps) {
               disabled={commandCenter ? !available('document.export-markdown')?.enabled : false}
               onClick={() => invoke('document.export-markdown', 'download')}
             >
-              <Icon path={icons.download} />
+              <Icon name="download" />
             </button>
           )}
 
           <button type="button" className="icon-button titlebar-search" data-command-id="workspace.command-palette" aria-label="Open command palette" title="Command palette (⌘⇧P)" onClick={() => invoke('workspace.command-palette', 'command-palette')}>
-            <Icon path={icons.search} />
+            <Icon name="search" />
           </button>
 
           <button
@@ -203,7 +203,7 @@ export function TopBar(props: TopBarProps) {
             data-command-id="view.theme"
             onClick={() => commandCenter ? invoke('view.theme', 'preferences') : props.onToggleTheme()}
           >
-            <Icon path={props.theme === 'dark' ? icons.sun : icons.moon} />
+            <Icon name={props.theme === 'dark' ? 'sun' : 'moon'} />
           </button>
 
           {documentRoute && !props.posture.phone && !props.focusMode && (
@@ -216,22 +216,22 @@ export function TopBar(props: TopBarProps) {
               data-command-id="view.ribbon"
               onClick={() => commandCenter ? invoke('view.ribbon', 'preferences') : props.onToggleRibbon()}
             >
-              <Icon path={icons.chevron} />
+              <Icon name="chevron" />
             </button>
           )}
 
           <div className="titlebar-menu" ref={moreRef}>
             <button type="button" className="icon-button" aria-label="More actions" aria-haspopup="menu" aria-expanded={moreOpen} onClick={() => setMoreOpen((open) => !open)}>
-              <Icon path={icons.more} />
+              <Icon name="more" />
             </button>
             {moreOpen && (
               <div className="popover-menu" role="menu">
-                {(!commandCenter ? props.workspaceKind !== 'local' : available('identity.account')) && <button type="button" role="menuitem" data-command-id="identity.account" onClick={() => { setMoreOpen(false); invoke('identity.account', 'account'); }}><Icon path={icons.settings} /> Account</button>}
-                {(!commandCenter ? props.workspaceKind !== 'local' : available('identity.pairing')) && <button type="button" role="menuitem" data-command-id="identity.pairing" onClick={() => { setMoreOpen(false); invoke('identity.pairing', 'pairing'); }}><Icon path={icons.link} /> Approve Login</button>}
-                {(!commandCenter ? props.workspaceKind === 'session' : available('identity.sign-out')) && <button type="button" role="menuitem" data-command-id="identity.sign-out" onClick={() => { setMoreOpen(false); invoke('identity.sign-out', 'logout'); }}><Icon path={icons.close} /> Log Out</button>}
-                <button type="button" role="menuitem" data-command-id="view.preferences" onClick={() => { setMoreOpen(false); invoke('view.preferences', 'preferences'); }}><Icon path={icons.settings} /> Appearance</button>
-                <button type="button" role="menuitem" data-command-id="review.performance" onClick={() => { setMoreOpen(false); invoke('review.performance', 'benchmark'); }}><Icon path={icons.gauge} /> Performance</button>
-                <button type="button" role="menuitem" data-command-id="workspace.about" onClick={() => { setMoreOpen(false); invoke('workspace.about', 'about'); }}><Icon path={icons.bolt} /> Google Docs for Markdown</button>
+                {(!commandCenter ? props.workspaceKind !== 'local' : available('identity.account')) && <button type="button" role="menuitem" data-command-id="identity.account" onClick={() => { setMoreOpen(false); invoke('identity.account', 'account'); }}><Icon name="settings" /> Account</button>}
+                {(!commandCenter ? props.workspaceKind !== 'local' : available('identity.pairing')) && <button type="button" role="menuitem" data-command-id="identity.pairing" onClick={() => { setMoreOpen(false); invoke('identity.pairing', 'pairing'); }}><Icon name="link" /> Approve Login</button>}
+                {(!commandCenter ? props.workspaceKind === 'session' : available('identity.sign-out')) && <button type="button" role="menuitem" data-command-id="identity.sign-out" onClick={() => { setMoreOpen(false); invoke('identity.sign-out', 'logout'); }}><Icon name="close" /> Log Out</button>}
+                <button type="button" role="menuitem" data-command-id="view.preferences" onClick={() => { setMoreOpen(false); invoke('view.preferences', 'preferences'); }}><Icon name="settings" /> Appearance</button>
+                <button type="button" role="menuitem" data-command-id="review.performance" onClick={() => { setMoreOpen(false); invoke('review.performance', 'benchmark'); }}><Icon name="gauge" /> Performance</button>
+                <button type="button" role="menuitem" data-command-id="workspace.about" onClick={() => { setMoreOpen(false); invoke('workspace.about', 'about'); }}><Icon name="bolt" /> Google Docs for Markdown</button>
               </div>
             )}
           </div>
@@ -250,6 +250,7 @@ export function TopBar(props: TopBarProps) {
             theme={props.theme}
             hudOpen={props.hudOpen}
             outlineOpen={props.outlineOpen}
+            phoneGhost={props.phoneGhost}
             reviewOpen={props.reviewOpen}
             focusMode={props.focusMode}
             selected={props.selected ?? 0}

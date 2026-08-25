@@ -40,8 +40,7 @@ import { PRACTICAL_SURFACES } from '../../lib/practical-surfaces.ts';
 import type { Shell } from '../../lib/posture.ts';
 import type { ViewMode } from '../shell/TopBar.tsx';
 import { Glyph } from '../glyphs/Glyph.tsx';
-import { Icon, icons } from '../ui/Icon.tsx';
-import { SurfaceMaterial } from '../ui/SurfaceMaterial.tsx';
+import { Icon, SurfaceMaterial } from '../ui';
 import '../../styles/practical.css';
 
 type Notify = (title: string, detail?: string, tone?: 'neutral' | 'success' | 'danger') => void;
@@ -906,7 +905,7 @@ export function PracticalInspector(props: PracticalInspectorProps) {
     return (
       <aside className="practical-inspector surface-material-host" data-shell={props.shell} data-practical-capability={props.capability} aria-label={descriptor.label} aria-busy="true">
         <SurfaceMaterial variant="panel" modifier="emphasized" />
-        <header className="practical-head"><div><span>Document intelligence</span><h2>{descriptor.label}</h2></div><button ref={closeRef} type="button" className="icon-button" aria-label="Close document intelligence" onClick={props.onClose}><Icon path={icons.close} /></button></header>
+        <header className="practical-head"><div><span>Document intelligence</span><h2>{descriptor.label}</h2></div><button ref={closeRef} type="button" className="icon-button" aria-label="Close document intelligence" onClick={props.onClose}><Icon name="close" /></button></header>
         <p className="practical-loading">{error ?? 'Analyzing the current source revision…'}</p>
       </aside>
     );
@@ -976,7 +975,7 @@ export function PracticalInspector(props: PracticalInspectorProps) {
       <SurfaceMaterial variant="panel" modifier="emphasized" />
       <header className="practical-head">
         <div><span>Document intelligence {analyzing ? '· refreshing' : `· revision ${analysis.revision}`}</span><h2>{descriptor.label}</h2><p>{descriptor.description}</p></div>
-        <button ref={closeRef} type="button" className="icon-button" aria-label="Close document intelligence" onClick={props.onClose}><Icon path={icons.close} /></button>
+        <button ref={closeRef} type="button" className="icon-button" aria-label="Close document intelligence" onClick={props.onClose}><Icon name="close" /></button>
       </header>
       <nav className="practical-nav" aria-label="Document intelligence tools">{PRACTICAL_SURFACES.map((item) => <button key={item.capability} type="button" data-practical-nav={item.capability} aria-current={item.capability === props.capability ? 'page' : undefined} onClick={() => props.onSelect(item.capability)}>{item.shortLabel}</button>)}</nav>
       <div className="practical-body">{error && <p className="inline-notice danger">{error}</p>}{content}</div>

@@ -257,17 +257,59 @@ async function reachEditorByTouch(page, viewportWidth, failure) {
   assert.equal(await page.locator('.home-surface').count(), 0, 'anonymous service entry never exposes workspace home');
   assert.match(page.url(), /\/d\/document_/, 'anonymous mobile entry receives a unique document slug');
 
-  // Templates and login lead the ribbon while the document itself opens as
-  // the rendered, editable Markdown introduction.
-  const templateTab = page.getByRole('tab', { name: 'Start from template', exact: true });
-  assert.equal(await templateTab.getAttribute('aria-selected'), 'true', 'Start from template is selected on mobile first paint');
-  await assertTappable(templateTab, 'initial Start from template ribbon tab', viewportWidth);
-  const ribbonLabels = await page.locator('.phone-ribbon-tabs [role="tab"]').allTextContents();
-  assert.deepEqual(
-    ribbonLabels.slice(0, 2).map((label) => label.trim()),
-    ['Start from template', 'Log In'],
-    'anonymous mobile ribbon starts with templates and login',
+  // The rendered marketing document opens on View. Categories live behind one
+  // explicit picker; Edit and Preview stay reachable without changing decks.
+  assert.equal(await page.locator('.phone-ribbon-tabs').count(), 0, 'the retired phone tab strip is absent');
+  const categoryTrigger = page.locator('.phone-category-trigger');
+  await assertTappable(categoryTrigger, 'ribbon category picker', viewportWidth);
+  assert.equal(
+    (await categoryTrigger.locator('strong').innerText()).trim(),
+    'View',
+    'a rendered marketing document defaults to the View category',
   );
+  assert.equal(await categoryTrigger.getAttribute('aria-expanded'), 'false');
+  const previewCommand = page.locator('.phone-mode-switch [data-command-id="view.preview"]');
+  const editorCommand = page.locator('.phone-mode-switch [data-command-id="view.editor"]');
+  assert.equal(await previewCommand.getAttribute('aria-pressed'), 'true', 'Preview is selected independently of the command deck');
+  await assertTappable(previewCommand, 'persistent Preview control', viewportWidth);
+  await assertTappable(editorCommand, 'persistent Edit control', viewportWidth);
+
+  const deckContract = await page.evaluate(() => ({
+    label: document.querySelector('.phone-ribbon-deck')?.getAttribute('aria-label') ?? '',
+    duplicateModes: document.querySelectorAll(
+      '.phone-ribbon-deck [data-command-id="view.editor"], .phone-ribbon-deck [data-command-id="view.split"], .phone-ribbon-deck [data-command-id="view.preview"]',
+    ).length,
+    horizontalScrollers: [...document.querySelectorAll('.phone-ribbon *')]
+      .filter((node) => ['auto', 'scroll'].includes(getComputedStyle(node).overflowX))
+      .map((node) => node.className),
+  }));
+  assert.equal(deckContract.label, 'View commands');
+  assert.equal(deckContract.duplicateModes, 0, 'View does not duplicate the persistent mode controls');
+  assert.deepEqual(deckContract.horizontalScrollers, ['phone-ribbon-deck'], 'only the command deck scrolls horizontally');
+
+  const ghostCommand = page.locator('.phone-ribbon-deck [data-command-id="view.ghost-overlay"]');
+  await assertTappable(ghostCommand, 'Rendered Markdown ghost command', viewportWidth);
+  assert.equal(await ghostCommand.getAttribute('aria-label'), 'Ghost overlay, On', 'the phone ghost defaults on');
+  await ghostCommand.tap();
+  const ghostDialog = page.getByRole('dialog');
+  await ghostDialog.waitFor({ timeout: 10_000 });
+  assert.equal(await ghostDialog.getByRole('heading').innerText(), 'Rendered Markdown ghost');
+  assert.equal(await ghostDialog.getByRole('switch').isChecked(), true, 'the ghost dialog reflects the default-on preference');
+  assert.equal(await ghostDialog.getByRole('button', { name: 'Left half', exact: true }).count(), 1);
+  assert.equal(await ghostDialog.getByRole('button', { name: 'Right half', exact: true }).count(), 1);
+  await ghostDialog.getByRole('button', { name: 'Close', exact: true }).click();
+  await ghostDialog.waitFor({ state: 'detached', timeout: 10_000 });
+
+  await categoryTrigger.tap();
+  const categories = page.locator('#phone-ribbon-categories');
+  await categories.waitFor({ timeout: 10_000 });
+  assert.equal(await categoryTrigger.getAttribute('aria-expanded'), 'true');
+  assert.equal(await categories.locator('[data-ribbon-tab="view"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(await categories.locator('[data-ribbon-tab="home"]').count(), 1);
+  assert.equal(await categories.locator('[data-ribbon-tab="import"]').count(), 1);
+  assert.equal(await categories.locator('[data-ribbon-tab="login"]').count(), 1);
+  await categories.locator('[data-ribbon-tab="view"]').tap();
+  await categories.waitFor({ state: 'detached', timeout: 10_000 });
   const hero = await page.evaluate(() => {
     const app = document.querySelector('.app');
     const heading = document.querySelector('.marks-preview h1');
@@ -283,23 +325,6 @@ async function reachEditorByTouch(page, viewportWidth, failure) {
   assert.equal(hero.borderBottomWidth, '0px', 'marketing hero heading is borderless');
   console.log('  ok   anonymous slug first paints the rendered Markdown hero and comparison table');
 
-  const viewTab = page.getByRole('tab', { name: 'View', exact: true });
-  // At the 320px support floor, the required Templates + Log In leaders leave
-  // View just beyond the horizontally scrollable tab viewport. Reveal it the
-  // same way a horizontal ribbon gesture would before testing the touch path.
-  await viewTab.evaluate((tab) => {
-    const strip = tab.parentElement;
-    if (!strip) return;
-    strip.scrollLeft = Math.max(
-      0,
-      tab.offsetLeft - Math.floor((strip.clientWidth - tab.clientWidth) / 2),
-    );
-  });
-  await page.waitForTimeout(50);
-  await assertTappable(viewTab, 'View ribbon tab', viewportWidth);
-  await viewTab.tap();
-  const editorCommand = page.locator('.phone-ribbon [data-command-id="view.editor"]');
-  await assertTappable(editorCommand, 'Editor command', viewportWidth);
   await editorCommand.tap();
   await page.locator('.cm-content').first().waitFor({ timeout: 30_000 });
   console.log('  ok   touch navigation reaches the editor');
@@ -399,18 +424,28 @@ async function runProof() {
       fatalFailure,
     ]);
     assert.equal(linkedPage.url(), sharedUrl, 'a copied slug opens the same public page');
+    assert.equal(await linkedPage.locator('.phone-ribbon-tabs').count(), 0);
     assert.equal(
-      await linkedPage.getByRole('tab', { name: 'Start from template', exact: true }).getAttribute('aria-selected'),
-      'true',
-      'a cold direct mobile slug keeps Start from template selected while opening in Preview',
+      (await linkedPage.locator('.phone-category-trigger strong').innerText()).trim(),
+      'View',
+      'a cold rendered mobile slug defaults to the View category',
     );
-    console.log('  ok   a different anonymous phone cold-opens the copied slug in Preview with Start from template selected');
+    assert.equal(
+      await linkedPage.locator('.phone-mode-switch [data-command-id="view.preview"]').getAttribute('aria-pressed'),
+      'true',
+      'a cold rendered mobile slug keeps Preview selected',
+    );
+    console.log('  ok   a different anonymous phone cold-opens the copied slug in Preview with View selected');
     await linkedPhone.close();
 
     const loginPrompt = page.locator('.phone-identity');
     assert.match(await loginPrompt.innerText(), /Open this page on a laptop to log in/i);
-    const loginControl = page.getByRole('tab', { name: 'Log In', exact: true });
-    await assertTappable(loginControl, 'second-position Log In ribbon control', page.viewportSize().width);
+    await page.locator('.phone-category-trigger').tap();
+    const categorySheet = page.locator('#phone-ribbon-categories');
+    await categorySheet.waitFor({ timeout: 10_000 });
+    const loginControl = categorySheet.locator('[data-ribbon-tab="login"]');
+    await loginControl.scrollIntoViewIfNeeded();
+    await assertTappable(loginControl, 'Log In ribbon category', page.viewportSize().width);
     await loginControl.tap();
     const loginDialog = page.getByRole('dialog');
     await loginDialog.waitFor({ timeout: 10_000 });

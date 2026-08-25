@@ -256,6 +256,10 @@ jobs:
         if: needs.impact.outputs.run_web == 'true'
         run: npm run check:motion
 
+      - name: Design-system ownership contract
+        if: needs.impact.outputs.run_web == 'true'
+        run: npm run test:design-system-contract
+
       - name: Harness helper unit tests
         if: needs.impact.outputs.run_harness == 'true'
         run: npm run test:harness

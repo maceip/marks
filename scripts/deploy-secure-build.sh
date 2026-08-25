@@ -225,6 +225,7 @@ run_local_gate() {
   (cd "$ROOT" && npm run test:materials)
   (cd "$ROOT" && npm run test:tokens)
   (cd "$ROOT" && npm run check:motion)
+  (cd "$ROOT" && npm run test:design-system-contract)
   (cd "$ROOT" && npm run test:harness)
 
   echo "==> production service-mode UI and release-receipt build"

@@ -1,7 +1,6 @@
-import '../../styles/components.css';
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
 import type { Shell } from '../../lib/posture';
-import { SurfaceMaterial } from '../ui/SurfaceMaterial';
+import { Icon, SurfaceMaterial } from '../ui';
 import { AgentActionButton, AgentIconButton, PillSurface, PromptInput, StatusIndicator } from './AgentChatPrimitives';
 import { agentChatAnnouncement, agentChatHost, shouldSubmitPrompt, type AgentChatState } from './agent-chat-model';
 import './agent-chat.css';
@@ -64,7 +63,7 @@ export function AgentChatPill({ accessibleName = 'AI assistant', ...props }: Age
       </span>
       {!open ? (
         <button ref={launcherRef} type="button" className="agent-chat-launcher surface-material-host" aria-label={accessibleName} aria-expanded="false" onClick={props.onOpen}>
-          <SurfaceMaterial variant="floating" /><span aria-hidden="true">✦</span><span>Ask AI</span>
+          <SurfaceMaterial variant="floating" /><Icon name="sparkles" size={16} /><span>Ask AI</span>
         </button>
       ) : (
         <PillSurface className={`state-${props.state}`}>

@@ -22,6 +22,7 @@ export type UiActionId =
   | 'history'
   | 'command-palette'
   | 'preferences'
+  | 'ghost-overlay'
   | 'focus'
   | 'benchmark'
   | 'about'
@@ -62,6 +63,7 @@ export const UI_ACTIONS: UiActionDescriptor[] = [
   { id: 'history', label: 'Version history', description: 'Save, preview, and restore durable snapshots', group: 'Review' },
   { id: 'focus', label: 'Focus mode', description: 'Hide everything except the page', group: 'Workspace', shortcut: '⌘⇧F' },
   { id: 'preferences', label: 'Appearance preferences', description: 'Tune density, glass, and motion', group: 'Workspace' },
+  { id: 'ghost-overlay', label: 'Ghost overlay', description: 'Explain and control the rendered Markdown guide on phones', group: 'Workspace' },
   { id: 'command-palette', label: 'Command palette', description: 'Search every Marks command', group: 'Workspace', shortcut: '⌘⇧P' },
   { id: 'benchmark', label: 'Open performance receipt', description: 'Run the in-browser engine benchmark', group: 'Navigate' },
   { id: 'about', label: 'Google Docs for Markdown', description: 'Open the marketing page in the editor', group: 'Navigate' },

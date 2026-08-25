@@ -232,6 +232,28 @@
 .preference-switches small { color: var(--color-fg-subtle); font-size: 10px; }
 .preference-switches input[role='switch'] { width: 38px; height: 22px; accent-color: var(--color-action); cursor: pointer; }
 
+/* ------------------------------------------------------ phone ghost guide */
+
+.ghost-overlay-dialog { display: grid; gap: 18px; }
+.ghost-overlay-intro { display: grid; grid-template-columns: 86px minmax(0, 1fr); align-items: center; gap: 16px; }
+.ghost-overlay-intro .marks-icon { justify-self: center; }
+.ghost-overlay-intro p { margin: 0; color: var(--color-fg-muted); font-size: 12px; line-height: 1.6; }
+.ghost-overlay-switch { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 60px; padding: 10px 2px; border-block: 1px solid var(--material-border); }
+.ghost-overlay-switch > span { display: grid; gap: 3px; }
+.ghost-overlay-switch strong { font-size: 12px; }
+.ghost-overlay-switch small { color: var(--color-fg-subtle); font-size: 10px; line-height: 1.45; }
+.ghost-overlay-switch input[role='switch'] { flex: none; width: 44px; height: 26px; accent-color: var(--color-action); cursor: pointer; }
+.ghost-overlay-halves { min-width: 0; margin: 0; padding: 0; border: 0; }
+.ghost-overlay-halves legend { margin-bottom: 8px; color: var(--color-fg-muted); font-size: 10px; font-weight: 700; letter-spacing: .075em; text-transform: uppercase; }
+.ghost-overlay-halves:disabled { opacity: .48; }
+.ghost-overlay-gesture { display: grid; grid-template-columns: 68px minmax(0, 1fr); align-items: center; gap: 14px; padding: 13px 14px; border: 1px solid color-mix(in srgb, var(--color-action) 24%, var(--color-border-default)); border-radius: 16px; background: var(--color-action-soft); }
+.ghost-overlay-gesture p { display: grid; gap: 3px; margin: 0; color: var(--color-fg-muted); font-size: 10.5px; line-height: 1.5; }
+.ghost-overlay-gesture strong { color: var(--color-fg-default); font-size: 11.5px; }
+.ghost-fingers { position: relative; display: flex; align-items: end; justify-content: center; gap: 7px; height: 46px; color: var(--color-action); }
+.ghost-fingers i { display: block; width: 12px; height: 30px; border: 2px solid currentColor; border-radius: 9px; background: color-mix(in srgb, var(--color-bg-raised) 82%, transparent); box-shadow: 0 4px 10px -7px rgb(0 0 0 / 55%); }
+.ghost-fingers i + i { height: 37px; }
+.ghost-fingers b { position: absolute; right: 0; bottom: -3px; left: 0; font-size: 19px; font-weight: 750; line-height: 1; text-align: center; }
+
 /* --------------------------------------------------------- command palette */
 
 .modal-large:has(.command-palette) .modal-head { padding-bottom: 13px; }

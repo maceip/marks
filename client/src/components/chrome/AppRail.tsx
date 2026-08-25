@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useCommandCenter } from '../../commands/context';
 import { Glyph } from '../glyphs/Glyph';
-import { SurfaceMaterial } from '../ui/SurfaceMaterial';
+import { SurfaceMaterial } from '../ui';
 import '../../styles/chrome.css';
 
 const RAIL_COMMANDS = [
@@ -13,13 +13,18 @@ const RAIL_COMMANDS = [
 /** Unfolded foldable view switcher. Thinner than the Material 3 80dp rail. */
 export function AppRail() {
   const center = useCommandCenter();
+  const shell = center.environment.shell;
   const available = useMemo(
     () => new Map(center.commands('ribbon').map((command) => [command.id, command])),
     [center],
   );
 
   return (
-    <nav className="app-rail surface-material-host" aria-label="Document views">
+    <nav
+      className={`app-rail app-rail-${shell} surface-material-host`}
+      data-fold-shell={shell}
+      aria-label="Document views"
+    >
       <SurfaceMaterial variant="chrome" />
       {RAIL_COMMANDS.map((item) => {
         const command = available.get(item.id);

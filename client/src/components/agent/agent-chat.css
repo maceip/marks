@@ -4,20 +4,20 @@
 .agent-chat-host.host-companion-stage { position: relative; margin: 16px auto; width: min(92%, 560px); }
 .agent-chat-host.host-phone-tools-sheet { position: relative; width: 100%; }
 .agent-chat-launcher, .agent-chat-surface { border: 1px solid var(--material-border); box-shadow: var(--material-elevation); overflow: hidden; }
-.agent-chat-launcher { position: relative; display: flex; gap: 8px; align-items: center; min-height: 44px; padding: 0 17px; border-radius: 999px; background: var(--material-tint-strong); color: var(--color-fg-default); font-weight: 650; transition: transform var(--motion-fast); }
+.agent-chat-launcher { position: relative; display: flex; gap: 8px; align-items: center; min-height: 44px; padding: 0 17px; border-radius: var(--radius-pill); background: var(--material-tint-strong); color: var(--color-fg-default); font-weight: 650; transition: transform var(--motion-fast); }
 .agent-chat-launcher:active { transform: scale(.98); }
-.agent-chat-surface { position: relative; width: min(440px, calc(100vw - 32px)); min-height: 116px; border-radius: 24px; background: var(--material-tint-strong); animation: agent-shell-in 360ms var(--ease-spring); }
-.agent-chat-content { position: relative; padding: 12px; animation: agent-content-in var(--motion-medium) var(--ease-out) 70ms both; }
+.agent-chat-surface { position: relative; width: min(440px, calc(100vw - 32px)); min-height: 116px; border-radius: 24px; background: var(--material-tint-strong); animation: agent-shell-in var(--motion-agent-shell-enter) var(--ease-spring); }
+.agent-chat-content { position: relative; padding: 12px; animation: agent-content-in var(--motion-medium) var(--ease-out) var(--motion-agent-content-delay) both; }
 .agent-chat-content header, .agent-chat-compose { display: flex; align-items: center; gap: 8px; }
 .agent-chat-content header { margin-bottom: 10px; }
 .agent-chat-status { display: flex; flex: 1; gap: 7px; align-items: center; color: var(--color-fg-muted); font-size: 12px; font-weight: 650; }
 .agent-chat-status > span { width: 7px; height: 7px; border-radius: 50%; background: var(--color-feedback-success); }
-.agent-chat-status.active > span { animation: agent-pulse 1.2s ease-in-out infinite; }
+.agent-chat-status.active > span { animation: agent-pulse var(--motion-agent-status-pulse) ease-in-out infinite; }
 .agent-chat-icon-button { width: 34px; height: 34px; border: 0; border-radius: 50%; background: transparent; color: var(--color-fg-muted); }
 .agent-chat-input { flex: 1; min-width: 0; height: 42px; border: 1px solid var(--color-border-default); border-radius: 14px; padding: 0 12px; background: var(--color-bg-raised); color: var(--color-fg-default); }
-.agent-chat-action { min-height: 40px; padding: 0 14px; border: 0; border-radius: 13px; background: var(--color-action); color: white; font-weight: 650; }
+.agent-chat-action { min-height: 40px; padding: 0 14px; border: 0; border-radius: 13px; background: var(--color-action); color: var(--color-on-primary); font-weight: 650; }
 .agent-chat-response { max-height: 280px; overflow: auto; margin: 0 0 10px; padding: 12px; border-radius: 14px; background: var(--color-bg-raised); line-height: 1.5; }
-.agent-chat-response.arrived { animation: agent-highlight 650ms ease-out 1; }
+.agent-chat-response.arrived { animation: agent-highlight var(--motion-agent-highlight) ease-out 1; }
 .state-expanded { width: min(560px, calc(100vw - 32px)); min-height: 340px; }
 @keyframes agent-shell-in { from { width: 132px; min-height: 44px; } }
 @keyframes agent-content-in { from { opacity: 0; transform: translateY(5px); } }

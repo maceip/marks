@@ -69,6 +69,9 @@ export function wrap({ browser, context, page, base, chrome }) {
     async wait(ms) {
       await page.waitForTimeout(ms);
     },
+    async setViewport(viewport) {
+      await page.setViewportSize(viewport);
+    },
     async setOffline(offline) {
       await context.setOffline(Boolean(offline));
     },

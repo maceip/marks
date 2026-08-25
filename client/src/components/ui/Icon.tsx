@@ -1,6 +1,5 @@
-import { useEffect, useRef, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import {
-  ICON_NAMES,
   ICON_MARKS,
   ICON_TONE,
   isIconName,
@@ -8,6 +7,8 @@ import {
   type IconName,
   type IconTone,
 } from '../icons/catalog';
+import { isSheetIconName, SHEET_ICON_SIZE } from '../icons/assets';
+import type { IconActivationLayer } from '../icons/motion';
 
 export type { IconName, IconTone, IconKind };
 export { icons, ICON_NAMES, ICON_MARKS, ICON_TONE } from '../icons/catalog';
@@ -32,10 +33,16 @@ const FACE: Record<IconTone, string> = {
   slate: 'var(--color-fg-muted)',
 };
 
-const SHEET_ICON_NAMES = new Set<IconName>(ICON_NAMES.filter((name) => name !== 'arrow' && name !== 'bubble'));
 const SHEET_ICON_ROOT = `${import.meta.env.BASE_URL}icons/isometric`;
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
 const ACTIVE_ICON_ANIMATIONS = new WeakMap<HTMLElement, Animation[]>();
+const ACTIVE_ICON_REQUESTS = new WeakMap<HTMLElement, object>();
+let iconMotionModule: Promise<typeof import('../icons/motion')> | undefined;
+
+function loadIconMotion() {
+  iconMotionModule ??= import('../icons/motion');
+  return iconMotionModule;
+}
 
 function resolve(name?: string, path?: string): { name: IconName; mark: string; tone: IconTone } {
   const key = name && isIconName(name) ? name : path && isIconName(path) ? path : undefined;
@@ -79,12 +86,13 @@ function clearTilt(target: HTMLElement) {
 }
 
 function cancelActivation(target: HTMLElement) {
+  ACTIVE_ICON_REQUESTS.delete(target);
   ACTIVE_ICON_ANIMATIONS.get(target)?.forEach((animation) => animation.cancel());
   ACTIVE_ICON_ANIMATIONS.delete(target);
   target.removeAttribute('data-icon-activating');
 }
 
-function animateActivation(target: HTMLElement) {
+async function animateActivation(target: HTMLElement) {
   const action = target.querySelector<HTMLElement>('.marks-icon-action');
   const halo = target.querySelector<HTMLElement>('.marks-icon-halo');
   const beam = target.querySelector<HTMLElement>('.marks-icon-beam');
@@ -92,61 +100,30 @@ function animateActivation(target: HTMLElement) {
   if (!action || !halo || !beam || typeof action.animate !== 'function') return;
 
   cancelActivation(target);
+  const request = {};
+  ACTIVE_ICON_REQUESTS.set(target, request);
   target.setAttribute('data-icon-activating', 'true');
 
-  const reduced = motionIsReduced();
-  const animations = reduced
-    ? [
-        halo.animate(
-          [{ opacity: 0 }, { opacity: 0.62, offset: 0.42 }, { opacity: 0 }],
-          { duration: 180, easing: 'ease-out' },
-        ),
-        beam.animate(
-          [{ opacity: 0 }, { opacity: 0.68, offset: 0.46 }, { opacity: 0 }],
-          { duration: 180, easing: 'ease-out' },
-        ),
-      ]
-    : [
-        action.animate(
-          [
-            { transform: 'translate3d(0, 0, 0) scale(1)' },
-            { transform: 'translate3d(0, 1px, 0) scale(0.93)', offset: 0.2 },
-            { transform: 'translate3d(0, -1px, 0) scale(1.06)', offset: 0.56 },
-            { transform: 'translate3d(0, 0, 0) scale(0.985)', offset: 0.78 },
-            { transform: 'translate3d(0, 0, 0) scale(1)' },
-          ],
-          { duration: 300, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
-        ),
-        halo.animate(
-          [
-            { opacity: 0, transform: 'scale(0.64)' },
-            { opacity: 0.72, transform: 'scale(0.9)', offset: 0.24 },
-            { opacity: 0, transform: 'scale(1.28)' },
-          ],
-          { duration: 360, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
-        ),
-        beam.animate(
-          [
-            { opacity: 0, transform: 'translate3d(-155%, 12%, 0) rotate(-24deg) scaleY(0.78)' },
-            { opacity: 0.94, transform: 'translate3d(-82%, 5%, 0) rotate(-24deg) scaleY(1)', offset: 0.22 },
-            { opacity: 0.62, transform: 'translate3d(74%, -5%, 0) rotate(-24deg) scaleY(1.08)', offset: 0.72 },
-            { opacity: 0, transform: 'translate3d(155%, -12%, 0) rotate(-24deg) scaleY(0.84)' },
-          ],
-          { duration: 330, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
-        ),
-        ...particles.map((particle, index) => particle.animate(
-          [
-            { opacity: 0, transform: 'translate3d(0, 0, 0) scale(0.3)' },
-            { opacity: 0.96, offset: 0.18 },
-            { opacity: 0, transform: 'translate3d(var(--icon-particle-x), var(--icon-particle-y), 0) scale(0.15)' },
-          ],
-          {
-            duration: 320,
-            delay: index * 18,
-            easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)',
-          },
-        )),
-      ];
+  let motion: typeof import('../icons/motion');
+  try {
+    motion = await loadIconMotion();
+  } catch {
+    iconMotionModule = undefined;
+    if (ACTIVE_ICON_REQUESTS.get(target) === request) {
+      ACTIVE_ICON_REQUESTS.delete(target);
+      target.removeAttribute('data-icon-activating');
+    }
+    return;
+  }
+  if (ACTIVE_ICON_REQUESTS.get(target) !== request) return;
+  const { createIconActivationPlan } = motion;
+  const layers: Record<Exclude<IconActivationLayer, 'particle'>, HTMLElement> = { action, halo, beam };
+  const animations = createIconActivationPlan(motionIsReduced(), particles.length).map((animationStep) => {
+    const layer = animationStep.layer === 'particle'
+      ? particles[animationStep.particleIndex ?? -1]
+      : layers[animationStep.layer];
+    return layer.animate(animationStep.keyframes, animationStep.options);
+  });
 
   ACTIVE_ICON_ANIMATIONS.set(target, animations);
   void Promise.allSettled(animations.map((animation) => animation.finished)).then(() => {
@@ -171,9 +148,10 @@ export function Icon({
   className = '',
 }: IconProps) {
   const iconRef = useRef<HTMLSpanElement>(null);
+  const [failedSheetAsset, setFailedSheetAsset] = useState<IconName | null>(null);
   const resolved = resolve(name, path);
   const face = FACE[resolved.tone];
-  const sheetAsset = SHEET_ICON_NAMES.has(resolved.name);
+  const sheetAsset = isSheetIconName(resolved.name) && failedSheetAsset !== resolved.name;
 
   useEffect(() => {
     const target = iconRef.current;
@@ -223,7 +201,7 @@ export function Icon({
     };
     const onClick = () => {
       clearPress();
-      if (!controlIsUnavailable(control)) animateActivation(target);
+      if (!controlIsUnavailable(control)) void animateActivation(target);
     };
 
     control.addEventListener('pointerenter', onPointerEnter);
@@ -271,10 +249,11 @@ export function Icon({
             <img
               className="marks-icon-art marks-icon-sheet"
               src={`${SHEET_ICON_ROOT}/${resolved.name}.png`}
+              onError={() => setFailedSheetAsset(resolved.name)}
               alt=""
               aria-hidden="true"
-              width={104}
-              height={104}
+              width={SHEET_ICON_SIZE}
+              height={SHEET_ICON_SIZE}
               draggable={false}
             />
           ) : (

@@ -304,11 +304,6 @@
   border-bottom: 1px solid var(--material-border);
 }
 
-.app-ribbon.ribbon-home,
-.app-ribbon.ribbon-benchmark {
-  grid-template-rows: var(--layout-titlebar-height);
-}
-
 .titlebar {
   display: flex;
   align-items: center;
@@ -317,11 +312,6 @@
   min-width: 0;
   padding: 0 10px 0 8px;
   border-bottom: 1px solid var(--material-border);
-}
-
-.ribbon-home .titlebar,
-.ribbon-benchmark .titlebar {
-  border-bottom: 0;
 }
 
 .topbar-left,
@@ -612,16 +602,6 @@
     padding-bottom: calc(var(--layout-mobile-ribbon-height) + env(safe-area-inset-bottom));
   }
 
-  .app-ribbon.ribbon-document {
-    grid-template-rows: var(--layout-titlebar-height);
-    overflow: visible;
-    /* Backdrop filters establish a containing block for fixed descendants.
-       The bottom ribbon must be fixed to the viewport, not the 48px header. */
-    background: var(--material-tint-strong);
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-  }
-
   .titlebar {
     padding-right: max(8px, env(safe-area-inset-right));
     padding-left: max(7px, env(safe-area-inset-left));
@@ -658,71 +638,6 @@
   .titlebar .presence .presence-avatar-button:nth-of-type(n+2) { display: none; }
   .titlebar .presence .avatar { width: 24px; height: 24px; }
   .presence-panel { position: fixed; top: auto; right: 0; bottom: 0; left: 0; width: auto; max-height: min(72vh, 560px); border-radius: 18px 18px 0 0; padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
-
-  .ribbon-body {
-    position: fixed;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    z-index: 55;
-    grid-template-rows: 34px 70px;
-    min-height: calc(var(--layout-mobile-ribbon-height) + env(safe-area-inset-bottom));
-    padding-bottom: env(safe-area-inset-bottom);
-    overflow: hidden;
-    border-top: 1px solid var(--material-border);
-    background: var(--material-tint-strong);
-    box-shadow: 0 -14px 32px -26px rgb(0 0 0 / 55%), inset 0 1px var(--material-highlight);
-  }
-
-  @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-    .ribbon-body {
-      background: var(--material-tint);
-      -webkit-backdrop-filter: blur(var(--material-blur-chrome)) saturate(var(--material-saturation));
-      backdrop-filter: blur(var(--material-blur-chrome)) saturate(var(--material-saturation));
-    }
-  }
-
-  .ribbon-tabs {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    align-items: stretch;
-    padding: 0 max(6px, env(safe-area-inset-right)) 0 max(6px, env(safe-area-inset-left));
-  }
-
-  .ribbon-tab {
-    min-width: 0;
-    min-height: 34px;
-    padding: 0 4px;
-    font-size: 11px;
-  }
-
-  .ribbon-deck {
-    border-top-color: var(--material-border);
-  }
-
-  .ribbon-toolbar {
-    padding: 3px max(4px, env(safe-area-inset-right)) 3px max(4px, env(safe-area-inset-left));
-    scroll-snap-type: x proximity;
-  }
-
-  .ribbon-command-group {
-    grid-template-rows: minmax(0, 1fr) 11px;
-    padding-inline: 5px;
-    scroll-snap-align: start;
-  }
-
-  .ribbon-command {
-    min-width: 54px;
-    height: 50px;
-  }
-
-  .ribbon-command-label {
-    font-size: 9px;
-  }
-
-  .ribbon-group-label {
-    line-height: 10px;
-  }
 
   .workspace {
     grid-template-columns: minmax(0, 1fr) 0 0;
@@ -823,7 +738,6 @@
 @media (prefers-reduced-transparency: reduce) {
   .app-ribbon,
   .sidebar,
-  .ribbon-body,
   .outline-drawer,
   .hud,
   .empty-card {
@@ -902,32 +816,10 @@
 }
 
 .focus-mode .main.route-document { grid-template-rows: var(--layout-titlebar-height) minmax(0, 1fr) 0; border: 0; }
-.focus-mode .app-ribbon.ribbon-document { grid-template-rows: var(--layout-titlebar-height); }
-.focus-mode .app-ribbon .ribbon-body,
 .focus-mode .statusbar { display: none; }
 .focus-mode .titlebar { border-bottom: 1px solid var(--material-border); }
 .focus-mode .workspace-shell { animation: focus-settle var(--duration-medium) var(--ease-out) both; }
 @keyframes focus-settle { from { opacity: .82; transform: scale(.995); } }
-
-.ribbon-collapse .icon {
-  transform: rotate(-90deg);
-  transition: transform var(--duration-fast) var(--ease-out);
-}
-
-.ribbon-collapse.collapsed .icon { transform: rotate(90deg); }
-
-@media (min-width: 721px) {
-  .ribbon-collapsed .main.route-document {
-    grid-template-rows: var(--layout-titlebar-height) minmax(0, 1fr) var(--layout-statusbar-height);
-  }
-
-  .ribbon-collapsed .app-ribbon.ribbon-document {
-    grid-template-rows: var(--layout-titlebar-height);
-  }
-
-  .ribbon-collapsed .app-ribbon.ribbon-document .ribbon-body { display: none; }
-  .ribbon-collapsed .workspace-shell { animation: focus-settle var(--duration-medium) var(--ease-out) both; }
-}
 
 .workspace.mode-edit .editor-pane,
 .workspace.mode-preview .preview-pane { animation: view-pane-in var(--duration-medium) var(--ease-out) both; }
@@ -980,7 +872,6 @@
 
 :root[data-glass='reduced'] .app-ribbon,
 :root[data-glass='reduced'] .sidebar,
-:root[data-glass='reduced'] .ribbon-body,
 :root[data-glass='reduced'] .outline-drawer,
 :root[data-glass='reduced'] .hud,
 :root[data-glass='reduced'] .popover-menu,
@@ -999,7 +890,6 @@
 
 @media (max-width: 720px), (max-height: 560px) and (pointer: coarse) {
   :root[data-density='compact'] { --layout-ribbon-height: 148px; }
-  .ribbon-tabs { grid-template-columns: repeat(5, 1fr); }
   .titlebar-search { display: none; }
   .focus-exit { width: var(--control-height-touch); height: var(--control-height-touch); padding: 0; justify-content: center; font-size: 0; }
   .route-document .toast-region { bottom: calc(var(--layout-mobile-ribbon-height) + env(safe-area-inset-bottom) + 10px); }

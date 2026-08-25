@@ -11,14 +11,13 @@ import { documentRepository } from '../../data/documents';
 import { DOCUMENT_TEMPLATES, type TemplateId } from '../../demo/workspace';
 import type { UiPreferences } from '../../hooks/useUiPreferences';
 import { formatRelativeTime } from '../../lib/format';
+import type { PhoneGhostControl } from '../../lib/phone-ghost';
 import { UI_ACTIONS, type UiActionId } from '../../lib/ui-actions';
 import { surfaceRuntime } from '../../surface/runtime';
 import { AccountSheet } from '../identity/AccountSheet';
 import { KeepWorkspace } from '../identity/KeepWorkspace';
 import { Glyph } from '../glyphs/Glyph';
-import { Icon, icons } from '../ui/Icon';
-import { SurfaceMaterial } from '../ui/SurfaceMaterial';
-import { Modal } from '../ui/Modal';
+import { Icon, Modal, SurfaceMaterial } from '../ui';
 import { PairingInspect } from '../identity/PairingInspect';
 import { ShareDialog } from '../identity/ShareDialog';
 import '../../styles/overlays.css';
@@ -31,6 +30,7 @@ export type AppDialog =
   | { type: 'trash' }
   | { type: 'share'; documentId: string; title: string; publicPage: boolean }
   | { type: 'preferences' }
+  | { type: 'ghost-overlay' }
   | { type: 'command-palette' }
   | { type: 'keep-workspace' }
   | { type: 'account' }
@@ -47,6 +47,7 @@ interface AppOverlaysProps {
   userName: string;
   theme: 'light' | 'dark';
   preferences: UiPreferences;
+  phoneGhost: PhoneGhostControl;
   hasDocument: boolean;
   /** Phone posture: login requires opening this public page on a laptop. */
   phone: boolean;
@@ -145,6 +146,88 @@ function ImportUrlDialog({ onImport }: { onImport: (url: string) => void }) {
   );
 }
 
+function GhostOverlayDialog({
+  control,
+  onNotify,
+}: {
+  control: PhoneGhostControl;
+  onNotify: AppOverlaysProps['onNotify'];
+}) {
+  const setEnabled = (enabled: boolean) => {
+    control.setEnabled(enabled);
+    onNotify(
+      enabled ? 'Ghost overlay on' : 'Ghost overlay off',
+      enabled
+        ? 'Rendered Markdown will stay visible while you edit on this phone.'
+        : 'Your source editor now uses the full phone canvas.',
+      'success',
+    );
+  };
+  const setShift = (shift: PhoneGhostControl['shift']) => {
+    control.setShift(shift);
+    onNotify(
+      shift === 'start' ? 'Showing the left half' : 'Showing the right half',
+      'You can also slide the rendered page with two fingers while editing.',
+      'neutral',
+    );
+  };
+
+  return (
+    <div className="ghost-overlay-dialog">
+      <div className="ghost-overlay-intro">
+        <Icon name="ghostOverlay" size={76} interactive={false} />
+        <p>
+          A faint rendered copy stays on the right while you edit. It lets you
+          check the compiled Markdown without leaving the source.
+        </p>
+      </div>
+
+      <label className="ghost-overlay-switch">
+        <span>
+          <strong>Show while editing</strong>
+          <small>On by default on this phone; your choice is remembered.</small>
+        </span>
+        <input
+          data-autofocus
+          type="checkbox"
+          role="switch"
+          checked={control.enabled}
+          onChange={(event) => setEnabled(event.currentTarget.checked)}
+        />
+      </label>
+
+      <fieldset className="ghost-overlay-halves" disabled={!control.enabled}>
+        <legend>Rendered page position</legend>
+        <div className="segmented-control">
+          <button
+            type="button"
+            aria-pressed={control.shift === 'start'}
+            onClick={() => setShift('start')}
+          >
+            Left half
+          </button>
+          <button
+            type="button"
+            aria-pressed={control.shift === 'end'}
+            onClick={() => setShift('end')}
+          >
+            Right half
+          </button>
+        </div>
+      </fieldset>
+
+      <div className="ghost-overlay-gesture">
+        <span className="ghost-fingers" aria-hidden="true"><i /><i /><b>↔</b></span>
+        <p>
+          <strong>Move it with two fingers.</strong>
+          Slide left or right to show the other half of the rendered page.
+          One finger still edits and scrolls; pinch still zooms.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function RenameDialog({
   dialog,
   onRename,
@@ -192,7 +275,7 @@ function DeleteDialog({
   return (
     <div className="confirm-content">
       <span className="confirm-icon" aria-hidden="true">
-        <Icon path={icons.trash} size={20} />
+        <Icon name="trash" size={20} />
       </span>
       <p>
         <strong>“{dialog.title}”</strong>{' '}
@@ -368,7 +451,7 @@ function CommandPalette({
   return (
     <div className="command-palette">
       <label className="command-search">
-        <Icon path={icons.search} />
+        <Icon name="search" />
         <input
           data-autofocus
           value={query}
@@ -529,7 +612,7 @@ function ReviewDrawer({
           <h2>{rendered.type === 'comments' ? 'Comments' : 'Version history'}</h2>
         </div>
         <button type="button" className="icon-button" aria-label="Close review panel" onClick={onClose}>
-          <Icon path={icons.close} />
+          <Icon name="close" />
         </button>
       </header>
 
@@ -602,7 +685,7 @@ function ReviewDrawer({
                   )}
                   <div className="comment-actions">
                     <button type="button" disabled={!capabilities?.comment} onClick={() => void reviewRepository.updateComment(rendered.documentId, item.id, { resolved: !item.resolved }).catch(() => onNotify('Comment not changed', 'Your current role cannot resolve this thread.', 'danger'))}>
-                      <Icon path={item.resolved ? icons.undo : icons.check} size={13} />
+                      <Icon name={item.resolved ? 'undo' : 'check'} size={13} />
                       {item.resolved ? 'Reopen' : 'Resolve'}
                     </button>
                     {item.own && !item.deleted && <button type="button" onClick={() => setEditing({ kind: 'comment', commentId: item.id, body: item.body })}>Edit</button>}
@@ -811,6 +894,11 @@ export function AppOverlays(props: AppOverlaysProps) {
     title = 'Appearance';
     description = 'Make Marks feel right without making it heavier.';
     content = <PreferencesDialog theme={props.theme} preferences={props.preferences} onTheme={props.onTheme} onPreferences={props.onPreferences} />;
+  } else if (renderedDialog?.type === 'ghost-overlay') {
+    title = 'Rendered Markdown ghost';
+    description = 'Keep the compiled page in sight while you edit on a phone.';
+    size = 'small';
+    content = <GhostOverlayDialog control={props.phoneGhost} onNotify={props.onNotify} />;
   } else if (renderedDialog?.type === 'pairing-inspect') {
     title = 'Log In';
     description = 'Scan the QR code or enter the login code from your other device.';

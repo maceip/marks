@@ -1,4 +1,7 @@
 @import './tokens.css';
+@import './foundation-tokens.css';
 @import './base.css';
+@import './components.css';
+@import './motion.css';
 @import './layout.css';
 @import './material.css';

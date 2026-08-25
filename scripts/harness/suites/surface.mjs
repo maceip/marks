@@ -50,6 +50,16 @@ async function waitForAbsent(session, selector, { timeout = 10_000 } = {}) {
   }
 }
 
+async function waitForPageState(session, predicate, { timeout = 10_000, label = 'page state' } = {}) {
+  const deadline = Date.now() + timeout;
+  while (!(await session.evaluate(predicate))) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for ${label}`);
+    }
+    await session.wait(50);
+  }
+}
+
 async function createDocument(session) {
   await session.goto('/');
   const dataMode = await session.evaluate(() => document.documentElement.dataset.marksMode ?? 'local');
@@ -79,6 +89,7 @@ async function measureWorkspacePanes(session) {
     const wr = workspace?.getBoundingClientRect();
     const er = editor?.getBoundingClientRect();
     const pr = preview?.getBoundingClientRect();
+    const rootStyle = getComputedStyle(document.documentElement);
     const visible = (node, rect) => Boolean(node) && !!rect && rect.width > 8 && rect.height > 8
       && getComputedStyle(node).display !== 'none';
     return {
@@ -95,6 +106,9 @@ async function measureWorkspacePanes(session) {
       previewLeft: pr ? Math.round(pr.left) : 0,
       editorTop: er ? Math.round(er.top) : 0,
       previewTop: pr ? Math.round(pr.top) : 0,
+      segment0Width: Number.parseFloat(rootStyle.getPropertyValue('--segment-0-width')) || 0,
+      segment0Height: Number.parseFloat(rootStyle.getPropertyValue('--segment-0-height')) || 0,
+      hingeGap: Number.parseFloat(rootStyle.getPropertyValue('--hinge-gap')) || 0,
       editorVisible: visible(editor, er),
       previewVisible: visible(preview, pr),
     };
@@ -108,16 +122,14 @@ export async function runSurface(session, { check }) {
 
   check('opening shell does not stay up', (await session.count('.opening-shell')) === 0);
 
-  const importRibbon = await session.evaluate(() => {
+  const openingRibbon = await session.evaluate(() => {
     const selected = document.querySelector('.ribbon-tab[aria-selected="true"]');
     const topLevel = [...document.querySelectorAll('.ribbon-tab')]
       .map((tab) => tab.textContent?.trim() ?? '');
     const expected = [
-      'import.notes-app',
-      'import.meeting',
-      'import.github-readme',
-      'import.url',
-      'document.import',
+      'format.bold',
+      'format.italic',
+      'format.heading-1',
     ];
     return {
       selected: selected?.textContent?.trim() ?? '',
@@ -126,18 +138,18 @@ export async function runSurface(session, { check }) {
     };
   });
   check(
-    'desktop opens on the complete Start from template ribbon',
-    importRibbon.selected === 'Start from template' && importRibbon.commands.every(Boolean),
-    JSON.stringify(importRibbon),
+    'desktop edit opens on the Home ribbon',
+    openingRibbon.selected === 'Home' && openingRibbon.commands.every(Boolean),
+    JSON.stringify(openingRibbon),
   );
   const desktopDataMode = await session.evaluate(() => document.documentElement.dataset.marksMode ?? 'local');
   check(
     'anonymous desktop puts Log In second',
     desktopDataMode !== 'service' || (
-      importRibbon.topLevel[0] === 'Start from template' &&
-      importRibbon.topLevel[1] === 'Log In'
+      openingRibbon.topLevel[0] === 'Start from template' &&
+      openingRibbon.topLevel[1] === 'Log In'
     ),
-    JSON.stringify(importRibbon.topLevel),
+    JSON.stringify(openingRibbon.topLevel),
   );
   if (desktopDataMode === 'service') {
     await session.evaluate(() => {
@@ -192,7 +204,7 @@ export async function runSurface(session, { check }) {
 
   check('document renders blocks', (await session.count('.marks-preview .marks-block')) >= 1);
   check('desktop ribbon is registry-driven',
-    (await session.count('.ribbon-body [data-command-id="import.url"]')) === 1 &&
+    (await session.count('.ribbon-body [data-command-id="format.bold"]')) === 1 &&
     (await session.count('.quick-access [data-command-id="format.bold"]')) >= 1);
 
   await session.click('.ribbon-tab');
@@ -475,25 +487,71 @@ export async function runSurface(session, { check }) {
   await session.waitForSelector('.app-rail', { timeout: 20_000 });
   const bookChrome = await session.evaluate(() => {
     const rail = document.querySelector('.app-rail');
-    const ribbon = document.querySelector('.app-ribbon .ribbon-body');
     const header = document.querySelector('.app-ribbon');
+    const foldableRibbon = document.querySelector('.foldable-ribbon');
+    const primary = document.querySelector('.foldable-ribbon-primary');
+    const companion = document.querySelector('.foldable-ribbon-companion');
+    const ribbon = document.querySelector('.foldable-ribbon .ribbon-body');
+    const tabs = document.querySelector('.foldable-ribbon .ribbon-tabs');
+    const deck = document.querySelector('.foldable-ribbon .ribbon-deck');
+    const rootStyle = getComputedStyle(document.documentElement);
+    const segment0Width = Number.parseFloat(rootStyle.getPropertyValue('--segment-0-width')) || 0;
+    const hingeGap = Number.parseFloat(rootStyle.getPropertyValue('--hinge-gap')) || 0;
+    const hingeStart = segment0Width;
+    const hingeEnd = hingeStart + hingeGap;
+    const rect = (node) => node instanceof HTMLElement ? node.getBoundingClientRect() : null;
+    const railRect = rect(rail);
+    const headerRect = rect(header);
+    const foldableRect = rect(foldableRibbon);
+    const primaryRect = rect(primary);
+    const companionRect = rect(companion);
+    const ribbonRect = rect(ribbon);
+    const tabsRect = rect(tabs);
+    const deckRect = rect(deck);
+    const hingeTargets = [...document.querySelectorAll('.foldable-ribbon button, .titlebar button')]
+      .filter((node) => {
+        if (!(node instanceof HTMLElement) || getComputedStyle(node).visibility === 'hidden') return false;
+        const targetRect = node.getBoundingClientRect();
+        return targetRect.width > 0 && targetRect.height > 0 &&
+          targetRect.left < hingeEnd && targetRect.right > hingeStart;
+      })
+      .map((node) => node.getAttribute('data-command-id') ?? node.getAttribute('aria-label') ?? node.textContent?.trim() ?? 'button');
     return {
       commands: document.querySelectorAll('.app-rail [data-command-id]').length,
       ribbons: document.querySelectorAll('.ribbon-body').length,
-      foldRibbons: document.querySelectorAll('.fold-ribbon').length,
-      railWidth: rail ? Math.round(rail.getBoundingClientRect().width) : 0,
-      ribbonWidth: ribbon instanceof HTMLElement ? Math.round(ribbon.getBoundingClientRect().width) : 0,
-      headerWidth: header instanceof HTMLElement ? Math.round(header.getBoundingClientRect().width) : 0,
+      foldRibbons: document.querySelectorAll('.foldable-ribbon').length,
+      railWidth: railRect ? Math.round(railRect.width) : 0,
+      ribbonWidth: ribbonRect ? Math.round(ribbonRect.width) : 0,
+      foldableWidth: foldableRect ? Math.round(foldableRect.width) : 0,
+      headerWidth: headerRect ? Math.round(headerRect.width) : 0,
+      railRight: railRect ? Math.round(railRect.right) : 0,
+      primaryRight: primaryRect ? Math.round(primaryRect.right) : 0,
+      ribbonRight: ribbonRect ? Math.round(ribbonRect.right) : 0,
+      tabsRight: tabsRect ? Math.round(tabsRect.right) : 0,
+      deckRight: deckRect ? Math.round(deckRect.right) : 0,
+      companionLeft: companionRect ? Math.round(companionRect.left) : 0,
+      hingeStart,
+      hingeEnd,
+      hingeTargets,
     };
   });
   check('book fold uses a view rail and a full-width ribbon',
-    bookChrome.commands === 3 && bookChrome.ribbons === 1 && bookChrome.foldRibbons === 0,
+    bookChrome.commands === 3 && bookChrome.ribbons === 1 && bookChrome.foldRibbons === 1,
     JSON.stringify(bookChrome));
   check('unfolded app rail is thinner than the Material 3 80dp rail',
     bookChrome.railWidth > 0 && bookChrome.railWidth <= 72,
     String(bookChrome.railWidth));
   check('book fold ribbon spans its chrome container',
-    bookChrome.ribbonWidth > 0 && Math.abs(bookChrome.ribbonWidth - bookChrome.headerWidth) <= 2,
+    bookChrome.foldableWidth > 0 && Math.abs(bookChrome.foldableWidth - bookChrome.headerWidth) <= 2,
+    JSON.stringify(bookChrome));
+  check('book fold keeps ribbon and titlebar controls out of the hinge',
+    bookChrome.railRight <= bookChrome.hingeStart + 2 &&
+    bookChrome.primaryRight <= bookChrome.hingeStart + 2 &&
+    bookChrome.ribbonRight <= bookChrome.hingeStart + 2 &&
+    bookChrome.tabsRight <= bookChrome.hingeStart + 2 &&
+    bookChrome.deckRight <= bookChrome.hingeStart + 2 &&
+    bookChrome.companionLeft >= bookChrome.hingeEnd - 2 &&
+    bookChrome.hingeTargets.length === 0,
     JSON.stringify(bookChrome));
   await session.click('.app-rail [data-command-id="view.split"]');
   await session.wait(200);
@@ -509,6 +567,10 @@ export async function runSurface(session, { check }) {
     bookSplit.previewW > 80 &&
     Math.abs(bookSplit.editorTop - bookSplit.previewTop) < 24 &&
     bookSplit.previewLeft >= bookSplit.editorLeft + bookSplit.editorW - 8,
+    JSON.stringify(bookSplit));
+  check('book fold split panes align to the physical hinge',
+    Math.abs(bookSplit.editorLeft + bookSplit.editorW - bookSplit.segment0Width) <= 3 &&
+    Math.abs(bookSplit.previewLeft - (bookSplit.segment0Width + bookSplit.hingeGap)) <= 3,
     JSON.stringify(bookSplit));
 
   await session.evaluate(() => {
@@ -553,12 +615,150 @@ export async function runSurface(session, { check }) {
       (await session.count('.ribbon-body [data-command-id^="wild."]')) === 0);
   }
 
+  // Reproduce the narrow unfolded book geometry that previously let View's
+  // local Presence group push More into the 28px hinge. Restore the portable
+  // suite's wide viewport before continuing with the existing laptop checks.
+  await session.setViewport({ width: 1080, height: 800 });
+  await session.goto(`${documentPath}?marks-posture=fold-book`);
+  await session.waitForSelector('.foldable-ribbon .ribbon-body', { timeout: 20_000 });
+  await session.evaluate(() => {
+    const profile = document.querySelector('.ribbon-profile-toggle');
+    if (profile instanceof HTMLButtonElement && profile.getAttribute('aria-pressed') === 'true') profile.click();
+  });
+  await session.wait(100);
+  await session.click('.ribbon-tab[data-ribbon-tab="view"]');
+  await session.waitForSelector('.ribbon-overflow-trigger', { timeout: 10_000 });
+  const narrowBookView = await session.evaluate(() => {
+    const rootStyle = getComputedStyle(document.documentElement);
+    const primary = document.querySelector('.foldable-ribbon-primary');
+    const toolbar = document.querySelector('.foldable-ribbon .ribbon-toolbar');
+    const trigger = document.querySelector('.foldable-ribbon .ribbon-overflow-trigger');
+    const presence = [...document.querySelectorAll('.foldable-ribbon .ribbon-command-group')]
+      .find((group) => group.querySelector('.ribbon-group-label')?.textContent?.trim() === 'Presence');
+    const primaryRect = primary?.getBoundingClientRect();
+    const triggerRect = trigger?.getBoundingClientRect();
+    const presenceRect = presence?.getBoundingClientRect();
+    const hingeStart = Number.parseFloat(rootStyle.getPropertyValue('--segment-0-width')) || 0;
+    const hingeEnd = hingeStart + (Number.parseFloat(rootStyle.getPropertyValue('--hinge-gap')) || 0);
+    const hit = triggerRect
+      ? document.elementFromPoint(triggerRect.left + triggerRect.width / 2, triggerRect.top + triggerRect.height / 2)
+      : null;
+    return {
+      viewportWidth: window.innerWidth,
+      hingeStart,
+      hingeEnd,
+      primaryLeft: primaryRect ? Math.round(primaryRect.left) : 0,
+      primaryRight: primaryRect ? Math.round(primaryRect.right) : 0,
+      triggerLeft: triggerRect ? Math.round(triggerRect.left) : 0,
+      triggerRight: triggerRect ? Math.round(triggerRect.right) : 0,
+      presenceRight: presenceRect ? Math.round(presenceRect.right) : 0,
+      toolbarClientWidth: toolbar?.clientWidth ?? 0,
+      toolbarScrollWidth: toolbar?.scrollWidth ?? 0,
+      triggerHit: Boolean(hit?.closest('.ribbon-overflow-trigger') === trigger),
+    };
+  });
+  check('1080px book View keeps Presence and More before the hinge',
+    narrowBookView.viewportWidth === 1080 &&
+    Math.abs(narrowBookView.hingeStart - 526) <= 1 &&
+    Math.abs(narrowBookView.hingeEnd - 554) <= 1 &&
+    Math.abs(narrowBookView.primaryRight - narrowBookView.hingeStart) <= 2 &&
+    narrowBookView.presenceRight <= narrowBookView.hingeStart &&
+    narrowBookView.triggerLeft >= narrowBookView.primaryLeft &&
+    narrowBookView.triggerRight <= narrowBookView.hingeStart &&
+    narrowBookView.toolbarScrollWidth <= narrowBookView.toolbarClientWidth + 1 &&
+    narrowBookView.triggerHit,
+    JSON.stringify(narrowBookView));
+
+  await session.click('.ribbon-overflow-trigger');
+  await session.waitForSelector('.ribbon-overflow-menu', { timeout: 10_000 });
+  const narrowBookMenu = await session.evaluate(() => {
+    const rootStyle = getComputedStyle(document.documentElement);
+    const primary = document.querySelector('.foldable-ribbon-primary');
+    const ribbon = document.querySelector('.app-ribbon');
+    const menu = document.querySelector('.ribbon-overflow-menu');
+    const firstCommand = menu?.querySelector('button');
+    const primaryRect = primary?.getBoundingClientRect();
+    const ribbonRect = ribbon?.getBoundingClientRect();
+    const menuRect = menu?.getBoundingClientRect();
+    const commandRect = firstCommand?.getBoundingClientRect();
+    const hit = commandRect
+      ? document.elementFromPoint(commandRect.left + commandRect.width / 2, commandRect.top + commandRect.height / 2)
+      : null;
+    return {
+      hingeStart: Number.parseFloat(rootStyle.getPropertyValue('--segment-0-width')) || 0,
+      primaryLeft: primaryRect ? Math.round(primaryRect.left) : 0,
+      ribbonBottom: ribbonRect ? Math.round(ribbonRect.bottom) : 0,
+      menuLeft: menuRect ? Math.round(menuRect.left) : 0,
+      menuRight: menuRect ? Math.round(menuRect.right) : 0,
+      menuTop: menuRect ? Math.round(menuRect.top) : 0,
+      menuBottom: menuRect ? Math.round(menuRect.bottom) : 0,
+      commandHit: Boolean(hit?.closest('.ribbon-overflow-menu') === menu),
+    };
+  });
+  check('1080px book More menu opens visibly outside the ribbon and before the hinge',
+    narrowBookMenu.menuLeft >= narrowBookMenu.primaryLeft &&
+    narrowBookMenu.menuRight <= narrowBookMenu.hingeStart &&
+    narrowBookMenu.menuTop > narrowBookMenu.ribbonBottom &&
+    narrowBookMenu.menuBottom > narrowBookMenu.menuTop &&
+    narrowBookMenu.commandHit,
+    JSON.stringify(narrowBookMenu));
+  await session.click('.ribbon-overflow-trigger');
+  await session.wait(50);
+
+  await session.click('.ribbon-profile-toggle');
+  await session.wait(100);
+  const narrowBookProfile = await session.evaluate(() => {
+    const tabs = document.querySelector('.ribbon-tabs');
+    const toggle = document.querySelector('.ribbon-profile-toggle');
+    const tabsRect = tabs?.getBoundingClientRect();
+    const toggleRect = toggle?.getBoundingClientRect();
+    const hit = toggleRect
+      ? document.elementFromPoint(toggleRect.left + toggleRect.width / 2, toggleRect.top + toggleRect.height / 2)
+      : null;
+    return {
+      expanded: toggle?.getAttribute('aria-pressed') === 'true',
+      focused: document.activeElement === toggle,
+      scrollLeft: tabs?.scrollLeft ?? 0,
+      tabsLeft: tabsRect ? Math.round(tabsRect.left) : 0,
+      tabsRight: tabsRect ? Math.round(tabsRect.right) : 0,
+      toggleLeft: toggleRect ? Math.round(toggleRect.left) : 0,
+      toggleRight: toggleRect ? Math.round(toggleRect.right) : 0,
+      toggleHit: Boolean(hit === toggle),
+    };
+  });
+  check('1080px book keeps the focused Essentials toggle visible after expansion',
+    narrowBookProfile.expanded && narrowBookProfile.focused && narrowBookProfile.scrollLeft > 0 &&
+    narrowBookProfile.toggleLeft >= narrowBookProfile.tabsLeft &&
+    narrowBookProfile.toggleRight <= narrowBookProfile.tabsRight &&
+    narrowBookProfile.toggleHit,
+    JSON.stringify(narrowBookProfile));
+
+  await session.setViewport({ width: 1440, height: 900 });
   await session.goto(`${documentPath}?marks-posture=fold-laptop`);
   await session.waitForSelector('.app-rail', { timeout: 20_000 });
+  const laptopChrome = await session.evaluate(() => {
+    const rail = document.querySelector('.app-rail');
+    const main = document.querySelector('.main.route-document');
+    const railRect = rail instanceof HTMLElement ? rail.getBoundingClientRect() : null;
+    const rootStyle = getComputedStyle(document.documentElement);
+    const mainStyle = main instanceof HTMLElement ? getComputedStyle(main) : null;
+    return {
+      commands: document.querySelectorAll('.app-rail [data-command-id]').length,
+      ribbons: document.querySelectorAll('.ribbon-body').length,
+      foldRibbons: document.querySelectorAll('.foldable-ribbon').length,
+      railTop: railRect ? Math.round(railRect.top) : 0,
+      railBottom: railRect ? Math.round(railRect.bottom) : 0,
+      hingeStart: Number.parseFloat(rootStyle.getPropertyValue('--segment-0-height')) || 0,
+      ribbonHeight: Number.parseFloat(mainStyle?.getPropertyValue('--fold-top-chrome-height') ?? '') || 0,
+    };
+  });
   check('laptop fold uses a view rail and a full-width ribbon',
-    (await session.count('.app-rail [data-command-id]')) === 3 &&
-    (await session.count('.ribbon-body')) === 1 &&
-    (await session.count('.fold-ribbon')) === 0);
+    laptopChrome.commands === 3 && laptopChrome.ribbons === 1 && laptopChrome.foldRibbons === 1,
+    JSON.stringify(laptopChrome));
+  check('laptop fold rail stays in the upper workspace segment',
+    Math.abs(laptopChrome.railTop - laptopChrome.ribbonHeight) <= 2 &&
+    laptopChrome.railBottom <= laptopChrome.hingeStart + 2,
+    JSON.stringify(laptopChrome));
   await session.click('.app-rail [data-command-id="view.split"]');
   await session.wait(200);
   const laptopSplit = await measureWorkspacePanes(session);
@@ -574,6 +774,36 @@ export async function runSurface(session, { check }) {
     Math.abs(laptopSplit.editorLeft - laptopSplit.previewLeft) < 24 &&
     laptopSplit.previewTop >= laptopSplit.editorTop + laptopSplit.editorH - 8,
     JSON.stringify(laptopSplit));
+  check('laptop fold split panes align to the physical hinge',
+    Math.abs(laptopSplit.editorTop + laptopSplit.editorH - laptopSplit.segment0Height) <= 3 &&
+    Math.abs(laptopSplit.previewTop - (laptopSplit.segment0Height + laptopSplit.hingeGap)) <= 3,
+    JSON.stringify(laptopSplit));
+  await session.click('.ribbon-collapse');
+  await session.wait(100);
+  const laptopCollapsed = {
+    ...await measureWorkspacePanes(session),
+    ...await session.evaluate(() => {
+      const rail = document.querySelector('.app-rail');
+      const main = document.querySelector('.main.route-document');
+      const railRect = rail instanceof HTMLElement ? rail.getBoundingClientRect() : null;
+      const mainStyle = main instanceof HTMLElement ? getComputedStyle(main) : null;
+      return {
+        collapsed: document.querySelector('.app')?.classList.contains('ribbon-collapsed') ?? false,
+        railTop: railRect ? Math.round(railRect.top) : 0,
+        railBottom: railRect ? Math.round(railRect.bottom) : 0,
+        topChromeHeight: Number.parseFloat(mainStyle?.getPropertyValue('--fold-top-chrome-height') ?? '') || 0,
+      };
+    }),
+  };
+  check('laptop fold collapsed chrome keeps rail and panes hinge-aligned',
+    laptopCollapsed.collapsed &&
+    Math.abs(laptopCollapsed.railTop - laptopCollapsed.topChromeHeight) <= 2 &&
+    Math.abs(laptopCollapsed.railBottom - laptopCollapsed.segment0Height) <= 3 &&
+    Math.abs(laptopCollapsed.editorTop + laptopCollapsed.editorH - laptopCollapsed.segment0Height) <= 3 &&
+    Math.abs(laptopCollapsed.previewTop - (laptopCollapsed.segment0Height + laptopCollapsed.hingeGap)) <= 3,
+    JSON.stringify(laptopCollapsed));
+  await session.click('.ribbon-collapse');
+  await session.wait(100);
   if (ribbonWildEnabled) {
     await session.evaluate(() => {
       const all = document.querySelector('.ribbon-profile-toggle');
@@ -593,69 +823,126 @@ export async function runSurface(session, { check }) {
 
   await session.goto(`${documentPath}?marks-posture=phone`);
   await session.waitForSelector('.phone-ribbon', { timeout: 20_000 });
-  await session.waitForSelector('.phone-ribbon-deck[aria-label="Start from template commands"]', { timeout: 20_000 });
+  await session.waitForSelector('.phone-ribbon-deck', { timeout: 20_000 });
   check('phone uses a focused composer instead of desktop ribbon',
-    (await session.count('.phone-ribbon')) === 1 && (await session.count('.ribbon-body')) === 0);
+    (await session.count('.phone-ribbon')) === 1 &&
+    (await session.count('.ribbon-body')) === 0 &&
+    (await session.count('.phone-ribbon-tabs')) === 0);
   const phoneDataMode = await session.evaluate(() => document.documentElement.dataset.marksMode ?? 'local');
   if (phoneDataMode === 'service') {
     await session.waitForSelector(
       '.app[data-marketing="true"] .workspace.mode-preview .marks-preview .marks-block',
       { timeout: 20_000 },
     );
+  } else {
+    await session.waitForSelector(
+      '.workspace.mode-edit .editor-pane .cm-content',
+      { timeout: 20_000 },
+    );
   }
-  const phoneImport = await session.evaluate(() => ({
+  const phoneEntry = await session.evaluate(() => ({
     dataMode: document.documentElement.dataset.marksMode ?? 'local',
     marketing: document.querySelector('.app')?.getAttribute('data-marketing') ?? '',
     mode: [...(document.querySelector('.workspace')?.classList ?? [])]
       .find((name) => name.startsWith('mode-')) ?? '',
-    selected: document.querySelector('.phone-ribbon-tabs [role="tab"][aria-selected="true"]')?.textContent?.trim() ?? '',
-    topLevel: [...document.querySelectorAll('.phone-ribbon-tabs [role="tab"]')]
-      .map((tab) => tab.textContent?.trim() ?? ''),
+    category: document.querySelector('.phone-category-trigger strong')?.textContent?.trim() ?? '',
+    deck: document.querySelector('.phone-ribbon-deck')?.getAttribute('aria-label') ?? '',
+    retiredTabs: document.querySelectorAll('.phone-ribbon-tabs').length,
+    categoryTrigger: document.querySelectorAll('.phone-category-trigger').length,
+    editorModeControls: document.querySelectorAll('.phone-mode-switch [data-command-id="view.editor"]').length,
+    previewModeControls: document.querySelectorAll('.phone-mode-switch [data-command-id="view.preview"]').length,
+    editPressed: document.querySelector('.phone-mode-switch [data-command-id="view.editor"]')?.getAttribute('aria-pressed') ?? '',
+    previewPressed: document.querySelector('.phone-mode-switch [data-command-id="view.preview"]')?.getAttribute('aria-pressed') ?? '',
     editor: Boolean(document.querySelector('.editor-pane')),
     renderedBlocks: document.querySelectorAll('.preview-pane .marks-preview .marks-block').length,
-    commands: [
-      'import.notes-app',
-      'import.meeting',
-      'import.github-readme',
-      'import.url',
-      'document.import',
-    ].map((id) => Boolean(document.querySelector(`.phone-ribbon [data-command-id="${id}"]`))),
   }));
   check(
-    'phone opens on the complete Start from template ribbon',
-    phoneImport.selected === 'Start from template' && phoneImport.commands.every(Boolean),
-    JSON.stringify(phoneImport),
+    'phone category picker replaces the retired tab strip and keeps view modes persistent',
+    phoneEntry.retiredTabs === 0 &&
+      phoneEntry.categoryTrigger === 1 &&
+      phoneEntry.editorModeControls === 1 &&
+      phoneEntry.previewModeControls === 1,
+    JSON.stringify(phoneEntry),
   );
   check(
-    'anonymous phone puts Log In second',
-    phoneImport.dataMode !== 'service' || (
-      phoneImport.topLevel[0] === 'Start from template' &&
-      phoneImport.topLevel[1] === 'Log In'
+    'ordinary phone edit documents default to Home',
+    phoneEntry.dataMode === 'service' || (
+      phoneEntry.marketing !== 'true' &&
+      phoneEntry.mode === 'mode-edit' &&
+      phoneEntry.category === 'Home' &&
+      phoneEntry.deck === 'Home commands' &&
+      phoneEntry.editPressed === 'true'
     ),
-    JSON.stringify(phoneImport.topLevel),
+    JSON.stringify(phoneEntry),
   );
   check(
-    'service phone public marketing document opens in Preview with Start from template selected',
-    phoneImport.dataMode !== 'service' || (
-      phoneImport.marketing === 'true' &&
-      phoneImport.mode === 'mode-preview' &&
-      phoneImport.selected === 'Start from template' &&
-      !phoneImport.editor &&
-      phoneImport.renderedBlocks >= 1
+    'service phone public marketing document opens in Preview with View selected',
+    phoneEntry.dataMode !== 'service' || (
+      phoneEntry.marketing === 'true' &&
+      phoneEntry.mode === 'mode-preview' &&
+      phoneEntry.category === 'View' &&
+      phoneEntry.deck === 'View commands' &&
+      phoneEntry.previewPressed === 'true' &&
+      !phoneEntry.editor &&
+      phoneEntry.renderedBlocks >= 1
     ),
-    JSON.stringify(phoneImport),
+    JSON.stringify(phoneEntry),
   );
-  await session.evaluate(() => {
-    const view = [...document.querySelectorAll('.phone-ribbon-tabs [role="tab"]')]
-      .find((button) => button.textContent?.trim() === 'View');
-    if (!(view instanceof HTMLButtonElement)) throw new Error('phone View tab not found');
-    view.click();
-  });
+
+  await session.click('.phone-category-trigger');
+  await session.waitForSelector('#phone-ribbon-categories', { timeout: 10_000 });
+  const categoryPicker = await session.evaluate(() => ({
+    role: document.querySelector('#phone-ribbon-categories')?.getAttribute('role') ?? '',
+    ids: [...document.querySelectorAll('#phone-ribbon-categories [data-ribbon-tab]')]
+      .map((button) => button.getAttribute('data-ribbon-tab')),
+    nonButtons: document.querySelectorAll('#phone-ribbon-categories [data-ribbon-tab]:not(button)').length,
+    pressed: document.querySelector('#phone-ribbon-categories [data-ribbon-tab][aria-pressed="true"]')
+      ?.getAttribute('data-ribbon-tab') ?? '',
+  }));
+  check(
+    'phone category trigger opens the ribbon category dialog',
+    categoryPicker.role === 'dialog' &&
+      categoryPicker.nonButtons === 0 &&
+      categoryPicker.ids.includes('home') &&
+      categoryPicker.ids.includes('view') &&
+      categoryPicker.ids.includes('import') &&
+      categoryPicker.pressed === (phoneEntry.category === 'View' ? 'view' : 'home'),
+    JSON.stringify(categoryPicker),
+  );
+  await session.click('#phone-ribbon-categories [data-ribbon-tab="view"]');
+  await waitForAbsent(session, '#phone-ribbon-categories');
   await session.waitForSelector(
-    '.phone-ribbon-deck[aria-label="View commands"] [data-command-id="view.editor"]',
+    '.phone-ribbon-deck[aria-label="View commands"] [data-command-id="view.ghost-overlay"]',
     { timeout: 10_000 },
   );
-  await session.click('.phone-ribbon [data-command-id="view.editor"]');
+  const viewDeck = await session.evaluate(() => ({
+    duplicateModes: document.querySelectorAll(
+      '.phone-ribbon-deck [data-command-id="view.editor"], .phone-ribbon-deck [data-command-id="view.split"], .phone-ribbon-deck [data-command-id="view.preview"]',
+    ).length,
+    persistentEditor: document.querySelectorAll('.phone-mode-switch [data-command-id="view.editor"]').length,
+    persistentPreview: document.querySelectorAll('.phone-mode-switch [data-command-id="view.preview"]').length,
+    ghostLabel: document.querySelector('.phone-ribbon-deck [data-command-id="view.ghost-overlay"]')?.getAttribute('aria-label') ?? '',
+    ghostStatus: document.querySelector('.phone-ribbon-deck [data-command-id="view.ghost-overlay"] .phone-command-status')?.textContent?.trim() ?? '',
+    horizontalScrollers: [...document.querySelectorAll('.phone-composer *')]
+      .filter((node) => ['auto', 'scroll'].includes(getComputedStyle(node).overflowX))
+      .map((node) => node.className),
+  }));
+  check(
+    'phone View deck owns horizontal scrolling without duplicate mode commands',
+    viewDeck.duplicateModes === 0 &&
+      viewDeck.persistentEditor === 1 &&
+      viewDeck.persistentPreview === 1 &&
+      viewDeck.horizontalScrollers.length === 1 &&
+      viewDeck.horizontalScrollers[0] === 'phone-ribbon-deck',
+    JSON.stringify(viewDeck),
+  );
+  check(
+    'phone View deck exposes the default-on ghost overlay command',
+    viewDeck.ghostLabel === 'Ghost overlay, On' && viewDeck.ghostStatus === 'On',
+    JSON.stringify(viewDeck),
+  );
+
+  await session.click('.phone-mode-switch [data-command-id="view.editor"]');
   await session.waitForSelector(
     '.workspace.mode-edit.phone-ghost .editor-pane .cm-content',
     { timeout: 20_000 },
@@ -753,17 +1040,103 @@ export async function runSurface(session, { check }) {
   check('phone two-finger pan snaps the ghost to the other page half',
     ghostPan.ok && ghostPan.bound === 'true' && ghostPan.draggingAfterDown && ghostPan.shift === 'end' && ghostPan.translate === '0%',
     JSON.stringify(ghostPan));
-  await session.evaluate(() => {
-    const view = [...document.querySelectorAll('.phone-ribbon-tabs [role="tab"]')]
-      .find((button) => button.textContent?.trim() === 'View');
-    if (!(view instanceof HTMLButtonElement)) throw new Error('phone View tab not found');
-    view.click();
-  });
-  await session.waitForSelector(
-    '.phone-ribbon-deck[aria-label="View commands"] [data-command-id="view.preview"]',
-    { timeout: 10_000 },
+
+  await session.click('.phone-ribbon-deck [data-command-id="view.ghost-overlay"]');
+  await session.waitForSelector('[role="dialog"] .ghost-overlay-dialog', { timeout: 10_000 });
+  const ghostDialog = await session.evaluate(() => ({
+    title: document.querySelector('[role="dialog"] h2')?.textContent?.trim() ?? '',
+    switchRole: document.querySelector('[role="dialog"] .ghost-overlay-switch input')?.getAttribute('role') ?? '',
+    checked: Boolean(document.querySelector('[role="dialog"] .ghost-overlay-switch input')?.checked),
+    left: document.querySelector('[role="dialog"] .ghost-overlay-halves button:first-child')?.textContent?.trim() ?? '',
+    right: document.querySelector('[role="dialog"] .ghost-overlay-halves button:last-child')?.textContent?.trim() ?? '',
+    guidance: document.querySelector('[role="dialog"] .ghost-overlay-gesture')?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+  }));
+  check(
+    'phone ghost command opens its default-on Rendered Markdown dialog',
+    ghostDialog.title === 'Rendered Markdown ghost' &&
+      ghostDialog.switchRole === 'switch' &&
+      ghostDialog.checked &&
+      ghostDialog.left === 'Left half' &&
+      ghostDialog.right === 'Right half' &&
+      ghostDialog.guidance.includes('two fingers') &&
+      ghostDialog.guidance.includes('One finger still edits') &&
+      ghostDialog.guidance.includes('pinch still zooms'),
+    JSON.stringify(ghostDialog),
   );
-  await session.click('.phone-ribbon [data-command-id="view.preview"]');
+
+  await session.click('[role="dialog"] .ghost-overlay-halves button:first-child');
+  await session.waitForSelector('.workspace.phone-ghost[data-ghost-shift="start"]', { timeout: 10_000 });
+  await session.click('[role="dialog"] .ghost-overlay-halves button:last-child');
+  await session.waitForSelector('.workspace.phone-ghost[data-ghost-shift="end"]', { timeout: 10_000 });
+  const halfControls = await session.evaluate(() => ({
+    shift: document.querySelector('.workspace.phone-ghost')?.getAttribute('data-ghost-shift') ?? '',
+    leftPressed: document.querySelector('[role="dialog"] .ghost-overlay-halves button:first-child')?.getAttribute('aria-pressed') ?? '',
+    rightPressed: document.querySelector('[role="dialog"] .ghost-overlay-halves button:last-child')?.getAttribute('aria-pressed') ?? '',
+  }));
+  check(
+    'phone ghost dialog moves the rendered page with accessible half controls',
+    halfControls.shift === 'end' && halfControls.leftPressed === 'false' && halfControls.rightPressed === 'true',
+    JSON.stringify(halfControls),
+  );
+
+  await session.click('[role="dialog"] .ghost-overlay-switch input[role="switch"]');
+  await waitForAbsent(session, '.workspace.phone-ghost');
+  await waitForPageState(
+    session,
+    () => {
+      try {
+        return JSON.parse(localStorage.getItem('marks:ui-preferences:v1') ?? '{}').phoneGhost === false;
+      } catch {
+        return false;
+      }
+    },
+    { label: 'the disabled phone ghost preference to persist' },
+  );
+  const ghostOff = await session.evaluate(() => ({
+    checked: Boolean(document.querySelector('[role="dialog"] .ghost-overlay-switch input')?.checked),
+    workspaceGhosts: document.querySelectorAll('.workspace.phone-ghost, .preview-ghost').length,
+    stored: JSON.parse(localStorage.getItem('marks:ui-preferences:v1') ?? '{}').phoneGhost,
+    commandLabel: document.querySelector('.phone-ribbon-deck [data-command-id="view.ghost-overlay"]')?.getAttribute('aria-label') ?? '',
+  }));
+  check(
+    'phone ghost switch persists an explicit off preference',
+    !ghostOff.checked && ghostOff.workspaceGhosts === 0 && ghostOff.stored === false && ghostOff.commandLabel === 'Ghost overlay, Off',
+    JSON.stringify(ghostOff),
+  );
+
+  await session.click('[role="dialog"] .ghost-overlay-switch input[role="switch"]');
+  await session.waitForSelector('.workspace.mode-edit.phone-ghost[data-ghost-shift="end"]', { timeout: 10_000 });
+  await waitForPageState(
+    session,
+    () => {
+      try {
+        return JSON.parse(localStorage.getItem('marks:ui-preferences:v1') ?? '{}').phoneGhost === true;
+      } catch {
+        return false;
+      }
+    },
+    { label: 'the enabled phone ghost preference to persist' },
+  );
+  const ghostOn = await session.evaluate(() => ({
+    checked: Boolean(document.querySelector('[role="dialog"] .ghost-overlay-switch input')?.checked),
+    shift: document.querySelector('.workspace.phone-ghost')?.getAttribute('data-ghost-shift') ?? '',
+    stored: JSON.parse(localStorage.getItem('marks:ui-preferences:v1') ?? '{}').phoneGhost,
+    commandLabel: document.querySelector('.phone-ribbon-deck [data-command-id="view.ghost-overlay"]')?.getAttribute('aria-label') ?? '',
+  }));
+  check(
+    'phone ghost switch restores the overlay and remembered half',
+    ghostOn.checked && ghostOn.shift === 'end' && ghostOn.stored === true && ghostOn.commandLabel === 'Ghost overlay, On',
+    JSON.stringify(ghostOn),
+  );
+  await session.click('[role="dialog"] button[aria-label="Close"]');
+  await waitForAbsent(session, '[role="dialog"]');
+  await session.evaluate(() => {
+    document.querySelectorAll('.toast button[aria-label="Dismiss notification"]')
+      .forEach((button) => button.click());
+  });
+  await waitForAbsent(session, '.toast');
+
+  await session.click('.phone-mode-switch [data-command-id="view.preview"]');
   await session.waitForSelector(
     '.workspace.mode-preview .preview-pane .marks-preview .marks-block',
     { timeout: 10_000 },
@@ -772,30 +1145,24 @@ export async function runSurface(session, { check }) {
     (await session.count('.workspace.phone-ghost, .preview-ghost')) === 0 &&
     (await session.isVisible('.preview-pane')) &&
     !(await session.isVisible('.editor-pane')));
-  await session.click('.phone-ribbon [data-command-id="view.editor"]');
+  await session.click('.phone-mode-switch [data-command-id="view.editor"]');
   await session.waitForSelector(
-    '.workspace.mode-edit.phone-ghost .editor-pane .cm-content',
+    '.workspace.mode-edit.phone-ghost[data-ghost-shift="end"] .editor-pane .cm-content',
     { timeout: 10_000 },
   );
-  await session.evaluate(() => {
-    const more = [...document.querySelectorAll('.phone-ribbon-tabs [role="tab"]')]
-      .find((button) => button.textContent?.trim() === 'More');
-    if (!(more instanceof HTMLButtonElement)) throw new Error('phone More tab not found');
-    more.click();
-  });
-  await session.waitForSelector('.phone-ribbon-deck[aria-label="More commands"]', { timeout: 10_000 });
+  check('phone ghost half survives Edit and Preview mode changes',
+    (await session.count('.workspace.phone-ghost[data-ghost-shift="end"]')) === 1);
+
+  await session.click('.phone-category-trigger');
+  await session.waitForSelector('#phone-ribbon-categories', { timeout: 10_000 });
   const pairingCount = await session.count('.phone-ribbon [data-command-id="identity.pairing"]');
-  const buriedLoginCount = await session.count('.phone-ribbon-deck[aria-label="More commands"] [data-command-id="identity.keep"]');
-  check('phone More does not duplicate anonymous login',
-    pairingCount === 0 && buriedLoginCount === 0,
-    `${phoneDataMode}: ${pairingCount}`);
+  const buriedLoginCount = await session.count('.phone-ribbon-deck [data-command-id="identity.keep"]');
+  const loginCategoryCount = await session.count('#phone-ribbon-categories [data-ribbon-tab="login"]');
+  check('phone category picker does not duplicate anonymous login',
+    pairingCount === 0 && buriedLoginCount === 0 && loginCategoryCount <= 1,
+    `${phoneDataMode}: ${pairingCount}/${buriedLoginCount}/${loginCategoryCount}`);
   if (phoneDataMode === 'service') {
-    await session.evaluate(() => {
-      const login = [...document.querySelectorAll('.phone-ribbon-tabs [role="tab"]')]
-        .find((button) => button.textContent?.trim() === 'Log In');
-      if (!(login instanceof HTMLButtonElement)) throw new Error('phone Log In control not found');
-      login.click();
-    });
+    await session.click('#phone-ribbon-categories [data-ribbon-tab="login"]');
     await session.waitForSelector('[role="dialog"]', { timeout: 10_000 });
     const mobileLogin = await session.evaluate(() => ({
       laptop: document.querySelector('[role="dialog"]')?.textContent?.includes('Open this page on a laptop') ?? false,
@@ -810,13 +1177,14 @@ export async function runSurface(session, { check }) {
     );
     await session.click('[role="dialog"] button[aria-label="Close"]');
     await waitForAbsent(session, '[role="dialog"]');
+  } else {
+    await session.click('#phone-ribbon-categories button[aria-label="Close ribbon categories"]');
+    await waitForAbsent(session, '#phone-ribbon-categories');
   }
-  await session.evaluate(() => {
-    const review = [...document.querySelectorAll('.phone-ribbon-tabs [role="tab"]')]
-      .find((button) => button.textContent?.trim() === 'Review');
-    if (!(review instanceof HTMLButtonElement)) throw new Error('phone Review tab not found');
-    review.click();
-  });
+
+  await session.click('.phone-category-trigger');
+  await session.waitForSelector('#phone-ribbon-categories', { timeout: 10_000 });
+  await session.click('#phone-ribbon-categories [data-ribbon-tab="review"]');
   await session.waitForSelector('.phone-ribbon-deck[aria-label="Review commands"]');
   if (ribbonWildEnabled) {
     check('phone Review ribbon exposes all five possibility tools',
@@ -859,7 +1227,7 @@ export async function runSurface(session, { check }) {
 
 export const SURFACE_CHECK_NAMES = [
   'opening shell does not stay up',
-  'desktop opens on the complete Start from template ribbon',
+  'desktop edit opens on the Home ribbon',
   'anonymous desktop puts Log In second',
   'desktop Log In opens the phone QR flow',
   'surface tier is explicit',
@@ -900,26 +1268,42 @@ export const SURFACE_CHECK_NAMES = [
   'book fold uses a view rail and a full-width ribbon',
   'unfolded app rail is thinner than the Material 3 80dp rail',
   'book fold ribbon spans its chrome container',
+  'book fold keeps ribbon and titlebar controls out of the hinge',
   'book fold split does not use the phone ghost overlay',
   'book fold split is a real two-pane hinge canvas',
+  'book fold split panes align to the physical hinge',
   'book fold split keeps compose until the app rail changes the view',
   'book fold preview rail shows inspect commands',
   'disabled ribbon-wild stays absent from foldable command libraries',
   'book fold command library exposes all five possibility tools',
   'possibility layer respects the unfolded book posture',
+  '1080px book View keeps Presence and More before the hinge',
+  '1080px book More menu opens visibly outside the ribbon and before the hinge',
+  '1080px book keeps the focused Essentials toggle visible after expansion',
   'laptop fold uses a view rail and a full-width ribbon',
+  'laptop fold rail stays in the upper workspace segment',
   'laptop fold split does not use the phone ghost overlay',
   'laptop fold split is a real stacked hinge canvas',
+  'laptop fold split panes align to the physical hinge',
+  'laptop fold collapsed chrome keeps rail and panes hinge-aligned',
   'possibility layer respects the unfolded laptop posture',
   'phone uses a focused composer instead of desktop ribbon',
-  'phone opens on the complete Start from template ribbon',
-  'anonymous phone puts Log In second',
-  'service phone public marketing document opens in Preview with Start from template selected',
+  'phone category picker replaces the retired tab strip and keeps view modes persistent',
+  'ordinary phone edit documents default to Home',
+  'service phone public marketing document opens in Preview with View selected',
+  'phone category trigger opens the ribbon category dialog',
+  'phone View deck owns horizontal scrolling without duplicate mode commands',
+  'phone View deck exposes the default-on ghost overlay command',
   'phone write keeps a full-width editor under a right-hand ghost preview',
   'phone ghost viewfinder is clipped and pointer-transparent',
   'phone two-finger pan snaps the ghost to the other page half',
+  'phone ghost command opens its default-on Rendered Markdown dialog',
+  'phone ghost dialog moves the rendered page with accessible half controls',
+  'phone ghost switch persists an explicit off preference',
+  'phone ghost switch restores the overlay and remembered half',
   'phone preview mode removes the ghost overlay',
-  'phone More does not duplicate anonymous login',
+  'phone ghost half survives Edit and Preview mode changes',
+  'phone category picker does not duplicate anonymous login',
   'phone Log In is laptop-first with no phone-only registration',
   'disabled ribbon-wild stays absent from the phone Review ribbon',
   'disabled ribbon-wild requests no lazy code or style assets',

@@ -1,4 +1,4 @@
-import { commandAvailability } from './projection.ts';
+import { commandInvocationAvailability } from './projection.ts';
 import { requireCommand } from './registry.ts';
 import type {
   CommandDefinition,
@@ -113,7 +113,7 @@ export class CommandRuntime {
   private create(commandId: CommandId, invocation: RuntimeInvocation): PendingRun {
     const command = requireCommand(commandId);
     const source = invocation.source;
-    const availability = commandAvailability(command, this.environment(), sourceSurface(source));
+    const availability = commandInvocationAvailability(command, this.environment(), source);
     const inputError = source === 'agent' || source === 'bridge'
       ? validateInput(command, invocation.input ?? {})
       : undefined;
@@ -146,7 +146,7 @@ export class CommandRuntime {
     const pending = this.pending.get(runId);
     if (!pending || pending.run.status !== 'proposed') return;
     const command = requireCommand(pending.run.commandId);
-    const availability = commandAvailability(command, this.environment(), sourceSurface(pending.run.source));
+    const availability = commandInvocationAvailability(command, this.environment(), pending.run.source);
     if (!availability.enabled) {
       this.finish(runId, 'failed', availability.reason ?? 'Command became unavailable.');
       return;
@@ -201,12 +201,6 @@ export class CommandRuntime {
     this.snapshot = { runs: this.runs, receipts: this.receipts };
     for (const listener of this.listeners) listener();
   }
-}
-
-function sourceSurface(source: CommandSource) {
-  if (source === 'agent' || source === 'bridge') return 'agent' as const;
-  if (source === 'palette' || source === 'keyboard') return 'palette' as const;
-  return 'ribbon' as const;
 }
 
 function approvalMessage(command: CommandDefinition): string {

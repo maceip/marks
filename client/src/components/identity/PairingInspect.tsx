@@ -12,7 +12,7 @@ import { encodeBase64Url, type PairingLink } from '../../auth/protocol';
 import { SERVICE_ERROR_COPY } from '../../lib/service-errors';
 import { UI_DATA_MODE } from '../../lib/product';
 import '../../styles/overlays.css';
-import { Icon, icons } from '../ui/Icon';
+import { Icon } from '../ui';
 
 interface PairingInspectProps {
   state?: 'waiting' | 'ready' | 'invalid';
@@ -112,7 +112,7 @@ export function PairingInspect({ state, pairing, onNotify }: PairingInspectProps
   return (
     <div className="identity-dialog pairing-inspect">
       <div className={`local-notice${resolvedState === 'invalid' ? ' local-notice-danger' : ''}`}>
-        <Icon path={resolvedState === 'ready' || details ? icons.check : icons.share} size={15} />
+        <Icon name={resolvedState === 'ready' || details ? 'check' : 'share'} size={15} />
         <span>
           <strong>
             {details

@@ -1,5 +1,4 @@
-import { Icon, icons } from '../ui/Icon';
-import { SurfaceMaterial } from '../ui/SurfaceMaterial';
+import { Icon, SurfaceMaterial } from '../ui';
 
 interface LiquidDockProps {
   onCommands: () => void;
@@ -24,15 +23,15 @@ export function LiquidDock({
     <div className={`liquid-dock surface-material-host${className ? ` ${className}` : ''}`} role="toolbar" aria-label="Quick document actions">
       <SurfaceMaterial variant="floating" />
       <button type="button" className="liquid-dock-primary" onClick={onCommands}>
-        <span><Icon path={icons.sparkles} size={16} /></span>
+        <span><Icon name="sparkles" size={16} /></span>
         Commands
         <kbd>⌘⇧P</kbd>
       </button>
       <button type="button" aria-label="Open comments" title="Comments" onClick={onComments}>
-        <Icon path={icons.comment} size={16} />
+        <Icon name="comment" size={16} />
       </button>
       <button type="button" aria-label="Open history" title="History" onClick={onHistory}>
-        <Icon path={icons.history} size={16} />
+        <Icon name="history" size={16} />
       </button>
       <button
         type="button"
@@ -43,7 +42,7 @@ export function LiquidDock({
         disabled={!voiceSupported || !onVoice}
         onClick={() => onVoice?.()}
       >
-        <Icon path={icons.mic} size={16} />
+        <Icon name="mic" size={16} />
       </button>
     </div>
   );

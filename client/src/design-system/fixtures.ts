@@ -21,7 +21,7 @@ export const palette = [
 ] as const;
 
 export const sectionLinks = [
-  ['foundations', 'Foundations'], ['controls', 'Controls'], ['chrome', 'Chrome'],
+  ['governance', 'Governance'], ['foundations', 'Foundations'], ['controls', 'Controls'], ['chrome', 'Chrome'],
   ['collaboration', 'Collaboration'], ['overlays', 'Overlays'], ['materials', 'Materials'],
   ['motion', 'Motion'], ['responsive', 'Responsive'],
 ] as const;

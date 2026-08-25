@@ -1,6 +1,7 @@
 import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from 'react';
 import type { CommandRunStatus } from '../../commands/types.ts';
 import { Glyph, type GlyphName } from '../glyphs/Glyph';
+import { Icon } from '../ui';
 
 export interface RibbonCommandProps {
   glyph: GlyphName;
@@ -112,7 +113,7 @@ export function RibbonGroup({ label, children, onLaunch, launchLabel, agentRaise
             aria-label={launchLabel ?? `More ${label} options`}
             onClick={onLaunch}
           >
-            ▢
+            <Icon name="more" size={10} />
           </button>
         )}
       </span>

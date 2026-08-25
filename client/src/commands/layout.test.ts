@@ -21,6 +21,7 @@ function group(id: string, priority: number, count = 2): ProjectedCommandGroup {
       glyph: 'bold',
       operation: { kind: 'editor', operation: 'bold' },
       surfaces: ['ribbon'],
+      invocationSources: ['human'],
       risk: 'write',
       priority,
       enabled: true,

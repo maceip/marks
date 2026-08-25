@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 
 const distFiles = await readdir(new URL('../client/dist/assets/', import.meta.url));
 const index = await readFile(new URL('../client/dist/index.html', import.meta.url), 'utf8');
+const inventory = JSON.parse(await readFile(new URL('../docs/design-system-inventory.json', import.meta.url), 'utf8'));
 assert(!index.includes('design-system.css'), 'catalog CSS must not be in the entry document');
 assert(distFiles.some((name) => name.startsWith('DesignSystem-')), 'catalog must be a separate lazy chunk');
 const port = 4197;
@@ -21,8 +22,63 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   await page.goto(`http://127.0.0.1:${port}/design-system`);
   await page.locator('.ds-header h1').waitFor();
-  assert.equal(await page.locator('main section').count(), 8, 'all catalog sections render');
+  assert.equal(await page.locator('main section').count(), 9, 'all catalog sections render');
   assert.equal(await page.locator('[aria-label="button state matrix"] > *').count(), 11, 'complete state matrix renders');
+  assert.equal(await page.locator('[data-design-system-entry]').count(), 4, 'all authoritative entry points render');
+  assert.equal(await page.locator('[data-design-system-owner]').count(), 17, 'all canonical owners render');
+  assert.equal(await page.locator('[data-design-system-rule]').count(), 6, 'all enforcement rules render');
+  assert.equal(await page.locator('[data-design-system-exception]').count(), 5, 'all explicit exceptions render');
+
+  const expectedIcons = inventory.icons.entries;
+  assert.equal(await page.locator('#foundations .marks-icon[data-icon]').count(), expectedIcons.length, 'every registered icon renders');
+  await page.waitForFunction(() => [...document.querySelectorAll('#foundations .marks-icon-sheet')].every((image) => image.complete));
+  const assetFailures = await page.locator('#foundations .marks-icon-sheet').evaluateAll((images) => images.flatMap((image) => (
+    image.naturalWidth === 104 && image.naturalHeight === 104 ? [] : [`${image.getAttribute('src')}: ${image.naturalWidth}x${image.naturalHeight}`]
+  )));
+  assert.deepEqual(assetFailures, [], `all catalog icon assets decode at 104x104: ${assetFailures.join(', ')}`);
+  const fallbackNames = await page.locator('#foundations [data-icon-source="vector-fallback"]').evaluateAll((icons) => icons.map((icon) => icon.getAttribute('data-icon')).sort());
+  assert.deepEqual(fallbackNames, expectedIcons.filter((icon) => icon.source === 'vector-fallback').map((icon) => icon.name).sort(), 'only registered vector-only icons use the fallback renderer');
+  for (const name of ['startTemplate', 'githubReadme', 'meetingNotes', 'importWebsite', 'ghostOverlay']) {
+    assert.equal(await page.locator(`#foundations [data-icon="${name}"][data-icon-source="sheet"]`).count(), 1, `${name} renders from its governed PNG asset`);
+  }
+
+  const fullMotionIcon = page.locator('#foundations [data-icon="bold"]');
+  await fullMotionIcon.evaluate((icon) => {
+    icon.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+  await page.waitForFunction(() => document.querySelector('#foundations [data-icon="bold"] .marks-icon-action')?.getAnimations().length === 1);
+  const fullIconMotion = await fullMotionIcon.evaluate((icon) => {
+    const count = (selector) => icon.querySelector(selector)?.getAnimations().length ?? 0;
+    return {
+      action: count('.marks-icon-action'),
+      halo: count('.marks-icon-halo'),
+      beam: count('.marks-icon-beam'),
+      particles: [...icon.querySelectorAll('.marks-icon-particle')].reduce((total, particle) => total + particle.getAnimations().length, 0),
+    };
+  });
+  assert.deepEqual(fullIconMotion, { action: 1, halo: 1, beam: 1, particles: 4 }, 'shared full-motion icon activation recipe runs');
+  await page.waitForTimeout(450);
+  await page.locator('.ds-controls select').nth(3).selectOption('reduced');
+  const reducedMotionIcon = page.locator('#foundations [data-icon="italic"]');
+  await reducedMotionIcon.evaluate((icon) => {
+    icon.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+  await page.waitForFunction(() => document.querySelector('#foundations [data-icon="italic"] .marks-icon-halo')?.getAnimations().length === 1);
+  const reducedIconMotion = await reducedMotionIcon.evaluate((icon) => {
+    const count = (selector) => icon.querySelector(selector)?.getAnimations().length ?? 0;
+    return {
+      action: count('.marks-icon-action'),
+      halo: count('.marks-icon-halo'),
+      beam: count('.marks-icon-beam'),
+      particles: [...icon.querySelectorAll('.marks-icon-particle')].reduce((total, particle) => total + particle.getAnimations().length, 0),
+    };
+  });
+  assert.deepEqual(reducedIconMotion, { action: 0, halo: 1, beam: 1, particles: 0 }, 'shared reduced-motion icon activation recipe runs');
+  await page.locator('.ds-controls select').nth(3).selectOption('full');
+
+  assert.equal(await page.locator('#chrome .ribbon-tab').count(), 5, 'catalog composes the production ribbon tab primitive');
+  assert.equal(await page.locator('#chrome .ribbon-command-group').count(), 2, 'catalog composes production ribbon groups');
+  assert.equal(await page.locator('#responsive [data-posture] .ribbon-command').count(), 4, 'every posture example uses the production ribbon command');
 
   await page.keyboard.press('Tab');
   const focused = await page.evaluate(() => document.activeElement?.matches('button,select,a[href],input'));
@@ -53,5 +109,5 @@ try {
   assert.notEqual(await reducedPage.locator('.ds-section').first().evaluate(el => getComputedStyle(el).borderTopStyle), 'none');
   await reduced.close();
   await browser.close();
-  console.log('design-system accessibility and visual-regression checks passed');
+  console.log('design-system governance, runtime, accessibility, and capture checks passed');
 } finally { stop(); }

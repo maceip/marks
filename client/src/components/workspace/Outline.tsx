@@ -1,6 +1,6 @@
 import '../../styles/outline.css';
 import type { Heading } from '../../markdown/types';
-import { Icon, icons } from '../ui/Icon';
+import { Icon } from '../ui';
 
 interface OutlineProps {
   headings: Heading[];
@@ -11,7 +11,7 @@ export function Outline({ headings, onSelect }: OutlineProps) {
   if (headings.length === 0) {
     return (
       <div className="outline outline-empty">
-        <Icon path={icons.outline} />
+        <Icon name="outline" />
         <p>Headings appear here as you write them.</p>
       </div>
     );

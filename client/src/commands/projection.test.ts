@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { CommandEnvironment } from './types.ts';
-import { commandAvailability, composeRibbon, projectCommands, toAgentTools } from './projection.ts';
+import type { CommandDefinition, CommandEnvironment } from './types.ts';
+import {
+  commandAvailability,
+  commandInvocationAvailability,
+  composeRibbon,
+  projectCommands,
+  ribbonSurfaceForShell,
+  toAgentTools,
+} from './projection.ts';
 import { LEGACY_ACTION_TO_COMMAND, requireCommand } from './registry.ts';
 import { UI_ACTIONS } from '../lib/ui-actions.ts';
 
@@ -55,12 +62,12 @@ test('foldable split keeps the compose ribbon until the app rail changes the vie
       mode: 'split',
       activePane: 'preview',
       shell,
-    }));
+    }), { surface: 'foldable' });
     const preview = composeRibbon(environment({
       mode: 'preview',
       activePane: 'preview',
       shell,
-    }));
+    }), { surface: 'foldable' });
     assert.equal(split.flatMap((tab) => tab.groups.flatMap((group) => group.commands)).some((command) => command.id === 'format.bold'), true, shell);
     assert.equal(preview.flatMap((tab) => tab.groups.flatMap((group) => group.commands)).some((command) => command.id === 'format.bold'), false, shell);
   }
@@ -130,7 +137,7 @@ test('anonymous ribbon starts with templates and a direct login control', () => 
       shell,
       workspaceKind: 'scratch',
       capabilities: { role: 'scratch', edit: true, comment: false, saveVersion: false, manageShares: false },
-    }));
+    }), { surface: ribbonSurfaceForShell(shell) });
     assert.equal(ribbon[0]?.id, 'import', shell);
     assert.equal(ribbon[0]?.label, 'Start from template', shell);
     assert.equal(ribbon[1]?.id, 'login', shell);
@@ -156,8 +163,9 @@ test('anonymous ribbon starts with templates and a direct login control', () => 
   }
 });
 
-test('phone ribbon consumes the desktop tab projection, including contextual and agent-raised tasks', () => {
+test('phone ribbon requests its true surface projection, including contextual and agent-raised tasks', () => {
   const phone = composeRibbon(environment({ shell: 'phone', context: 'image' }), {
+    surface: 'phone',
     expanded: true,
     agentRaised: new Set(['review.document-health']),
   });
@@ -166,6 +174,127 @@ test('phone ribbon consumes the desktop tab projection, including contextual and
   assert.equal(phone.some((tab) => tab.id === 'review' && tab.agentRaised), true);
   assert.equal(phone.some((tab) => tab.id === 'picture' && tab.contextual), true);
   assert.equal(phone.flatMap((tab) => tab.groups).flatMap((group) => group.commands).some((command) => command.id === 'picture.medium'), true);
+});
+
+test('phone essentials keep one curated Office-mobile deck and expose the full library on demand', () => {
+  const phone = environment({ shell: 'phone', mode: 'edit', activePane: 'editor' });
+  const essential = composeRibbon(phone, { surface: 'phone' });
+  const expanded = composeRibbon(phone, { surface: 'phone', expanded: true });
+  const essentialIds = essential.flatMap((tab) => tab.groups.flatMap((group) => group.commands.map((command) => command.id)));
+  const expandedIds = expanded.flatMap((tab) => tab.groups.flatMap((group) => group.commands.map((command) => command.id)));
+
+  for (const commandId of [
+    'format.bold',
+    'paragraph.tasks',
+    'insert.link',
+    'review.comments',
+    'view.ghost-overlay',
+  ]) {
+    assert.equal(essentialIds.includes(commandId), true, `${commandId} remains in the focused phone ribbon`);
+  }
+  for (const commandId of ['edit.paste', 'format.highlight', 'insert.picture-url', 'review.render-diagnostics']) {
+    assert.equal(essentialIds.includes(commandId), false, `${commandId} stays out of the focused phone ribbon`);
+    assert.equal(expandedIds.includes(commandId), true, `${commandId} remains reachable from Show all categories`);
+  }
+
+  assert.deepEqual(
+    essential.find((tab) => tab.id === 'home')?.groups.map((group) => group.label),
+    ['Font', 'Styles', 'Paragraph', 'Editing'],
+  );
+  assert.deepEqual(
+    essential.find((tab) => tab.id === 'insert')?.groups.map((group) => group.label),
+    ['Links', 'Illustrations', 'Table', 'Blocks'],
+  );
+});
+
+test('phone categories stay stable in Preview while editing commands become disabled', () => {
+  const phone = environment({
+    shell: 'phone',
+    mode: 'preview',
+    activePane: 'preview',
+    workspaceKind: 'scratch',
+    capabilities: { role: 'scratch', edit: true, comment: true, saveVersion: false, manageShares: false },
+  });
+  const essential = composeRibbon(phone, { surface: 'phone' });
+
+  assert.deepEqual(
+    essential.map((tab) => tab.id),
+    ['import', 'login', 'file', 'home', 'insert', 'review', 'view'],
+  );
+  const bold = essential
+    .flatMap((tab) => tab.groups)
+    .flatMap((group) => group.commands)
+    .find((command) => command.id === 'format.bold');
+  assert.equal(bold?.enabled, false);
+  assert.match(bold?.unavailableReason ?? '', /Switch to Editor or Split/u);
+});
+
+test('ghost overlay is an essential phone-only presentation with human-only invocation', () => {
+  const ghost = requireCommand('view.ghost-overlay');
+  const phone = environment({ shell: 'phone', mode: 'edit', activePane: 'editor' });
+
+  assert.deepEqual(ghost.surfaces, ['phone']);
+  assert.deepEqual(ghost.invocationSources, ['human']);
+  assert.equal(commandAvailability(ghost, phone, 'phone').enabled, true);
+  for (const surface of ['ribbon', 'foldable', 'palette', 'agent'] as const) {
+    assert.equal(commandAvailability(ghost, phone, surface).visible, false, surface);
+  }
+  assert.equal(commandInvocationAvailability(ghost, phone, 'human').enabled, true);
+  assert.equal(commandInvocationAvailability(ghost, phone, 'agent').enabled, false);
+  assert.equal(commandInvocationAvailability(ghost, phone, 'bridge').enabled, false);
+  assert.equal(toAgentTools(phone).some((tool) => tool.commandId === ghost.id), false);
+
+  const phoneView = composeRibbon(phone, { surface: 'phone' }).find((tab) => tab.id === 'view');
+  assert.deepEqual(
+    phoneView?.groups.find((group) => group.label === 'Layout')?.commands.map((command) => command.id),
+    ['view.ghost-overlay'],
+  );
+});
+
+test('shell routing selects distinct desktop, phone, and foldable ribbon surfaces', () => {
+  assert.equal(ribbonSurfaceForShell('phone'), 'phone');
+  assert.equal(ribbonSurfaceForShell('fold-book'), 'foldable');
+  assert.equal(ribbonSurfaceForShell('fold-laptop'), 'foldable');
+  assert.equal(ribbonSurfaceForShell('studio'), 'ribbon');
+  assert.equal(ribbonSurfaceForShell('desktop'), 'ribbon');
+
+  const phoneEnvironment = environment({ shell: 'phone', mode: 'edit' });
+  const phone = composeRibbon(phoneEnvironment, { surface: 'phone', expanded: true });
+  const desktop = composeRibbon(phoneEnvironment, { surface: 'ribbon', expanded: true });
+  const phoneIds = phone.flatMap((tab) => tab.groups.flatMap((group) => group.commands.map((command) => command.id)));
+  const desktopIds = desktop.flatMap((tab) => tab.groups.flatMap((group) => group.commands.map((command) => command.id)));
+  assert.equal(phoneIds.includes('view.hud'), false);
+  assert.equal(phoneIds.includes('view.ribbon'), false);
+  assert.equal(desktopIds.includes('view.hud'), true);
+  assert.equal(desktopIds.includes('view.ribbon'), true);
+});
+
+test('invocation admission is independent from presentation and keeps capability gates', () => {
+  const phoneOnly: CommandDefinition = {
+    ...requireCommand('format.bold'),
+    surfaces: ['phone'],
+    invocationSources: ['human'],
+  };
+  const phone = environment({ shell: 'phone', mode: 'edit' });
+  assert.equal(commandAvailability(phoneOnly, phone, 'phone').enabled, true);
+  assert.equal(commandAvailability(phoneOnly, phone, 'ribbon').visible, false);
+  assert.equal(commandInvocationAvailability(phoneOnly, phone, 'human').enabled, true);
+  assert.equal(commandInvocationAvailability(phoneOnly, phone, 'agent').enabled, false);
+
+  const viewer = environment({
+    shell: 'phone',
+    mode: 'edit',
+    capabilities: { role: 'viewer', edit: false, comment: false, saveVersion: false, manageShares: false },
+  });
+  const denied = commandInvocationAvailability(phoneOnly, viewer, 'human');
+  assert.equal(denied.enabled, false);
+  assert.match(denied.reason ?? '', /cannot edit/i);
+});
+
+test('registry invocation-source metadata preserves palette and bridge boundaries', () => {
+  assert.deepEqual(requireCommand('workspace.command-palette').invocationSources, ['human']);
+  assert.deepEqual(requireCommand('workspace.about').invocationSources, ['keyboard', 'palette', 'agent', 'bridge']);
+  assert.deepEqual(requireCommand('format.bold').invocationSources, ['human', 'keyboard', 'palette', 'agent', 'bridge']);
 });
 
 test('agent tools are generated from the same registry and expose availability', () => {

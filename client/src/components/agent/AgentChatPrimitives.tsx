@@ -1,8 +1,6 @@
 import { forwardRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from 'react';
-import { Button } from '../ui/Button';
-import { IconButton } from '../ui/IconButton';
+import { Button, IconButton, SurfaceMaterial } from '../ui';
 import { Glyph, type GlyphName } from '../glyphs/Glyph';
-import { SurfaceMaterial } from '../ui/SurfaceMaterial';
 
 export function PillSurface({ children, className = '' }: { children: ReactNode; className?: string }) {
   return <div className={`agent-chat-surface surface-material-host ${className}`}><SurfaceMaterial variant="floating" />{children}</div>;

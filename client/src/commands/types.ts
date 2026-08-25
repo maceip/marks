@@ -10,6 +10,7 @@ export type CommandModality = 'edit' | 'split' | 'preview';
 export type RibbonPane = 'editor' | 'preview';
 export type RibbonTask = 'compose' | 'inspect';
 export type CommandSurface = 'ribbon' | 'phone' | 'foldable' | 'mini' | 'palette' | 'quick-access' | 'agent';
+export type RibbonPresentationSurface = Extract<CommandSurface, 'ribbon' | 'phone' | 'foldable'>;
 export type CommandRisk = 'read' | 'write' | 'external' | 'destructive';
 export type CommandCapability = keyof Pick<
   DocumentCapabilities,
@@ -119,7 +120,10 @@ export interface CommandDefinition {
   keyTip?: string;
   shortcut?: string;
   aliases?: readonly string[];
+  /** Where a command may be presented. This is not an execution authority. */
   surfaces: readonly CommandSurface[];
+  /** Which guarded runtime entry points may invoke the command. */
+  invocationSources: readonly CommandSource[];
   modes?: readonly CommandModality[];
   contexts?: readonly EditorContextKind[];
   roles?: readonly (DocumentRole | 'scratch' | 'local')[];

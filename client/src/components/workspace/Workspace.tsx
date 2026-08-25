@@ -1,4 +1,3 @@
-import '../../styles/foundation-tokens.css';
 import '../../styles/browser.css';
 import '../../styles/document-tokens.css';
 import type { EditorView } from '@codemirror/view';
@@ -6,10 +5,10 @@ import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useRef, 
 import type { CollabSession } from '../../collab/types';
 import type { Posture } from '../../lib/posture';
 import {
-  GHOST_SHIFT_START_PERCENT,
   bindPhoneGhostControls,
   formatGhostPercent,
-  type GhostShift,
+  shiftToPercent,
+  type PhoneGhostControl,
 } from '../../lib/phone-ghost';
 import type { UiActionId } from '../../lib/ui-actions';
 import type { ScrollSync } from '../../lib/scroll-sync';
@@ -31,6 +30,7 @@ interface WorkspaceProps {
   session: CollabSession;
   mode: ViewMode;
   posture: Posture;
+  phoneGhost: PhoneGhostControl;
   getView: () => EditorView | null;
   documentTitle?: string;
   onModeChange?: (mode: ViewMode) => void;
@@ -58,6 +58,7 @@ function WorkspaceView({
   session,
   mode,
   posture,
+  phoneGhost: phoneGhostControl,
   onModeChange,
   scrollSync,
   onStats,
@@ -71,13 +72,12 @@ function WorkspaceView({
   const rootRef = useRef<HTMLDivElement>(null);
   const [split, setSplit] = useState(loadSplit);
   const [dragging, setDragging] = useState(false);
-  const phoneGhost = posture.shell === 'phone' && mode === 'edit';
+  const phoneGhost = posture.shell === 'phone' && mode === 'edit' && phoneGhostControl.enabled;
   const [previewWarm, setPreviewWarm] = useState(
-    () => mode !== 'edit' || Boolean(previewRequested) || (posture.shell === 'phone' && mode === 'edit'),
+    () => mode !== 'edit' || Boolean(previewRequested) || phoneGhost,
   );
   const showEditor = mode !== 'preview';
-  const ghostPercentRef = useRef(GHOST_SHIFT_START_PERCENT);
-  const ghostShiftRef = useRef<GhostShift>('start');
+  const ghostPercentRef = useRef(shiftToPercent(phoneGhostControl.shift));
   const suppressSwipeRef = useRef(false);
 
   useEffect(() => {
@@ -123,13 +123,19 @@ function WorkspaceView({
   }, [onModeChange, posture.shell]);
 
   useLayoutEffect(() => {
+    const percent = shiftToPercent(phoneGhostControl.shift);
+    ghostPercentRef.current = percent;
     if (!phoneGhost) return;
     const root = rootRef.current;
     if (!root) return;
-    ghostPercentRef.current = GHOST_SHIFT_START_PERCENT;
-    ghostShiftRef.current = 'start';
-    root.style.setProperty('--phone-ghost-shift', formatGhostPercent(GHOST_SHIFT_START_PERCENT));
-    root.dataset.ghostShift = 'start';
+    root.style.setProperty('--phone-ghost-shift', formatGhostPercent(percent));
+    root.dataset.ghostShift = phoneGhostControl.shift;
+  }, [phoneGhost, phoneGhostControl.shift]);
+
+  useLayoutEffect(() => {
+    if (!phoneGhost) return;
+    const root = rootRef.current;
+    if (!root) return;
     root.dataset.ghostBound = 'true';
     const unbind = bindPhoneGhostControls(root, {
       getPercent: () => ghostPercentRef.current,
@@ -137,18 +143,19 @@ function WorkspaceView({
         ghostPercentRef.current = percent;
       },
       setDragging: () => undefined,
-      setShift: (shift) => {
-        ghostShiftRef.current = shift;
-      },
+      setShift: () => undefined,
+      onShiftCommit: phoneGhostControl.setShift,
       onSuppressSwipe: (suppress) => {
         suppressSwipeRef.current = suppress;
       },
     });
     return () => {
       delete root.dataset.ghostBound;
+      delete root.dataset.ghostShift;
+      root.style.removeProperty('--phone-ghost-shift');
       unbind();
     };
-  }, [phoneGhost]);
+  }, [phoneGhost, phoneGhostControl.setShift]);
 
   const handleView = useCallback(
     (view: EditorView | null) => {

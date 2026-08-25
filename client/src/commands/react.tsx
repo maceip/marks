@@ -9,7 +9,13 @@ import {
 } from 'react';
 import type { MarkdownFormatSample } from '../editor/actions';
 import { executeCommand, type CommandServices } from './executor.ts';
-import { composeRibbon, projectCommands, projectQuickAccess, toAgentTools } from './projection.ts';
+import {
+  composeRibbon,
+  projectCommands,
+  projectQuickAccess,
+  ribbonSurfaceForShell,
+  toAgentTools,
+} from './projection.ts';
 import {
   defaultRibbonProfile,
   readRibbonProfile,
@@ -316,7 +322,16 @@ export function CommandProvider({ documentId, environment: providedEnvironment, 
     raised: activeRaised,
     runs: snapshot.runs,
     receipts: snapshot.receipts,
-    ribbon: composeRibbon(environment, { expanded: profile.expanded, agentRaised: activeRaised }),
+    ribbon: composeRibbon(environment, {
+      surface: ribbonSurfaceForShell(environment.shell),
+      expanded: profile.expanded,
+      agentRaised: activeRaised,
+    }),
+    ribbonFor: (surface, expanded = profile.expanded) => composeRibbon(environment, {
+      surface,
+      expanded,
+      agentRaised: activeRaised,
+    }),
     commands: (surface) => !AGENT_CHAT_ENABLED && surface === 'agent'
       ? []
       : projectCommands(environment, surface, { agentRaised: activeRaised }),

@@ -10,7 +10,7 @@ import {
 import { documentShareUrl } from '../../lib/share-link';
 import { loadServiceApi } from '../../lib/service-api.ts';
 import { ServiceError, copyForUnknownFailure } from '../../lib/service-errors';
-import { Icon, icons } from '../ui/Icon';
+import { Icon } from '../ui';
 
 type GrantRole = Exclude<DocumentRole, 'owner'>;
 
@@ -150,7 +150,7 @@ export function ShareDialog({ documentId, title, publicPage, capabilities, onNot
   return (
     <div className="share-dialog">
       <div className="local-notice">
-        <Icon path={serviceOwner || publicCollaborativePage ? icons.check : icons.share} size={15} />
+        <Icon name={serviceOwner || publicCollaborativePage ? 'check' : 'share'} size={15} />
         <span>
           <strong>{publicCollaborativePage ? 'Public collaboration' : serviceOwner ? 'Durable access control' : 'Sharing unavailable'}</strong>
           {serviceOwner ? 'Changes apply to the Rust ACL and live rooms immediately.' : unavailable}
@@ -223,7 +223,7 @@ export function ShareDialog({ documentId, title, publicPage, capabilities, onNot
               : 'The plain page address carries no bearer token; existing access rules still apply.'}
           </small>
         </span>
-        <button type="button" className="button primary" onClick={() => void copyPage()}><Icon path={icons.link} /> Copy page address</button>
+        <button type="button" className="button primary" onClick={() => void copyPage()}><Icon name="link" /> Copy page address</button>
       </div>
     </div>
   );

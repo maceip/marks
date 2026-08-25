@@ -1,6 +1,4 @@
-import { Icon, icons } from '../ui/Icon';
-import { MarksMark } from '../ui/MarksMark';
-import { IconButton } from '../ui/IconButton';
+import { Icon, IconButton, MarksMark } from '../ui';
 
 export interface ToastMessage {
   id: string;
@@ -20,13 +18,13 @@ export function ToastRegion({ toasts, onDismiss }: ToastRegionProps) {
       {toasts.map((toast) => (
         <div key={toast.id} className={`toast toast-${toast.tone ?? 'neutral'}`}>
           <span className="toast-icon" aria-hidden="true">
-            {toast.tone === 'success' ? <Icon path={icons.check} size={14} /> : <MarksMark size={17} />}
+            {toast.tone === 'success' ? <Icon name="check" size={14} /> : <MarksMark size={17} />}
           </span>
           <div className="toast-copy">
             <strong>{toast.title}</strong>
             {toast.detail && <span>{toast.detail}</span>}
           </div>
-          <IconButton label="Dismiss notification" icon={<Icon path={icons.close} size={13} />} onClick={() => onDismiss(toast.id)} />
+          <IconButton label="Dismiss notification" icon={<Icon name="close" size={13} />} onClick={() => onDismiss(toast.id)} />
         </div>
       ))}
     </div>

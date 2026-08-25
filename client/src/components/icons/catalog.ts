@@ -11,6 +11,7 @@ export const ICON_NAMES = [
   'summarize', 'continue', 'expand', 'compose', 'alignLeft', 'alignCenter', 'alignRight',
   'row', 'column', 'rect', 'ellipse', 'diamond', 'arrow', 'bubble', 'file', 'share',
   'search', 'more', 'sidebar', 'close', 'check', 'document', 'bolt', 'chevron',
+  'startTemplate', 'githubReadme', 'meetingNotes', 'importWebsite', 'ghostOverlay',
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -30,6 +31,8 @@ export const ICON_TONE: Record<IconName, IconTone> = {
   ellipse: 'teal', diamond: 'teal', arrow: 'teal', bubble: 'teal', file: 'navy', share: 'blue',
   search: 'navy', more: 'slate', sidebar: 'navy', close: 'slate', check: 'green',
   document: 'navy', bolt: 'amber', chevron: 'slate',
+  startTemplate: 'green', githubReadme: 'navy', meetingNotes: 'blue',
+  importWebsite: 'green', ghostOverlay: 'blue',
 };
 
 /** 24×24 stroke marks placed on the isometric face. */
@@ -111,6 +114,11 @@ export const ICON_MARKS: Record<IconName, string> = {
   document: 'M6 3h8l4 4v14H6zM14 3v4h4',
   bolt: 'M13 2L4 14h7l-1 8 9-12h-7z',
   chevron: 'M9 6l6 6-6 6',
+  startTemplate: 'M4 4h13v16H4zM7 8h7M7 12h5M16 13l6 4-6 4z',
+  githubReadme: 'M5 4h14v16H5zM8 8h8M8 12h8M8 16h5',
+  meetingNotes: 'M5 5h14v15H5zM8 3v4M16 3v4M8 11l2 2 3-4M14 12h3',
+  importWebsite: 'M4 5h16v14H4zM4 9h16M12 11v7M9 15l3 3 3-3',
+  ghostOverlay: 'M5 5h12v14H5zM9 8h10v11H9zM12 13h.01M16 13h.01M12 17c1 1 3 1 4 0',
 };
 
 export const icons = Object.fromEntries(ICON_NAMES.map((name) => [name, name])) as Record<IconName, IconName>;

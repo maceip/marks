@@ -94,3 +94,26 @@ test('agent arguments are schema validated before the executor', async () => {
   assert.equal((await extra.finished).status, 'failed');
   assert.equal(calls, 0);
 });
+
+test('runtime source admission no longer depends on a pretend presentation surface', async () => {
+  let calls = 0;
+  const runtime = new CommandRuntime({
+    environment,
+    execute: async () => { calls += 1; return { ok: true }; },
+  });
+
+  const deniedHuman = await runtime.invoke('workspace.about', { source: 'human' });
+  assert.equal(deniedHuman.status, 'failed');
+
+  const palette = await runtime.invoke('workspace.about', { source: 'palette' });
+  assert.equal(palette.status, 'succeeded');
+  assert.equal(palette.source, 'palette');
+
+  const bridge = await runtime.invoke('format.bold', { source: 'bridge' });
+  assert.equal(bridge.status, 'succeeded');
+  assert.equal(bridge.source, 'bridge');
+
+  const deniedBridge = await runtime.invoke('workspace.command-palette', { source: 'bridge' });
+  assert.equal(deniedBridge.status, 'failed');
+  assert.equal(calls, 2);
+});

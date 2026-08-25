@@ -101,7 +101,7 @@
 .benchmark-receipt-meta span {
   padding: 4px 8px;
   border: 1px solid var(--color-border-default);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--color-bg-sunken);
   color: var(--color-fg-subtle);
   font-family: var(--font-family-mono);
