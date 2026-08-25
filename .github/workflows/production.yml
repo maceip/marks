@@ -336,6 +336,14 @@ jobs:
             exit 1
           }
 
+          # Releases created before the v2 product-build receipt use the Git
+          # revision itself as `current` and have no top-level `revision:`
+          # field. Preserve that trusted comparison base; the reachability
+          # check below still rejects an unknown or malformed revision.
+          if [[ -z "$current_revision" && "$current" =~ ^[0-9a-f]{40}$ ]]; then
+            current_revision=$current
+          fi
+
           [[ "$REQUESTED_VARIANT" == stable && "$REQUESTED_PLAN_SHA256" =~ ^[0-9a-f]{64}$ ]]
           profile=manual-full
           runtime_changed=true

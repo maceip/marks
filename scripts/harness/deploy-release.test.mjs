@@ -28,6 +28,17 @@ function runBash(script, args = [], options = {}) {
   });
 }
 
+function workflowStepScript(workflow, stepName) {
+  const stepStart = workflow.indexOf(`- name: ${stepName}`);
+  assert.notEqual(stepStart, -1, `workflow step not found: ${stepName}`);
+  const nextStep = workflow.indexOf('\n      - name:', stepStart + 1);
+  const step = workflow.slice(stepStart, nextStep === -1 ? undefined : nextStep);
+  const runMarker = '        run: |\n';
+  const runStart = step.indexOf(runMarker);
+  assert.notEqual(runStart, -1, `workflow run block not found: ${stepName}`);
+  return step.slice(runStart + runMarker.length).replace(/^ {10}/gmu, '');
+}
+
 test('operator entry point documents deploy, status, and one-command rollback', () => {
   const result = runBash(localScript, ['--help']);
   assert.equal(result.status, 0, result.stderr);
@@ -88,6 +99,11 @@ test('GitHub production deploy follows only successful same-repository main CI',
   assert.match(workflow, /node scripts\/ci-impact\.mjs/);
   assert.match(workflow, /steps\.impact\.outputs\.should_deploy == 'true'/);
   assert.match(workflow, /Skip application deployment when no runtime artifact changed/);
+  assert.match(
+    workflow,
+    /if \[\[ -z "\$current_revision" && "\$current" =~ \^\[0-9a-f\]\{40\}\$ \]\]; then\s+current_revision=\$current\s+fi[\s\S]*git cat-file -e "\$\{current_revision\}\^\{commit\}"/,
+    'revision-only v1 releases remain valid comparison bases only when Git can resolve them',
+  );
   assert.match(workflow, /^\s*environment:\s*\n\s*name: Production$/m);
   assert.match(
     workflow,
@@ -101,6 +117,80 @@ test('GitHub production deploy follows only successful same-repository main CI',
   assert.match(workflow, /^permissions: \{\}$/m);
   assert.match(workflow, /^\s{4}permissions:\s*\n\s{6}contents: read\s*\n(?:\s{6}#[^\n]*\n)+\s{6}actions: write$/m);
   assert.match(workflow, /^\s*persist-credentials: false$/m);
+});
+
+test('production impact accepts only a reachable revision-only v1 comparison base', () => {
+  const workflow = readFileSync(productionWorkflow, 'utf8');
+  const impactScript = workflowStepScript(workflow, 'Determine deployed-to-head runtime impact');
+  const fixture = realpathSync(mkdtempSync(resolve(tmpdir(), 'marks-v1-impact-test.')));
+  try {
+    const baseResult = spawnSync('git', ['rev-parse', 'HEAD^'], { cwd: root, encoding: 'utf8' });
+    assert.equal(baseResult.status, 0, baseResult.stderr);
+    const base = baseResult.stdout.trim();
+    const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim();
+    const fakeSsh = resolve(fixture, 'ssh');
+    const githubOutput = resolve(fixture, 'github-output');
+    writeFileSync(fakeSsh, `#!/usr/bin/env bash
+cat <<'EOF'
+current:  ${base}
+previous:
+{"revision":"${base}","schema":"marks-release.v1"}
+EOF
+`);
+    writeFileSync(githubOutput, '');
+    chmodSync(fakeSsh, 0o755);
+
+    const result = spawnSync('/bin/bash', ['-c', impactScript], {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${fixture}:${process.env.PATH}`,
+        EVENT_NAME: 'workflow_run',
+        REVISION: head,
+        REQUESTED_VARIANT: 'stable',
+        REQUESTED_PLAN_SHA256: 'b'.repeat(64),
+        RUNNER_TEMP: fixture,
+        GITHUB_RUN_ID: '1',
+        GITHUB_RUN_ATTEMPT: '1',
+        GITHUB_OUTPUT: githubOutput,
+      },
+    });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const outputs = readFileSync(githubOutput, 'utf8');
+    assert.match(outputs, new RegExp(`^current_revision=${base}$`, 'm'));
+    assert.match(outputs, /^should_deploy=true$/m);
+    assert.match(outputs, /^reasons=.*product-build-identity-changed$/m);
+
+    const unknown = 'f'.repeat(40);
+    writeFileSync(fakeSsh, `#!/usr/bin/env bash
+printf '%s\n' 'current:  ${unknown}' '{"revision":"${unknown}","schema":"marks-release.v1"}'
+`);
+    writeFileSync(githubOutput, '');
+    const rejected = spawnSync('/bin/bash', ['-c', impactScript], {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${fixture}:${process.env.PATH}`,
+        EVENT_NAME: 'workflow_run',
+        REVISION: head,
+        REQUESTED_VARIANT: 'stable',
+        REQUESTED_PLAN_SHA256: 'b'.repeat(64),
+        RUNNER_TEMP: fixture,
+        GITHUB_RUN_ID: '2',
+        GITHUB_RUN_ATTEMPT: '1',
+        GITHUB_OUTPUT: githubOutput,
+      },
+    });
+    assert.equal(rejected.status, 1, `${rejected.stdout}\n${rejected.stderr}`);
+    assert.match(
+      rejected.stderr,
+      new RegExp(`current release is neither a reachable Git revision nor legacy: ${unknown}`),
+    );
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
 });
 
 test('CI proves shipping and independent feature variants from canonical isolated cuts', () => {
