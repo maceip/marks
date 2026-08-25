@@ -1,7 +1,7 @@
 # Version updates are grouped so routine weeks produce at most one pull
 # request per ecosystem; majors stay individual. Green updates are merged
-# and deployed automatically by dependabot-merge.yml — a bump that fails CI
-# simply stays open as the signal that it needs a human.
+# and deployed automatically by dependabot-merge.yml. Failed bumps become
+# durable remediation issues and are closed instead of accumulating red PRs.
 version: 2
 updates:
   - package-ecosystem: cargo
@@ -9,6 +9,14 @@ updates:
     schedule:
       interval: weekly
     groups:
+      # hmac and sha2 share the RustCrypto digest trait family. Their 0.13/0.11
+      # releases demonstrated that either major in isolation is uncompilable,
+      # so keep future breaking crypto migrations in one tested pull request.
+      rustcrypto-digest:
+        patterns:
+          - hmac
+          - sha2
+        update-types: [major]
       cargo-compatible:
         update-types: [minor, patch]
   - package-ecosystem: npm
