@@ -114,3 +114,74 @@ async fn lost_create_response_replays_one_slug_after_restart_and_rebinding_confl
     assert_eq!(conflict.status(), 409);
     second.stop().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn duplicate_retries_return_one_copy_after_restart() {
+    let db_path = temp_db("document-duplicate-idempotency");
+    let first = TestServer::spawn(db_path.clone()).await;
+    let http = reqwest::Client::new();
+    let scratch: Value = http
+        .post(format!("{}/v1/auth/scratch", first.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let authority = format!(
+        "MarksScratch {}.{}",
+        scratch["scratchId"].as_str().unwrap(),
+        scratch["capability"].as_str().unwrap()
+    );
+    let source: Value = http
+        .post(format!("{}/v1/documents", first.base))
+        .header("Authorization", &authority)
+        .json(&json!({ "title": "Source", "markdown": "# Source\n" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let source_id = source["document"]["id"].as_str().unwrap();
+    let request_id = "55555555-5555-4555-8555-555555555555";
+    let duplicated = http
+        .post(format!("{}/v1/documents/{source_id}/duplicate", first.base))
+        .header("Authorization", &authority)
+        .json(&json!({ "requestId": request_id }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(duplicated.status(), 201);
+    let duplicated: Value = duplicated.json().await.unwrap();
+    let duplicate_id = duplicated["document"]["id"].as_str().unwrap().to_owned();
+    first.stop().await;
+
+    let second = TestServer::spawn(db_path).await;
+    let replay = http
+        .post(format!(
+            "{}/v1/documents/{source_id}/duplicate",
+            second.base
+        ))
+        .header("Authorization", &authority)
+        .json(&json!({ "requestId": request_id }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), 200);
+    let replay: Value = replay.json().await.unwrap();
+    assert_eq!(replay["document"]["id"], duplicate_id);
+    assert_eq!(replay["replayed"], true);
+
+    let catalog: Value = http
+        .get(format!("{}/v1/documents", second.base))
+        .header("Authorization", &authority)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(catalog["documents"].as_array().unwrap().len(), 2);
+    second.stop().await;
+}

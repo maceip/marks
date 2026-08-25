@@ -263,15 +263,7 @@ pub async fn create(
     if chars > app.limits.max_document_units {
         return Err(ApiError::bad_request("document is too large"));
     }
-    if body.request_id.as_deref().is_some_and(|request_id| {
-        request_id.is_empty()
-            || request_id.len() > 128
-            || !request_id.bytes().all(|byte| {
-                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
-            })
-    }) {
-        return Err(ApiError::bad_request("invalid request id"));
-    }
+    validate_create_request_id(body.request_id.as_deref())?;
     let request_hash = body
         .request_id
         .as_ref()
@@ -418,6 +410,26 @@ fn create_request_hash(title: Option<&str>, markdown: &str) -> [u8; 32] {
     hash.finalize().into()
 }
 
+fn duplicate_request_hash(document_id: &DocumentId) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(b"marks-document-duplicate-v1\0");
+    hash.update(document_id.as_str().as_bytes());
+    hash.finalize().into()
+}
+
+fn validate_create_request_id(request_id: Option<&str>) -> ApiResult<()> {
+    if request_id.is_some_and(|request_id| {
+        request_id.is_empty()
+            || request_id.len() > 128
+            || !request_id.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+            })
+    }) {
+        return Err(ApiError::bad_request("invalid request id"));
+    }
+    Ok(())
+}
+
 fn load_create_replay(
     conn: &Connection,
     caller: &Caller,
@@ -521,16 +533,37 @@ fn require_owner(
     }
 }
 
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateBody {
+    pub request_id: Option<String>,
+}
+
 pub async fn duplicate(
     State(app): State<Arc<App>>,
     Path(id): Path<String>,
     headers: HeaderMap,
+    body: Option<Json<DuplicateBody>>,
 ) -> ApiResult<Response> {
     let caller = caller(&app, &headers)?;
     if matches!(caller, Caller::Principal(_)) {
         guard::require_same_origin(&app, &headers)?;
     }
     let document_id = DocumentId::new(id).map_err(|_| ApiError::not_found())?;
+    let body = body.map(|Json(body)| body).unwrap_or_default();
+    validate_create_request_id(body.request_id.as_deref())?;
+    let request_hash = body
+        .request_id
+        .as_ref()
+        .map(|_| duplicate_request_hash(&document_id));
+    if let (Some(request_id), Some(request_hash)) =
+        (body.request_id.as_deref(), request_hash.as_ref())
+        && let Some(row) = app
+            .db
+            .read(|conn| load_create_replay(conn, &caller, request_id, request_hash))?
+    {
+        return Ok(Json(json!({ "document": meta(&row), "replayed": true })).into_response());
+    }
     let text = document_text(&app, &caller, &document_id).await?;
 
     let mut seed = esbt::Document::new(
@@ -549,7 +582,13 @@ pub async fn duplicate(
 
     let now = now_ms();
     let new_document = new_id("document");
-    let row = app.db.tx(|conn| {
+    let (row, replayed) = app.db.tx(|conn| {
+        if let (Some(request_id), Some(request_hash)) =
+            (body.request_id.as_deref(), request_hash.as_ref())
+            && let Some(row) = load_create_replay(conn, &caller, request_id, request_hash)?
+        {
+            return Ok((row, true));
+        }
         let source = load_live_document(conn, &document_id)?;
         resolve_caller_role(conn, &caller, &source)?;
         let (scratch_id, owner_id) = match &caller {
@@ -559,8 +598,9 @@ pub async fn duplicate(
         conn.execute(
             "INSERT INTO documents
                 (id, scratch_id, owner_principal_id, title, title_explicit, engine, chars,
-                 auth_epoch, snapshot, snapshot_revision, created_at, updated_at, public_edit)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'esbt', ?6, 1, ?7, 0, ?8, ?8, ?9)",
+                 auth_epoch, snapshot, snapshot_revision, created_at, updated_at, public_edit,
+                 create_request_id, create_request_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'esbt', ?6, 1, ?7, 0, ?8, ?8, ?9, ?10, ?11)",
             params![
                 new_document,
                 scratch_id,
@@ -571,6 +611,8 @@ pub async fn duplicate(
                 snapshot,
                 store::ms(now),
                 i64::from(matches!(&caller, Caller::Scratch(_))),
+                body.request_id,
+                request_hash.as_ref().map(<[u8; 32]>::as_slice),
             ],
         )?;
         let id = DocumentId::new(new_document.clone()).map_err(|_| ApiError::internal())?;
@@ -587,9 +629,18 @@ pub async fn duplicate(
                 ],
             )?;
         }
-        load_live_document(conn, &id)
+        Ok((load_live_document(conn, &id)?, false))
     })?;
-    Ok((StatusCode::CREATED, Json(json!({ "document": meta(&row) }))).into_response())
+    let status = if replayed {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    };
+    Ok((
+        status,
+        Json(json!({ "document": meta(&row), "replayed": replayed })),
+    )
+        .into_response())
 }
 
 pub async fn delete(
