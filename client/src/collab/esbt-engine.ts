@@ -10,16 +10,16 @@ import { EditorView, ViewPlugin, keymap } from '@codemirror/view';
 import {
   readNetworkQuality,
   snapshotFetchTimeoutMs,
-  TabChannel,
-  tabChannelName,
-} from '../browser';
-import { roomTicketProtocols } from '../auth/room-access';
+} from '../browser/network.ts';
+import { PERSIST_LOCK_TIMEOUT_MS } from '../browser/persist-lock.ts';
+import { TabChannel, tabChannelName } from '../browser/tab-sync.ts';
+import { roomTicketProtocols } from '../auth/room-access.ts';
 import {
   ABOUT_DOCUMENT,
   aboutMarkdownNeedsRefresh,
   isAboutDocument,
-} from '../content/about';
-import { readLocalDocumentText, seedAboutDocumentText, writeLocalDocumentText } from '../demo/workspace';
+} from '../content/about.ts';
+import { readLocalDocumentText, seedAboutDocumentText, writeLocalDocumentText } from '../demo/workspace.ts';
 import {
   acknowledgePendingMutation,
   appendPendingMutation,
@@ -30,11 +30,11 @@ import {
   shouldPruneHistory,
   type JournalMutation,
   type ReplicaJournalRecord,
-} from './journal';
-import { HEARTBEAT_MS, esbtPresence } from './presence';
-import { PresenceActivityController } from './presence-activity-controller';
-import { PresenceStore } from './presence-store';
-import { EDITOR_CHUNK_UNITS } from './profile';
+} from './journal.ts';
+import { HEARTBEAT_MS, esbtPresence } from './presence.ts';
+import { PresenceActivityController } from './presence-activity-controller.ts';
+import { PresenceStore } from './presence-store.ts';
+import { EDITOR_CHUNK_UNITS } from './profile.ts';
 import {
   MSG_EPHEMERAL,
   MSG_PRESENCE_DELTA,
@@ -51,7 +51,7 @@ import {
   frame,
   randomMutationId,
   toBase64Url,
-} from './protocol';
+} from './protocol.ts';
 import type {
   CollabSession,
   ConnectionStatus,
@@ -67,7 +67,7 @@ import type {
   SessionOptions,
   StableTextRange,
   TextEdit,
-} from './types';
+} from './types.ts';
 import {
   ESBT_ERROR,
   EsbtDocument,
@@ -81,7 +81,7 @@ import {
   loadSharedEsbtRuntime,
   marksSiteToEngine,
   userMessageForError,
-} from './wasm';
+} from './wasm/index.ts';
 
 const EPHEMERAL_TIMEOUT_MS = 30_000;
 const LOCAL_SAVE_DEBOUNCE_MS = 800;
@@ -92,6 +92,7 @@ const CLOSE_AUTHORITY_CHANGED = 4401;
 const MAX_VV_QUERY_BYTES = 4_096;
 const UNDO_MERGE_MS = 500;
 const MARKDOWN_CHECKPOINT_MS = 220;
+export const FINAL_CHECKPOINT_RELEASE_MS = PERSIST_LOCK_TIMEOUT_MS + 250;
 
 const userKey = (siteId: string) => `${siteId}-cm-user`;
 const fromCrdt = Annotation.define<boolean>();
@@ -188,6 +189,7 @@ export class EsbtEngine implements CollabSession {
     timer: number;
   }>();
   private storageError: EngineErrorNotice | null = null;
+  private storageFatal = false;
   private historyMaintenance: Promise<void> | null = null;
 
   static async open(options: SessionOptions): Promise<EsbtEngine> {
@@ -309,7 +311,7 @@ export class EsbtEngine implements CollabSession {
   }
 
   private redo(): boolean {
-    if (!this.doc?.canRedo) return true;
+    if (!this.capabilities().edit || !this.doc?.canRedo) return true;
     this.doc.redo({ origin: 'redo' });
     return true;
   }
@@ -522,7 +524,9 @@ export class EsbtEngine implements CollabSession {
           key: 'Mod-z',
           preventDefault: true,
           run: () => {
-            if (this.doc?.canUndo) this.doc.undo({ origin: 'undo' });
+            if (this.capabilities().edit && this.doc?.canUndo) {
+              this.doc.undo({ origin: 'undo' });
+            }
             return true;
           },
         },
@@ -646,6 +650,11 @@ export class EsbtEngine implements CollabSession {
 
   whenDurable(timeoutMs = 15_000): Promise<void> {
     if (this.isDurable()) return Promise.resolve();
+    if (this.storageFatal) {
+      return Promise.reject(
+        new Error(this.storageError?.message ?? 'offline storage is unavailable for this document'),
+      );
+    }
     if (this.destroyed) return Promise.reject(new Error('document session is closed'));
     return new Promise<void>((resolve, reject) => {
       const waiter = {
@@ -672,22 +681,31 @@ export class EsbtEngine implements CollabSession {
   }
 
   capabilities(): DocumentCapabilities {
+    let capabilities: DocumentCapabilities;
     switch (this.permissionRole) {
       case 'local':
-        return { role: 'local', edit: true, comment: true, saveVersion: true, manageShares: false };
+        capabilities = { role: 'local', edit: true, comment: true, saveVersion: true, manageShares: false };
+        break;
       case 'scratch':
-        return { role: 'scratch', edit: true, comment: false, saveVersion: false, manageShares: false };
+        capabilities = { role: 'scratch', edit: true, comment: false, saveVersion: false, manageShares: false };
+        break;
       case 'owner':
-        return { role: 'owner', edit: true, comment: true, saveVersion: true, manageShares: true };
+        capabilities = { role: 'owner', edit: true, comment: true, saveVersion: true, manageShares: true };
+        break;
       case 'editor':
-        return { role: 'editor', edit: true, comment: true, saveVersion: true, manageShares: false };
+        capabilities = { role: 'editor', edit: true, comment: true, saveVersion: true, manageShares: false };
+        break;
       case 'commenter':
-        return { role: 'commenter', edit: false, comment: true, saveVersion: false, manageShares: false };
+        capabilities = { role: 'commenter', edit: false, comment: true, saveVersion: false, manageShares: false };
+        break;
       case 'viewer':
-        return { role: 'viewer', edit: false, comment: false, saveVersion: false, manageShares: false };
+        capabilities = { role: 'viewer', edit: false, comment: false, saveVersion: false, manageShares: false };
+        break;
       default:
-        return { role: null, edit: false, comment: false, saveVersion: false, manageShares: false };
+        capabilities = { role: null, edit: false, comment: false, saveVersion: false, manageShares: false };
+        break;
     }
+    return this.storageFatal ? { ...capabilities, edit: false } : capabilities;
   }
 
   private applyTicketPermissions(ticket: RoomTicket): void {
@@ -699,9 +717,13 @@ export class EsbtEngine implements CollabSession {
   private applyPermissionRole(next: DocumentCapabilities['role']): void {
     if (next === this.permissionRole) return;
     this.permissionRole = next;
+    this.refreshEditorEditable();
+    if (this.doc) void this.checkpointJournal();
+  }
+
+  private refreshEditorEditable(): void {
     const editable = setEditorEditable.of(this.capabilities().edit);
     for (const view of this.editorViews) view.dispatch({ effects: editable });
-    if (this.doc) void this.checkpointJournal();
   }
 
   peers(): Peer[] {
@@ -778,6 +800,7 @@ export class EsbtEngine implements CollabSession {
           this.recordStorageError(
             'The outdated welcome-page cache could not be removed. A fresh copy is open for this visit.',
             deleteError,
+            false,
           );
         });
         console.warn('marks: discarded an incompatible built-in welcome snapshot', error);
@@ -853,7 +876,7 @@ export class EsbtEngine implements CollabSession {
   }
 
   private async loadServerSnapshot(): Promise<void> {
-    if (!this.access || !this.doc) return;
+    if (!this.access || !this.doc || this.storageFatal) return;
     const quality = readNetworkQuality();
     const hasLocal = this.getText().length > 0 || this.counters.snapshotBytes > 0;
     const timeoutMs = snapshotFetchTimeoutMs(quality, hasLocal);
@@ -877,7 +900,13 @@ export class EsbtEngine implements CollabSession {
   }
 
   private connect(): void {
-    if (!this.access || this.destroyed || this.socket || this.admissionAbort) return;
+    if (
+      !this.access ||
+      this.destroyed ||
+      this.storageFatal ||
+      this.socket ||
+      this.admissionAbort
+    ) return;
     if (this.pendingTicket) {
       this.openSocket(this.pendingTicket);
       this.pendingTicket = null;
@@ -898,20 +927,26 @@ export class EsbtEngine implements CollabSession {
         this.marksSiteId || undefined,
         controller.signal,
       );
-      if (this.destroyed || controller.signal.aborted || this.admissionAbort !== controller) return;
+      if (
+        this.destroyed ||
+        this.storageFatal ||
+        controller.signal.aborted ||
+        this.admissionAbort !== controller
+      ) return;
       this.admissionAbort = null;
       this.marksSiteId = ticket.siteId;
       this.applyTicketPermissions(ticket);
       this.openSocket(ticket);
     } catch (error) {
       if (this.admissionAbort === controller) this.admissionAbort = null;
-      if (this.destroyed || controller.signal.aborted) return;
+      if (this.destroyed || this.storageFatal || controller.signal.aborted) return;
       this.setStatus('offline');
       if (shouldRetryAdmission(error)) this.scheduleReconnect();
     }
   }
 
   private openSocket(ticket: RoomTicket): void {
+    if (this.destroyed || this.storageFatal) return;
     // A presence instance is scoped to exactly one WebSocket lifecycle. This
     // happens before construction so even a failed handshake cannot reuse it.
     this.ephemeral.beginConnectionLifecycle();
@@ -943,7 +978,7 @@ export class EsbtEngine implements CollabSession {
     if (this.socket !== socket) return;
     this.socket = null;
     this.serverSynced = false;
-    if (this.destroyed) return;
+    if (this.destroyed || this.storageFatal) return;
 
     this.setStatus('offline');
     if (code === CLOSE_DOCUMENT_DELETED) {
@@ -960,7 +995,7 @@ export class EsbtEngine implements CollabSession {
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectTimer !== null || this.destroyed || !this.access) return;
+    if (this.reconnectTimer !== null || this.destroyed || this.storageFatal || !this.access) return;
     const jitter = Math.random() * 0.3 + 0.85;
     const delay = Math.min(this.reconnectDelay * jitter, RECONNECT_MAX_MS);
     this.reconnectDelay = Math.min(this.reconnectDelay * 2, RECONNECT_MAX_MS);
@@ -971,6 +1006,7 @@ export class EsbtEngine implements CollabSession {
   }
 
   private handleOnline = (): void => {
+    if (this.storageFatal) return;
     this.reconnectDelay = RECONNECT_MIN_MS;
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
@@ -999,7 +1035,7 @@ export class EsbtEngine implements CollabSession {
   };
 
   private importRemote(bytes: Uint8Array): void {
-    if (!this.doc || bytes.byteLength === 0) return;
+    if (!this.doc || this.storageFatal || bytes.byteLength === 0) return;
     try {
       this.doc.import(bytes);
     } catch (error) {
@@ -1016,7 +1052,7 @@ export class EsbtEngine implements CollabSession {
   }
 
   private importFromTab(bytes: Uint8Array, kind: 'update' | 'snapshot'): void {
-    if (this.destroyed || bytes.byteLength === 0) return;
+    if (this.destroyed || this.storageFatal || bytes.byteLength === 0) return;
     try {
       this.doc?.import(bytes);
     } catch (error) {
@@ -1028,10 +1064,10 @@ export class EsbtEngine implements CollabSession {
   }
 
   private scheduleTabSnapshot(): void {
-    if (this.snapshotReplyTimer !== null || this.destroyed || !this.doc) return;
+    if (this.snapshotReplyTimer !== null || this.destroyed || this.storageFatal || !this.doc) return;
     this.snapshotReplyTimer = window.setTimeout(() => {
       this.snapshotReplyTimer = null;
-      if (this.destroyed || !this.doc) return;
+      if (this.destroyed || this.storageFatal || !this.doc) return;
       try {
         this.tabs.sendSnapshot(this.doc.exportFullSnapshot());
       } catch {
@@ -1051,6 +1087,7 @@ export class EsbtEngine implements CollabSession {
   }
 
   private onMessage(raw: ArrayBuffer): void {
+    if (this.storageFatal) return;
     const data = new Uint8Array(raw);
     if (data.length === 0) return;
     this.counters.received += data.byteLength;
@@ -1093,7 +1130,7 @@ export class EsbtEngine implements CollabSession {
   }
 
   private sendMissingSince(encodedVersion: Uint8Array): void {
-    if (!this.doc) return;
+    if (!this.doc || this.storageFatal) return;
     if (this.pendingMutations.size > 0) {
       this.sendPendingMutations();
       return;
@@ -1118,7 +1155,7 @@ export class EsbtEngine implements CollabSession {
   }
 
   private synchronizeWithServer(): void {
-    if (!this.serverSynced) return;
+    if (!this.serverSynced || this.storageFatal) return;
     if (this.pendingMutations.size > 0) {
       this.setStatus('saving');
       this.sendPendingMutations();
@@ -1129,6 +1166,7 @@ export class EsbtEngine implements CollabSession {
   }
 
   private sendPendingMutations(): void {
+    if (this.storageFatal) return;
     for (const mutation of this.pendingMutations.values()) this.sendMutation(mutation);
   }
 
@@ -1137,6 +1175,7 @@ export class EsbtEngine implements CollabSession {
   }
 
   private handleCommitted(payload: Uint8Array): void {
+    if (this.storageFatal) return;
     let receipt;
     try {
       receipt = decodeCommitted(payload);
@@ -1145,7 +1184,6 @@ export class EsbtEngine implements CollabSession {
       this.socket?.close(1002, 'invalid commit receipt');
       return;
     }
-    this.pendingMutations.delete(receipt.id);
     this.lastAckedVersion = receipt.version;
     this.lastServerVV = receipt.version;
     if (receipt.revision > this.committedRevision) this.committedRevision = receipt.revision;
@@ -1161,21 +1199,24 @@ export class EsbtEngine implements CollabSession {
         () => doc.exportFullSnapshot(),
       )
         .then((record) => {
+          this.pendingMutations.delete(receipt.id);
           this.localSaved = true;
           this.counters.snapshotBytes = record.snapshot.byteLength;
+          if (this.destroyed || this.storageFatal) return;
+          void this.maybePrune(receipt.version);
+          if (this.pendingMutations.size === 0) this.sendMissingSince(receipt.version);
+          else if (this.serverSynced) this.setStatus('saving');
+          this.resolveDurabilityWaiters();
         })
         .catch((error) => {
           this.localSaved = false;
           this.recordStorageError('The server saved this edit, but its offline checkpoint failed.', error);
         });
     }
-    void this.maybePrune(receipt.version);
-    if (this.pendingMutations.size === 0) this.sendMissingSince(receipt.version);
-    else if (this.serverSynced) this.setStatus('saving');
-    this.resolveDurabilityWaiters();
   }
 
   private send(tag: number, payload: Uint8Array): void {
+    if (this.storageFatal) return;
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN || payload.byteLength === 0) return;
     const message = frame(tag, payload);
@@ -1184,6 +1225,7 @@ export class EsbtEngine implements CollabSession {
   }
 
   private scheduleLocalSave(): void {
+    if (this.storageFatal) return;
     if (this.saveTimer !== null) clearTimeout(this.saveTimer);
     this.saveTimer = window.setTimeout(() => {
       this.saveTimer = null;
@@ -1210,7 +1252,7 @@ export class EsbtEngine implements CollabSession {
     kind: 'update' | 'snapshot',
     broadcastTab: boolean,
   ): Promise<void> {
-    if (!this.doc || bytes.byteLength === 0) return;
+    if (!this.doc || this.storageFatal || bytes.byteLength === 0) return;
     const mutation: JournalMutation = {
       id: randomMutationId(),
       kind,
@@ -1226,12 +1268,15 @@ export class EsbtEngine implements CollabSession {
     } catch (error) {
       this.localSaved = false;
       this.recordStorageError('This edit could not be written to the offline journal.', error);
+      // The network and other tabs must never observe an edit that this client
+      // could not first make restart-complete in its durable pending tail.
+      return;
     }
 
     // Teardown queues a final checkpoint after every persistence request
     // already made in this isolate. Do not start transport/history work behind
     // that barrier; this pending mutation is itself restart-complete.
-    if (this.destroyed) return;
+    if (this.destroyed || this.storageFatal) return;
 
     if (broadcastTab) {
       if (kind === 'update') this.tabs.sendUpdate(bytes);
@@ -1283,7 +1328,7 @@ export class EsbtEngine implements CollabSession {
   }
 
   private async checkpointJournal(): Promise<void> {
-    if (!this.doc) return;
+    if (!this.doc || this.storageFatal) return;
     const doc = this.doc;
     try {
       const record = await checkpointReplicaJournal(this.docId, this.emptyRecord(), () =>
@@ -1307,7 +1352,7 @@ export class EsbtEngine implements CollabSession {
   private compactDurableLocalHistory(): Promise<void> {
     return this.runHistoryMaintenance(async () => {
       const doc = this.doc;
-      if (!doc || doc.retainedOperations <= JOURNAL_RETAINED_THRESHOLD) return;
+      if (this.storageFatal || !doc || doc.retainedOperations <= JOURNAL_RETAINED_THRESHOLD) return;
       try {
         // First checkpoint the unpruned archive. If the second write loses power,
         // this copy plus the pending tail remains restart-complete.
@@ -1328,7 +1373,7 @@ export class EsbtEngine implements CollabSession {
 
   private maybePrune(ackedVersion: Uint8Array): Promise<void> {
     return this.runHistoryMaintenance(async () => {
-      if (!this.doc) return;
+      if (!this.doc || this.storageFatal) return;
       if (!shouldPruneHistory(this.doc.retainedOperations, this.lastPruneAt)) return;
       if (this.doc.retainedOperations > JOURNAL_RETAINED_THRESHOLD || this.lastPruneAt > 0) {
         try {
@@ -1381,14 +1426,48 @@ export class EsbtEngine implements CollabSession {
     for (const listener of this.errorListeners) listener(notice);
   }
 
-  private recordStorageError(message: string, cause: unknown): void {
+  private recordStorageError(message: string, cause: unknown, fatal = true): void {
     console.error(`[marks] ${message}`, cause);
-    this.storageError = { code: -1, message };
+    if (this.storageFatal) return;
+
+    const userMessage = fatal
+      ? `${message} Editing has been disabled to protect this page. Reload before making more changes.`
+      : message;
+    this.storageError = { code: -1, message: userMessage };
+    if (fatal) {
+      this.storageFatal = true;
+      this.localSaved = false;
+      this.refreshEditorEditable();
+      if (this.saveTimer !== null) {
+        window.clearTimeout(this.saveTimer);
+        this.saveTimer = null;
+      }
+      if (this.markdownTimer !== null) {
+        window.clearTimeout(this.markdownTimer);
+        this.markdownTimer = null;
+      }
+      if (this.reconnectTimer !== null) {
+        window.clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+      this.admissionAbort?.abort();
+      this.admissionAbort = null;
+      this.serverSynced = false;
+      const socket = this.socket;
+      this.socket = null;
+      socket?.close();
+      this.setStatus('offline');
+      const durabilityError = new Error(userMessage, { cause });
+      for (const waiter of this.durabilityWaiters) waiter.reject(durabilityError);
+      this.durabilityWaiters.clear();
+    }
     for (const listener of this.errorListeners) listener(this.storageError);
   }
 
   private setStatus(status: ConnectionStatus): void {
-    if (!this.access) {
+    if (this.storageFatal) {
+      status = 'offline';
+    } else if (!this.access) {
       if (this.currentStatus === 'connected') return;
       status = 'connected';
     }
@@ -1399,7 +1478,7 @@ export class EsbtEngine implements CollabSession {
   }
 
   private isDurable(): boolean {
-    if (this.pendingMutations.size !== 0 || !this.localSaved) return false;
+    if (this.storageFatal || this.pendingMutations.size !== 0 || !this.localSaved) return false;
     return !this.access || (this.serverSynced && this.currentStatus === 'connected');
   }
 
@@ -1496,17 +1575,40 @@ export class EsbtEngine implements CollabSession {
     this.socket = null;
     const replica = this.doc;
     this.doc = null;
-    void finalCheckpoint.then(
-      () => replica?.destroy(),
-      () => replica?.destroy(),
-    );
+    releaseReplicaAfterCheckpoint(replica, finalCheckpoint);
     this.ephemeral.destroy();
     this.changeListeners.clear();
     this.statusListeners.clear();
     this.peerListeners.clear();
     this.hydratedListeners.clear();
     this.errorListeners.clear();
+    this.editorViews.clear();
   }
+}
+
+interface DestroyableReplica {
+  destroy(): void;
+}
+
+/**
+ * A browser storage promise can ignore every cancellation signal. Teardown
+ * still releases the Wasm replica after the persistence budget; the poisoned
+ * lock lane prevents any detached exporter from starting afterward.
+ */
+export function releaseReplicaAfterCheckpoint(
+  replica: DestroyableReplica | null,
+  checkpoint: Promise<unknown>,
+  timeoutMs = FINAL_CHECKPOINT_RELEASE_MS,
+): void {
+  let released = false;
+  const release = (): void => {
+    if (released) return;
+    released = true;
+    globalThis.clearTimeout(timer);
+    replica?.destroy();
+  };
+  const timer = globalThis.setTimeout(release, Math.max(1, timeoutMs));
+  void checkpoint.then(release, release);
 }
 
 function randomLocalSite(): string {
