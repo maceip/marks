@@ -56,6 +56,14 @@ async function waitForAbsent(session, selector, { timeout = 10_000 } = {}) {
   }
 }
 
+async function dismissToasts(session) {
+  await session.evaluate(() => {
+    document.querySelectorAll('.toast button[aria-label="Dismiss notification"]')
+      .forEach((button) => button.click());
+  });
+  await waitForAbsent(session, '.toast');
+}
+
 async function waitForPageState(session, predicate, { timeout = 10_000, label = 'page state' } = {}) {
   const deadline = Date.now() + timeout;
   while (!(await session.evaluate(predicate))) {
@@ -561,6 +569,7 @@ export async function runSurface(session, { check }) {
   const documentPath = await session.evaluate(() => location.pathname);
   await session.goto(`${documentPath}?marks-posture=fold-book`);
   await session.waitForSelector('.app-rail', { timeout: 20_000 });
+  await session.waitForSelector('.foldable-ribbon .ribbon-body', { timeout: 20_000 });
   const bookChrome = await session.evaluate(() => {
     const rail = document.querySelector('.app-rail');
     const header = document.querySelector('.app-ribbon');
@@ -588,8 +597,23 @@ export async function runSurface(session, { check }) {
       .filter((node) => {
         if (!(node instanceof HTMLElement) || getComputedStyle(node).visibility === 'hidden') return false;
         const targetRect = node.getBoundingClientRect();
-        return targetRect.width > 0 && targetRect.height > 0 &&
-          targetRect.left < hingeEnd && targetRect.right > hingeStart;
+        const overlapLeft = Math.max(targetRect.left, hingeStart);
+        const overlapRight = Math.min(targetRect.right, hingeEnd);
+        const overlapTop = Math.max(targetRect.top, 0);
+        const overlapBottom = Math.min(targetRect.bottom, window.innerHeight);
+        if (overlapLeft >= overlapRight || overlapTop >= overlapBottom) return false;
+        const xs = [
+          overlapLeft + 0.5,
+          (overlapLeft + overlapRight) / 2,
+          overlapRight - 0.5,
+        ];
+        const ys = [
+          overlapTop + 0.5,
+          (overlapTop + overlapBottom) / 2,
+          overlapBottom - 0.5,
+        ];
+        return xs.some((x) => ys.some((y) =>
+          document.elementFromPoint(x, y)?.closest('button') === node));
       })
       .map((node) => node.getAttribute('data-command-id') ?? node.getAttribute('aria-label') ?? node.textContent?.trim() ?? 'button');
     return {
@@ -820,10 +844,44 @@ export async function runSurface(session, { check }) {
     narrowBookMenu.commandHit,
     JSON.stringify(narrowBookMenu));
   await session.click('.ribbon-overflow-trigger');
-  await session.wait(50);
+  await waitForAbsent(session, '.ribbon-overflow-menu');
 
-  await session.click('.ribbon-profile-toggle');
-  await session.wait(100);
+  await session.evaluate(() => {
+    const toggle = document.querySelector('.foldable-ribbon .ribbon-profile-toggle');
+    if (!(toggle instanceof HTMLButtonElement)) throw new Error('Ribbon profile toggle not found');
+    toggle.click();
+  });
+  await session.waitForSelector(
+    '.foldable-ribbon .ribbon-profile-toggle[aria-pressed="true"]',
+    { timeout: 10_000 },
+  );
+  // WebKit does not focus buttons for pointer activation on macOS. Focus the
+  // committed expanded control so native focus scrolling proves its hit target.
+  await session.evaluate(() => {
+    const toggle = document.querySelector('.foldable-ribbon .ribbon-profile-toggle');
+    if (!(toggle instanceof HTMLButtonElement)) throw new Error('Ribbon profile toggle not found');
+    toggle.focus();
+  });
+  await waitForPageState(
+    session,
+    () => {
+      const tabs = document.querySelector('.foldable-ribbon .ribbon-tabs');
+      const toggle = document.querySelector('.foldable-ribbon .ribbon-profile-toggle');
+      const tabsRect = tabs?.getBoundingClientRect();
+      const toggleRect = toggle?.getBoundingClientRect();
+      if (!tabsRect || !toggleRect) return false;
+      const hit = document.elementFromPoint(
+        toggleRect.left + toggleRect.width / 2,
+        toggleRect.top + toggleRect.height / 2,
+      );
+      return toggle?.getAttribute('aria-pressed') === 'true' &&
+        document.activeElement === toggle &&
+        toggleRect.left >= tabsRect.left &&
+        toggleRect.right <= tabsRect.right &&
+        hit === toggle;
+    },
+    { timeout: 10_000, label: 'the expanded ribbon profile toggle to scroll into view' },
+  );
   const narrowBookProfile = await session.evaluate(() => {
     const tabs = document.querySelector('.ribbon-tabs');
     const toggle = document.querySelector('.ribbon-profile-toggle');
@@ -853,6 +911,7 @@ export async function runSurface(session, { check }) {
   await session.setViewport({ width: 1440, height: 900 });
   await session.goto(`${documentPath}?marks-posture=fold-laptop`);
   await session.waitForSelector('.app-rail', { timeout: 20_000 });
+  await session.waitForSelector('.foldable-ribbon .ribbon-body', { timeout: 20_000 });
   const laptopChrome = await session.evaluate(() => {
     const rail = document.querySelector('.app-rail');
     const main = document.querySelector('.main.route-document');
@@ -1257,11 +1316,7 @@ export async function runSurface(session, { check }) {
   );
   await session.click('[role="dialog"] button[aria-label="Close"]');
   await waitForAbsent(session, '[role="dialog"]');
-  await session.evaluate(() => {
-    document.querySelectorAll('.toast button[aria-label="Dismiss notification"]')
-      .forEach((button) => button.click());
-  });
-  await waitForAbsent(session, '.toast');
+  await dismissToasts(session);
 
   await session.click('.phone-mode-switch [data-command-id="view.preview"]');
   await session.waitForSelector(
@@ -1309,8 +1364,10 @@ export async function runSurface(session, { check }) {
     await waitForAbsent(session, '#phone-ribbon-categories');
   }
 
+  await dismissToasts(session);
   await session.click('.phone-category-trigger');
   await session.waitForSelector('#phone-ribbon-categories', { timeout: 10_000 });
+  await dismissToasts(session);
   const phoneCategoriesEssential = await session.evaluate(() =>
     document.querySelector('#phone-ribbon-categories .phone-category-all')?.getAttribute('aria-checked') !== 'true');
   if (phoneCategoriesEssential) {

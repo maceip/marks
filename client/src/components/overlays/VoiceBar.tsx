@@ -16,7 +16,9 @@ const LABEL: Record<VoiceStatus, string> = {
 };
 
 export function VoiceBar({ status, interim, onStop }: VoiceBarProps) {
-  if (status === 'idle') return null;
+  // Unsupported browsers already expose that state on the disabled Dictate
+  // command. A permanent bottom overlay would only obscure unrelated controls.
+  if (status === 'idle' || status === 'unsupported') return null;
 
   return (
     <div className={`voice-bar voice-${status}`} role="status">

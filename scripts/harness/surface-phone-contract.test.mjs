@@ -9,6 +9,10 @@ import { SURFACE_CHECK_NAMES } from './suites/surface.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const source = readFileSync(resolve(root, 'scripts/harness/suites/surface.mjs'), 'utf8');
 const mobileProofSource = readFileSync(resolve(root, 'scripts/check-mobile-ui.mjs'), 'utf8');
+const voiceBarSource = readFileSync(
+  resolve(root, 'client/src/components/overlays/VoiceBar.tsx'),
+  'utf8',
+);
 const phoneStart = source.indexOf('await session.goto(`${documentPath}?marks-posture=phone`)');
 const phoneFlow = source.slice(phoneStart, source.indexOf('\n}\n\nexport const SURFACE_CHECK_NAMES', phoneStart));
 const touchStart = mobileProofSource.indexOf('async function reachEditorByTouch');
@@ -90,6 +94,11 @@ test('phone Option 2 contract has one picker, one scrolling deck, and persistent
 
 test('phone possibility proof expands the command catalog before selecting Review', () => {
   const finalPicker = phoneFlow.lastIndexOf("await session.click('.phone-category-trigger')");
+  const pickerReady = phoneFlow.indexOf(
+    "await session.waitForSelector('#phone-ribbon-categories'",
+    finalPicker,
+  );
+  const clearTransientToasts = phoneFlow.indexOf('await dismissToasts(session)', pickerReady);
   const expandCatalog = phoneFlow.indexOf(
     "await session.click('#phone-ribbon-categories .phone-category-all')",
     finalPicker,
@@ -105,7 +114,9 @@ test('phone possibility proof expands the command catalog before selecting Revie
   const waitForPossibilities = phoneFlow.indexOf('all five phone possibility commands', selectReview);
 
   assert.ok(finalPicker >= 0);
-  assert.ok(expandCatalog > finalPicker);
+  assert.ok(pickerReady > finalPicker);
+  assert.ok(clearTransientToasts > pickerReady);
+  assert.ok(expandCatalog > clearTransientToasts);
   assert.ok(expandedState > expandCatalog);
   assert.ok(selectReview > expandedState);
   assert.ok(waitForPossibilities > selectReview);
@@ -172,6 +183,11 @@ test('phone state changes use bounded DOM and page-state waits instead of timing
   assert.match(phoneFlow, /waitForPageState\(/);
   assert.match(phoneFlow, /timeout: 10_000/);
   assert.doesNotMatch(phoneFlow, /More commands|phone More/);
+});
+
+test('unsupported voice remains command state instead of a permanent phone overlay', () => {
+  assert.match(voiceBarSource, /status === 'idle' \|\| status === 'unsupported'/);
+  assert.match(source, /voiceState\.title\.includes\('not supported'\)/);
 });
 
 test('service mobile proof follows the same Option 2 DOM contract', () => {

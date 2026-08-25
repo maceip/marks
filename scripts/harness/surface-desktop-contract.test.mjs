@@ -44,3 +44,20 @@ test('fold-book command transitions wait for committed ribbon state and expose o
   assert.match(bookFlow, /all five book-fold possibility commands/);
   assert.doesNotMatch(bookFlow, /session\.wait\(\d+\)/);
 });
+
+test('fold geometry proves interactive hinge occupancy and waits for laptop ribbon commit', () => {
+  const bookStart = desktopFlow.indexOf('await session.goto(`${documentPath}?marks-posture=fold-book`)');
+  const bookMeasure = desktopFlow.indexOf('const bookChrome = await session.evaluate', bookStart);
+  const laptopStart = desktopFlow.indexOf('await session.goto(`${documentPath}?marks-posture=fold-laptop`)');
+  const laptopMeasure = desktopFlow.indexOf('const laptopChrome = await session.evaluate', laptopStart);
+  const bookEntry = desktopFlow.slice(bookStart, bookMeasure);
+  const bookGeometry = desktopFlow.slice(bookMeasure, laptopStart);
+  const laptopEntry = desktopFlow.slice(laptopStart, laptopMeasure);
+
+  assert.match(bookEntry, /waitForSelector\('\.foldable-ribbon \.ribbon-body'/);
+  assert.match(bookGeometry, /document\.elementFromPoint\(x, y\)\?\.closest\('button'\) === node/);
+  assert.match(bookGeometry, /overlapLeft >= overlapRight \|\| overlapTop >= overlapBottom/);
+  assert.match(bookGeometry, /toggle\.focus\(\)/);
+  assert.match(bookGeometry, /the expanded ribbon profile toggle to scroll into view/);
+  assert.match(laptopEntry, /waitForSelector\('\.foldable-ribbon \.ribbon-body'/);
+});
