@@ -1,6 +1,7 @@
 import { chromium } from 'playwright';
+import { preview } from 'vite';
 import { mkdir, readdir, readFile } from 'node:fs/promises';
-import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 
 const distFiles = await readdir(new URL('../client/dist/assets/', import.meta.url));
@@ -9,14 +10,23 @@ const inventory = JSON.parse(await readFile(new URL('../docs/design-system-inven
 assert(!index.includes('design-system.css'), 'catalog CSS must not be in the entry document');
 assert(distFiles.some((name) => name.startsWith('DesignSystem-')), 'catalog must be a separate lazy chunk');
 const port = 4197;
-const server = spawn('npm', ['run', 'preview', '--workspace=client', '--', '--host', '127.0.0.1', '--port', String(port)], { stdio: 'ignore' });
-const stop = () => server.kill('SIGTERM');
-process.on('exit', stop);
+// Await Vite's programmatic preview server instead of racing a detached npm
+// child against a fixed sleep. On a cold CI runner npm/Vite startup can exceed
+// the old six-second poll window even though the production build is valid.
+const server = await preview({
+  root: fileURLToPath(new URL('../client/', import.meta.url)),
+  logLevel: 'error',
+  preview: {
+    host: '127.0.0.1',
+    port,
+    strictPort: true,
+  },
+});
 try {
-  for (let attempt = 0; attempt < 40; attempt++) {
-    try { if ((await fetch(`http://127.0.0.1:${port}/design-system`)).ok) break; } catch {}
-    await new Promise((resolve) => setTimeout(resolve, 150));
-  }
+  const response = await fetch(`http://127.0.0.1:${port}/design-system`, {
+    signal: AbortSignal.timeout(5_000),
+  });
+  assert(response.ok, `Vite preview returned ${response.status} for the design-system catalog`);
   await mkdir(new URL('../artifacts/design-system/', import.meta.url), { recursive: true });
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
@@ -110,4 +120,6 @@ try {
   await reduced.close();
   await browser.close();
   console.log('design-system governance, runtime, accessibility, and capture checks passed');
-} finally { stop(); }
+} finally {
+  await server.close();
+}
