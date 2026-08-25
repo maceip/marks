@@ -183,14 +183,17 @@ person are one principal, two device credentials, and two ESBT sites.
 
 **Deliverables**
 
-- Paint a usable scratch editor without creating a principal, showing an
-  explicit “temporary; scan phone to keep it” affordance.
+- Paint a usable scratch editor without creating a principal. Create a unique
+  public page slug immediately and label the account-link action “Log In.”
 - Keep the 256-bit scratch capability in `sessionStorage`; store only its digest
-  server-side. Scratch work may be private and exportable but cannot be shared,
-  commented on, or presented as durable.
-- Admit scratch-owned rooms only through a one-use ticket bound to scratch,
-  document, site, and authorization epoch. Bind `ScratchActor`, never a fake
-  principal, and close those sockets when promotion claims the workspace.
+  server-side. The capability retains owner authority, while the opaque slug
+  grants fixed public editor access. The seventh committed anonymous edit sets
+  the persistence milestone; anonymous callers still cannot manage named ACLs
+  or principal-owned comments/history.
+- Admit owner and public-slug scratch rooms only through one-use tickets bound
+  to caller scratch, document, site, and authorization epoch. Bind
+  `ScratchActor`, never a fake principal, and close owner sockets when
+  promotion claims the workspace.
 - Generate a non-extractable P-256 pending-device key in IndexedDB without
   blocking first paint.
 - Create a two-minute pairing whose 256-bit secret appears only in the QR/link

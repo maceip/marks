@@ -36,7 +36,7 @@ interface PhoneComposerProps {
 }
 
 const PHONE_TAB_ORDER: RibbonTabId[] = [
-  'home', 'insert', 'review', 'view', 'file', 'draw', 'tools', 'picture', 'table', 'shape',
+  'import', 'home', 'insert', 'review', 'view', 'file', 'draw', 'tools', 'picture', 'table', 'shape',
 ];
 
 /** The phone presentation consumes the exact same projected tabs, groups,
@@ -45,7 +45,7 @@ export function PhoneComposer(props: PhoneComposerProps) {
   const center = useCommandCenter();
   const task = ribbonTask(center.environment);
   const tabs = useMemo(() => orderTabs(center.ribbon), [center.ribbon]);
-  const [tab, setTab] = useState<RibbonTabId>(() => task === 'inspect' ? 'view' : 'home');
+  const [tab, setTab] = useState<RibbonTabId>(() => task === 'inspect' ? 'view' : 'import');
   const [presenceDisplay, setPresenceState] = useState<DocumentPresenceDisplay>(() =>
     getPresenceDisplay(props.mode === 'preview'));
   const lastManualTabAt = useRef(0);
@@ -102,7 +102,7 @@ export function PhoneComposer(props: PhoneComposerProps) {
           if (keep) invoke(keep);
         }}>
           <span>Not logged in</span>
-          This document will be lost unless you log in.
+          Open this page on a laptop to log in. The page is already saved and public.
         </button>
       )}
 
@@ -160,6 +160,7 @@ function phoneTabLabel(tab: ProjectedRibbonTab | undefined): string {
 }
 
 function tabGlyph(tab: RibbonTabId) {
+  if (tab === 'import') return 'download' as const;
   if (tab === 'home') return 'pencil' as const;
   if (tab === 'insert') return 'plus' as const;
   if (tab === 'review') return 'gauge' as const;

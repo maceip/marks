@@ -3,7 +3,7 @@ import type { DocumentMeta } from '../lib/api';
 
 export { ABOUT_DOCUMENT_ID, ABOUT_DOCUMENT_TITLE };
 
-export type TemplateId = 'blank' | 'brief' | 'meeting' | 'launch';
+export type TemplateId = 'blank' | 'notes' | 'brief' | 'meeting' | 'github-readme' | 'launch';
 
 export interface DocumentTemplate {
   id: TemplateId;
@@ -33,6 +33,22 @@ export const DOCUMENT_TEMPLATES: DocumentTemplate[] = [
     description: 'A quiet page with nothing in your way.',
     accent: 'navy',
     content: '',
+  },
+  {
+    id: 'notes',
+    name: 'Notes app',
+    description: 'A lightweight running page for quick notes and pinned items.',
+    accent: 'navy',
+    content: `# Notes
+
+## Pinned
+
+- Add a pinned note
+
+## Today
+
+- Add a note
+`,
   },
   {
     id: 'brief',
@@ -72,10 +88,10 @@ Describe the change you want to create and why it matters now.
   },
   {
     id: 'meeting',
-    name: 'Working session',
+    name: 'Meeting',
     description: 'Decisions, open questions, and owners without ceremony.',
     accent: 'green',
-    content: `# Working session
+    content: `# Meeting
 
 **Date:** ${new Intl.DateTimeFormat('en', { dateStyle: 'long' }).format(new Date())}
 
@@ -94,6 +110,41 @@ What should be different when this session ends?
 ## Actions
 
 - [ ] Owner — next step
+`,
+  },
+  {
+    id: 'github-readme',
+    name: 'GitHub README',
+    description: 'Overview, installation, usage, development, and license.',
+    accent: 'green',
+    content: `# Project name
+
+One clear sentence about what this project does and who it is for.
+
+## Installation
+
+\`\`\`sh
+# Add the install command
+\`\`\`
+
+## Usage
+
+\`\`\`sh
+# Add the smallest useful example
+\`\`\`
+
+## Development
+
+- [ ] Document prerequisites
+- [ ] Add test and build commands
+
+## Contributing
+
+Issues and pull requests are welcome.
+
+## License
+
+Add the project license.
 `,
   },
   {

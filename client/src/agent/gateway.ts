@@ -247,7 +247,7 @@ async function sessionRequest(
       throw new AgentGatewayError(
         401,
         'unauthenticated',
-        'Hosted agents require a kept, signed-in workspace.',
+        'Hosted agents require a logged-in workspace.',
       );
     }
     let session = getCachedSession();
@@ -534,4 +534,3 @@ function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
     signal.addEventListener('abort', finish, { once: true });
   });
 }
-

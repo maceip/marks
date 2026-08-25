@@ -97,8 +97,8 @@ First paint has no registration form. A new tab is a scratch workspace.
 
 | Path | What you do | What Marks keeps |
 | --- | --- | --- |
-| Scratch | Just start typing | Temporary capability on this tab |
-| Phone | Scan a QR link | A durable principal plus a silent device key |
+| Scratch | Just start typing | Public page by URL; persisted after the seventh edit |
+| Phone | Choose Log In on a laptop and scan its QR link | A durable principal plus a silent device key |
 | Email | Redeem a verified-email token where enabled | The same principal, email reduced to a locator |
 
 After that, return visits use a rotating HTTP-only session cookie. If the cookie is gone but this browser is still enrolled, Marks signs a one-use challenge with the device key. No passkey ceremony.

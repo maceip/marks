@@ -1,8 +1,10 @@
 import type { NetworkQuality } from '../../browser';
 import type { ConnectionStatus } from '../../collab/types';
 import { formatCount, formatMs, readingTime } from '../../lib/format';
-import { RECONNECT_LINE } from '../../lib/identity-copy';
 import type { CursorInfo } from './EditorPane';
+
+const RECONNECT_LINE =
+  'Reconnect mints a new one-use ticket and keeps this document site. Tickets never go in the URL.';
 
 interface StatusBarProps {
   words: number;

@@ -43,10 +43,10 @@ export function Home({
       <section className="home-hero surface-material-host">
         <SurfaceMaterial variant="hero" />
         <div className="home-hero-copy">
-          <span className="home-kicker"><MarksMark size={16} /> {temporary ? 'Temporary workspace' : local ? 'Local workspace' : 'Your workspace'}</span>
+          <span className="home-kicker"><MarksMark size={16} /> {temporary ? 'Public anonymous page' : local ? 'Local workspace' : 'Your workspace'}</span>
           <h2>Pick up the thought.<br />The page is ready.</h2>
           <p>{temporary
-            ? 'First paint has no registration form. This tab has private scratch authority; its documents are durable on the service, but closing the tab before you keep the workspace loses the capability.'
+            ? 'First paint has no registration form. Every page gets an opaque public URL for instant collaboration, and edits are durably committed by the service.'
             : local
               ? 'Documents, review threads, and versions stay in this browser. The same Rust/Wasm editor runs locally, with no account or remote collaboration implied.'
               : 'Your durable Marks documents are available through the Rust service, with live collaboration, role-based review, and named versions.'}</p>
@@ -58,9 +58,9 @@ export function Home({
               <Icon path={icons.template} /> Browse templates
             </button>
             <button type="button" className="button" onClick={onImport}>
-              <Icon path={icons.download} /> Import .md
+              <Icon path={icons.download} /> Import document
             </button>
-            {temporary && <button type="button" className="button" onClick={onKeepWorkspace}>Keep this workspace</button>}
+            {temporary && <button type="button" className="button" onClick={onKeepWorkspace}>Log In</button>}
           </div>
         </div>
         <div className="home-receipt surface-material-host" aria-label="Performance promise">

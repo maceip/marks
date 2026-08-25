@@ -119,6 +119,19 @@ test('new-user composition is narrower and agent relevance can raise a command',
   assert.equal(raised.find((tab) => tab.id === 'tools')?.agentRaised, true);
 });
 
+test('import is the first shared ribbon object with the requested starters', () => {
+  for (const shell of ['desktop', 'phone', 'fold-book'] as const) {
+    const ribbon = composeRibbon(environment({ shell }));
+    assert.equal(ribbon[0]?.id, 'import', shell);
+    const commands = ribbon[0]?.groups.flatMap((group) => group.commands).map((command) => command.id) ?? [];
+    assert.ok(commands.includes('import.notes-app'), shell);
+    assert.ok(commands.includes('import.meeting'), shell);
+    assert.ok(commands.includes('import.github-readme'), shell);
+    assert.ok(commands.includes('import.url'), shell);
+    assert.ok(commands.includes('document.import'), shell);
+  }
+});
+
 test('phone ribbon consumes the desktop tab projection, including contextual and agent-raised tasks', () => {
   const phone = composeRibbon(environment({ shell: 'phone', context: 'image' }), {
     expanded: true,

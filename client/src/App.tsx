@@ -11,15 +11,14 @@ import { OpeningShell } from './components/shell/OpeningShell';
 import { Sidebar } from './components/shell/Sidebar';
 import type { CursorInfo } from './components/workspace/EditorPane';
 import { StatusBar } from './components/workspace/StatusBar';
+import { LiquidDock } from './components/shell/LiquidDock';
 import { ABOUT_DOCUMENT_ID, isAboutDocument } from './content/about';
 import { signalDocumentRepositoryChange } from './data/documents';
 import { Home } from './pages/Home';
-import { LOGOUT_LOCAL_LINE } from './lib/identity-copy';
 import { readPairingHash } from './lib/pairing-link';
 import { readDocumentShareHash } from './lib/share-link';
 import { loadServiceApi } from './lib/service-api.ts';
 import { SERVICE_ERROR_COPY } from './lib/service-errors';
-import { MarkdownImportError, readMarkdownImport } from './lib/markdown-import';
 import { TopBar, type ViewMode } from './components/shell/TopBar';
 import { ToastRegion, type ToastMessage } from './components/overlays/ToastRegion';
 import { VoiceBar } from './components/overlays/VoiceBar';
@@ -94,6 +93,20 @@ const WildTelemetry = RIBBON_WILD_ENABLED
 const SAMPLE_INTERVAL_MS = 400;
 
 const MODE_ORDER: ViewMode[] = ['edit', 'split', 'preview'];
+const IMPORT_FILE_PATTERN = /\.(?:md|markdown|pdf|doc|docx|xls|xlsx)$/iu;
+const IMPORT_FILE_ACCEPT = '.md,.markdown,.pdf,.doc,.docx,.xls,.xlsx,text/markdown,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+function isImportableFile(file: Pick<File, 'name'>): boolean {
+  return IMPORT_FILE_PATTERN.test(file.name);
+}
+
+function transferMayContainImport(dataTransfer: DataTransfer): boolean {
+  return [...dataTransfer.items].some((item) => {
+    if (item.kind !== 'file') return false;
+    const file = item.getAsFile();
+    return file ? isImportableFile(file) : item.type === '' || /(?:pdf|word|excel|spreadsheet|markdown)/iu.test(item.type);
+  });
+}
 
 function exportStem(title: string): string {
   return title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase()
@@ -168,6 +181,7 @@ export function App() {
   const [hudOpen, setHudOpen] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [uiError, setUiError] = useState<string | null>(null);
+  const [dragImportActive, setDragImportActive] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [ribbonCollapsed, setRibbonCollapsed] = useState(
     () => localStorage.getItem('marks:ribbon-collapsed') === 'true',
@@ -202,6 +216,8 @@ export function App() {
   const viewRef = useRef<EditorView | null>(null);
   const previewRef = useRef<HTMLElement | null>(null);
   const importRef = useRef<HTMLInputElement | null>(null);
+  const dragImportDepth = useRef(0);
+  const initialAnonymousPageStarted = useRef(false);
   const focusRestoreRef = useRef<{
     sidebarOpen: boolean;
     hudOpen: boolean;
@@ -297,27 +313,14 @@ export function App() {
     tracker.current.add(stats.latencyMs);
   }, []);
 
-  const title =
-    documents.documents.find((entry) => entry.id === docId)?.title ??
-    meta?.title ??
-    (docId ? 'Untitled' : 'marks');
+  const activeDocument = meta ?? documents.documents.find((entry) => entry.id === docId) ?? null;
+  const activeDocumentPublic = activeDocument?.public === true;
+  const title = activeDocument?.title ?? (docId ? 'Untitled' : 'marks');
   const workspaceKind = UI_DATA_MODE === 'local'
     ? 'local' as const
     : serviceCaller?.kind === 'session'
       ? 'session' as const
       : 'scratch' as const;
-
-  useEffect(() => {
-    if (
-      route.name === 'home' &&
-      phone &&
-      UI_DATA_MODE === 'service' &&
-      serviceCallerResolved &&
-      serviceCaller?.kind === 'scratch'
-    ) {
-      navigate({ name: 'document', id: ABOUT_DOCUMENT_ID }, { replace: true });
-    }
-  }, [navigate, phone, route.name, serviceCaller, serviceCallerResolved]);
 
   const notify = useCallback(
     (toastTitle: string, detail?: string, tone: ToastMessage['tone'] = 'neutral') => {
@@ -341,6 +344,8 @@ export function App() {
     setOverlaysMounted(true);
     setDialog(next);
   }, []);
+  const closeDialog = useCallback(() => setDialog(null), []);
+  const closeReview = useCallback(() => setReviewSurface(null), []);
 
   useEffect(() => {
     const sync = () => {
@@ -432,13 +437,67 @@ export function App() {
     }
   }, [documents, notify, openDocument]);
 
-  const importMarkdownFile = useCallback(async (file: File) => {
+  useEffect(() => {
+    if (
+      route.name !== 'home' ||
+      UI_DATA_MODE !== 'service' ||
+      !serviceCallerResolved ||
+      serviceCaller?.kind !== 'scratch' ||
+      initialAnonymousPageStarted.current
+    ) {
+      return;
+    }
+    initialAnonymousPageStarted.current = true;
+    void documents.create({ title: 'Untitled' })
+      .then((created) => {
+        if (location.pathname === '/') {
+          navigate({ name: 'document', id: created.id }, { replace: true });
+        }
+      })
+      .catch(() => {
+        initialAnonymousPageStarted.current = false;
+        setUiError('Marks could not create a public page. Try reloading this tab.');
+      });
+  }, [documents.create, navigate, route.name, serviceCaller, serviceCallerResolved]);
+
+  useEffect(() => {
+    if (route.name !== 'home') initialAnonymousPageStarted.current = false;
+  }, [route.name]);
+
+  const importDocumentFile = useCallback(async (file: File) => {
+    if (!isImportableFile(file)) {
+      notify('Import refused', 'Choose Markdown, PDF, Word, or Excel.', 'danger');
+      return;
+    }
     try {
-      await createDocument(await readMarkdownImport(file));
+      if (UI_DATA_MODE === 'local') {
+        const { readMarkdownImport } = await import('./lib/markdown-import');
+        await createDocument(await readMarkdownImport(file));
+        return;
+      }
+      const imported = await (await loadServiceApi()).importDocumentFile(file);
+      await createDocument({ title: imported.title, content: imported.markdown });
     } catch (error) {
       notify(
-        error instanceof MarkdownImportError ? 'Import refused' : 'Import failed',
-        error instanceof Error ? error.message : 'The browser could not read that Markdown file.',
+        error instanceof Error && error.name === 'MarkdownImportError' ? 'Import refused' : 'Import failed',
+        error instanceof Error ? error.message : 'Marks could not convert that document.',
+        'danger',
+      );
+    }
+  }, [createDocument, notify]);
+
+  const importFromUrl = useCallback(async (url: string) => {
+    if (UI_DATA_MODE !== 'service') {
+      notify('URL import unavailable', 'This local-only build has no protected web importer.', 'danger');
+      return;
+    }
+    try {
+      const imported = await (await loadServiceApi()).importWebPage(url);
+      await createDocument({ title: imported.title, content: imported.markdown });
+    } catch (error) {
+      notify(
+        'URL import failed',
+        error instanceof Error ? error.message : 'Marks could not convert that public web page.',
         'danger',
       );
     }
@@ -550,6 +609,18 @@ export function App() {
         case 'import':
           importRef.current?.click();
           break;
+        case 'template-notes':
+          void createDocument({ templateId: 'notes' });
+          break;
+        case 'template-meeting':
+          void createDocument({ templateId: 'meeting' });
+          break;
+        case 'template-github-readme':
+          void createDocument({ templateId: 'github-readme' });
+          break;
+        case 'import-url':
+          openDialog({ type: 'import-url' });
+          break;
         case 'rename':
           if (docId && (UI_DATA_MODE === 'local' || session?.capabilities().role === 'owner')) {
             openDialog({ type: 'rename', documentId: docId, title });
@@ -588,7 +659,14 @@ export function App() {
           openDialog({ type: 'trash' });
           break;
         case 'share':
-          if (docId) openDialog({ type: 'share', documentId: docId, title });
+          if (docId) {
+            openDialog({
+              type: 'share',
+              documentId: docId,
+              title,
+              publicPage: activeDocumentPublic,
+            });
+          }
           break;
         case 'comments':
         case 'history':
@@ -596,8 +674,8 @@ export function App() {
           if (UI_DATA_MODE === 'service' && session?.capabilities().role === 'scratch') {
             openDialog({ type: 'keep-workspace' });
             notify(
-              'Keep this workspace first',
-              'Scratch authority can edit its private page but cannot use the shared review plane.',
+              'Log in first',
+              'This public page can be edited anonymously, but named review history belongs to an account.',
               'neutral',
             );
             break;
@@ -645,7 +723,7 @@ export function App() {
           break;
         case 'keep-workspace':
           if (UI_DATA_MODE === 'service') openDialog({ type: 'keep-workspace' });
-          else notify('Local-only build', 'This build has no identity service to keep or share the workspace.', 'neutral');
+          else notify('Local-only build', 'This build has no identity service for login or account sharing.', 'neutral');
           break;
         case 'account':
           if (UI_DATA_MODE === 'service') openDialog({ type: 'account' });
@@ -662,13 +740,15 @@ export function App() {
               .then(() => {
                 setServiceCaller(null);
                 void ensureServiceCaller({ forceProbe: true }).then(setServiceCaller);
-                notify('Signed out', 'This tab is a temporary workspace again.', 'success');
+                notify('Signed out', 'This tab is anonymous again. Public page URLs still work.', 'success');
                 void documents.refresh();
               })
               .catch(() => notify(SERVICE_ERROR_COPY[403].title, SERVICE_ERROR_COPY[403].detail, 'danger'));
             break;
           }
-          notify(SERVICE_ERROR_COPY[401].title, LOGOUT_LOCAL_LINE, 'neutral');
+          void import('./lib/identity-copy').then(({ LOGOUT_LOCAL_LINE }) => {
+            notify(SERVICE_ERROR_COPY[401].title, LOGOUT_LOCAL_LINE, 'neutral');
+          });
           break;
         case 'find': {
           const view = viewRef.current;
@@ -687,6 +767,7 @@ export function App() {
     },
     [
       createDocument,
+      activeDocumentPublic,
       docId,
       duplicateDocument,
       exportPortableBundle,
@@ -852,7 +933,41 @@ export function App() {
   }
 
   const appSurface = (
-    <div className={`app route-${route.name}${sidebarOpen && !focusMode && !posture.foldable ? ' with-sidebar' : ''}${focusMode ? ' focus-mode' : ''}${ribbonCollapsed ? ' ribbon-collapsed' : ''}${practicalSurface ? ' practical-open' : ''}${wildSurface ? ' wild-open' : ''}`} data-shell={posture.shell} data-doc={docId ?? undefined}>
+    <div
+      className={`app route-${route.name}${sidebarOpen && !focusMode && !posture.foldable ? ' with-sidebar' : ''}${focusMode ? ' focus-mode' : ''}${ribbonCollapsed ? ' ribbon-collapsed' : ''}${practicalSurface ? ' practical-open' : ''}${wildSurface ? ' wild-open' : ''}${dragImportActive ? ' drag-import-active' : ''}`}
+      data-shell={posture.shell}
+      data-doc={docId ?? undefined}
+      onDragEnterCapture={(event) => {
+        if (!transferMayContainImport(event.dataTransfer)) return;
+        dragImportDepth.current += 1;
+        setDragImportActive(true);
+      }}
+      onDragOverCapture={(event) => {
+        if (!transferMayContainImport(event.dataTransfer)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+      }}
+      onDragLeaveCapture={() => {
+        dragImportDepth.current = Math.max(0, dragImportDepth.current - 1);
+        if (dragImportDepth.current === 0) setDragImportActive(false);
+      }}
+      onDropCapture={(event) => {
+        dragImportDepth.current = 0;
+        setDragImportActive(false);
+        const file = [...event.dataTransfer.files].find(isImportableFile);
+        if (!file) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void importDocumentFile(file);
+      }}
+    >
+      {dragImportActive && (
+        <div className="document-drop-target" role="status" aria-live="polite">
+          <span><Icon path={icons.download} size={24} /></span>
+          <strong>Drop to import as Markdown</strong>
+          <small>PDF, Word, Excel, or Markdown</small>
+        </div>
+      )}
       {sidebarOpen && !focusMode && !posture.foldable && (
         <Sidebar
           documents={documents.documents}
@@ -1020,6 +1135,17 @@ export function App() {
         )}
       </main>
 
+      {route.name === 'document' && !focusMode && !posture.phone && !posture.foldable && (
+        <LiquidDock
+          onCommands={() => runAction('command-palette')}
+          onComments={() => runAction('comments')}
+          onHistory={() => runAction('history')}
+          onVoice={session?.capabilities().edit ? surface.toggleVoice : undefined}
+          voiceActive={surface.voiceStatus === 'listening'}
+          voiceSupported={surface.voiceSupported}
+        />
+      )}
+
       {surface.contextMenu && (
         <Suspense fallback={null}>
           <ContextMenu
@@ -1161,10 +1287,11 @@ export function App() {
             phone={phone}
             dataMode={UI_DATA_MODE}
             capabilities={session?.capabilities() ?? null}
-            onCloseDialog={() => setDialog(null)}
-            onCloseReview={() => setReviewSurface(null)}
+            onCloseDialog={closeDialog}
+            onCloseReview={closeReview}
             onAction={runAction}
             onCreateFromTemplate={(templateId: TemplateId) => void createDocument({ templateId })}
+            onImportUrl={importFromUrl}
             onRename={(id, nextTitle) => void renameDocument(id, nextTitle)}
             onDelete={(id) => void removeDocument(id)}
             onDocumentsChanged={() => void documents.refresh()}
@@ -1192,11 +1319,13 @@ export function App() {
       <input
         ref={importRef}
         type="file"
-        accept=".md,.markdown,text/markdown"
-        hidden
+        accept={IMPORT_FILE_ACCEPT}
+        className="document-import-input"
+        aria-hidden="true"
+        tabIndex={-1}
         onChange={(event) => {
           const file = event.currentTarget.files?.[0];
-          if (file) void importMarkdownFile(file);
+          if (file) void importDocumentFile(file);
           event.currentTarget.value = '';
         }}
       />

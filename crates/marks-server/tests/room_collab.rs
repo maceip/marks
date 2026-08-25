@@ -238,6 +238,140 @@ async fn two_peers_converge_offline_delta_and_restart_recovery() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn anonymous_slug_is_public_and_survives_its_creator_after_seven_edits() {
+    let server = TestServer::spawn(temp_db("room-public-anonymous")).await;
+    let http = reqwest::Client::new();
+    let base = server.base.clone();
+    let (owner_auth, document_id) = scratch_document(&base, &http).await;
+
+    let owner_meta = json_of(
+        http.get(format!("{base}/v1/documents/{document_id}"))
+            .header("Authorization", &owner_auth)
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(owner_meta["document"]["slug"], document_id);
+    assert_eq!(owner_meta["document"]["public"], true);
+    assert_eq!(owner_meta["document"]["public_role"], "editor");
+    assert_eq!(owner_meta["document"]["persisted"], false);
+
+    let visitor = json_of(
+        http.post(format!("{base}/v1/auth/scratch"))
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    let visitor_auth = format!(
+        "MarksScratch {}.{}",
+        visitor["scratchId"].as_str().unwrap(),
+        visitor["capability"].as_str().unwrap()
+    );
+    let visible = http
+        .get(format!("{base}/v1/documents/{document_id}"))
+        .header("Authorization", &visitor_auth)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        visible.status(),
+        200,
+        "the slug itself grants public edit access"
+    );
+
+    let owner_ticket_body = json_of(
+        http.post(format!("{base}/v1/scratch/documents/{document_id}/session"))
+            .header("Authorization", &owner_auth)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(
+        owner_ticket_body["role"].is_null(),
+        "the creator remains owner"
+    );
+
+    let visitor_ticket_body = json_of(
+        http.post(format!("{base}/v1/scratch/documents/{document_id}/session"))
+            .header("Authorization", &visitor_auth)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(visitor_ticket_body["role"], "editor");
+    let visitor_ticket = Ticket::from_json(&visitor_ticket_body);
+    let mut peer =
+        Peer::connect(&base, &visitor_ticket, fresh_doc(visitor_ticket.site), None).await;
+    for _ in 0..7 {
+        peer.insert(peer.doc.len(), "x").await;
+    }
+
+    let milestone = server
+        .app
+        .db
+        .read(|conn| {
+            conn.query_row(
+                "SELECT public_edit, anonymous_edit_count, persisted_at IS NOT NULL
+                 FROM documents WHERE id = ?1",
+                [&document_id],
+                |row| {
+                    Ok((
+                        row.get::<_, bool>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, bool>(2)?,
+                    ))
+                },
+            )
+            .map_err(Into::into)
+        })
+        .expect("anonymous persistence milestone");
+    assert_eq!(milestone, (true, 7, true));
+
+    let owner_scratch_id = owner_auth
+        .strip_prefix("MarksScratch ")
+        .unwrap()
+        .split_once('.')
+        .unwrap()
+        .0;
+    server
+        .app
+        .db
+        .tx(|conn| {
+            conn.execute(
+                "UPDATE scratch_workspaces SET expires_at = 0 WHERE id = ?1",
+                [owner_scratch_id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    let member = create_principal(&base, &http, "publicmember").await;
+    let member_ticket_response = principal_ticket(&base, &http, &member.cookie, &document_id).await;
+    assert_eq!(member_ticket_response.status(), 200);
+    let member_ticket_body = json_of(member_ticket_response).await;
+    assert_eq!(member_ticket_body["role"], "editor");
+    let member_ticket = Ticket::from_json(&member_ticket_body);
+    let mut member_peer = Peer::connect(
+        &base,
+        &member_ticket,
+        fresh_doc(member_ticket.site),
+        Some(&member.cookie),
+    )
+    .await;
+    member_peer.converge_to("xxxxxxx").await;
+
+    drop(peer);
+    drop(member_peer);
+    server.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn recovery_snapshot_is_one_atomic_revision_and_retry_safe_across_crash() {
     let server = TestServer::spawn(temp_db("room-snapshot-commit")).await;
     let http = reqwest::Client::new();

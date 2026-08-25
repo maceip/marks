@@ -76,7 +76,7 @@ async function readJson(response: Response): Promise<unknown> {
 
 export async function mintPairing(): Promise<PairingTicket> {
   const caller = await ensureServiceCaller();
-  if (caller.kind !== 'scratch') throw new Error('pairing requires a temporary workspace');
+  if (caller.kind !== 'scratch') throw new Error('pairing requires an anonymous workspace');
   const headers = new Headers({ Accept: 'application/json' });
   applyServiceCallerHeaders(headers, caller);
   const response = await fetch('/v1/auth/pairings', {
@@ -215,7 +215,7 @@ export async function bootstrapPairing(
  */
 export async function selfBootstrap(): Promise<SessionInfo> {
   const caller = await ensureServiceCaller();
-  if (caller.kind !== 'scratch') throw new Error('keep requires a temporary workspace');
+  if (caller.kind !== 'scratch') throw new Error('login requires an anonymous workspace');
   const key = await bindPendingDevice();
   const controllerId = createOpaqueId('controller');
   const now = Date.now();

@@ -27,6 +27,7 @@ pub struct App {
     pub db: Arc<Db>,
     pub assets: Arc<AssetStore>,
     pub(crate) bundle_exports: Arc<Semaphore>,
+    pub(crate) import_jobs: Arc<Semaphore>,
     pub rooms: Rooms,
     pub rate: RateLimiter,
     pub limits: esbt::ResourceLimits,
@@ -82,6 +83,7 @@ impl App {
             .probe_database(&db)
             .map_err(|error| format!("database write probe: {error:?}"))?;
         let bundle_exports = Arc::new(Semaphore::new(config.max_concurrent_bundle_exports));
+        let import_jobs = Arc::new(Semaphore::new(4));
         let agents = AgentHub::new(db.clone(), config.agent.clone(), provider)?;
         Ok(Arc::new(Self {
             config,
@@ -89,6 +91,7 @@ impl App {
             db,
             assets,
             bundle_exports,
+            import_jobs,
             rooms,
             rate: RateLimiter::new(),
             limits,
@@ -111,6 +114,11 @@ pub fn router(app: Arc<App>) -> Router {
         post(routes::practical::check_links).layer(DefaultBodyLimit::max(96 * 1024));
     let practical_citation_lookup =
         post(routes::practical::citation_lookup).layer(DefaultBodyLimit::max(4 * 1024));
+    let import_file =
+        post(routes::imports::file).layer(DefaultBodyLimit::max(routes::imports::MAX_IMPORT_BYTES));
+    let import_url = post(routes::imports::url).layer(DefaultBodyLimit::max(
+        routes::imports::MAX_URL_REQUEST_BYTES,
+    ));
     let api = Router::new()
         // Identity: docs/AUTHN-AUTHZ-PROTOCOL.md §10.
         .route("/v1/auth/scratch", post(routes::auth::scratch_create))
@@ -165,6 +173,10 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/v1/agent/runs/{id}/events", get(routes::agent::events))
         .route("/v1/agent/runs/{id}/tool-results", agent_tool_result)
         .route("/v1/agent/runs/{id}", delete(routes::agent::cancel))
+        // Bounded, authenticated document conversion. URL imports resolve and
+        // pin public IPs on every redirect; local files never leave this process.
+        .route("/v1/import/file", import_file)
+        .route("/v1/import/url", import_url)
         // Documents.
         .route(
             "/v1/documents",

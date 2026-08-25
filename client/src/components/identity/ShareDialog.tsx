@@ -17,6 +17,7 @@ type GrantRole = Exclude<DocumentRole, 'owner'>;
 interface ShareDialogProps {
   documentId: string;
   title: string;
+  publicPage: boolean;
   capabilities: DocumentCapabilities | null;
   onNotify: (title: string, detail?: string, tone?: 'neutral' | 'success' | 'danger') => void;
 }
@@ -27,7 +28,7 @@ const TTL_MS: Record<(typeof LINK_TTL_OPTIONS)[number]['id'], number> = {
   '1d': 24 * 60 * 60 * 1000,
 };
 
-export function ShareDialog({ documentId, title, capabilities, onNotify }: ShareDialogProps) {
+export function ShareDialog({ documentId, title, publicPage, capabilities, onNotify }: ShareDialogProps) {
   const [principal, setPrincipal] = useState('');
   const [role, setRole] = useState<GrantRole>('editor');
   const [shares, setShares] = useState<DocumentShare[]>([]);
@@ -36,7 +37,8 @@ export function ShareDialog({ documentId, title, capabilities, onNotify }: Share
   const [link, setLink] = useState<{ url: string; role: GrantRole; expiresAtMs: number } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const serviceOwner = capabilities?.role === 'owner' && capabilities.manageShares;
+  const publicCollaborativePage = publicPage || capabilities?.role === 'scratch';
+  const serviceOwner = capabilities?.role === 'owner' && capabilities.manageShares && !publicCollaborativePage;
   useEffect(() => {
     if (!serviceOwner) return;
     let active = true;
@@ -125,16 +127,22 @@ export function ShareDialog({ documentId, title, capabilities, onNotify }: Share
   const copyPage = async () => {
     try {
       await navigator.clipboard.writeText(`${location.origin}/d/${encodeURIComponent(documentId)}`);
-      onNotify('Page address copied', 'This address carries no authority; only admitted collaborators can open it.', 'success');
+      onNotify(
+        publicCollaborativePage ? 'Public page address copied' : 'Page address copied',
+        publicCollaborativePage
+          ? 'Anyone with this address can open the page and collaborate.'
+          : 'The page address was copied. Existing document access rules still apply.',
+        'success',
+      );
     } catch {
       onNotify('Copy was blocked', 'Select the address from the browser bar instead.', 'danger');
     }
   };
 
-  const unavailable = capabilities?.role === 'local'
+  const unavailable = publicCollaborativePage
+    ? 'Anyone with this opaque address can open and edit the page. No sharing setting or bearer link is required.'
+    : capabilities?.role === 'local'
     ? 'This is a browser-local document. Keep it in the service before sharing.'
-    : capabilities?.role === 'scratch'
-      ? 'A scratch workspace is not a person and cannot grant access. Keep the workspace first.'
       : capabilities?.role === null
         ? 'Document authority is still being resolved.'
         : 'Only the document owner can change access.';
@@ -142,16 +150,17 @@ export function ShareDialog({ documentId, title, capabilities, onNotify }: Share
   return (
     <div className="share-dialog">
       <div className="local-notice">
-        <Icon path={serviceOwner ? icons.check : icons.share} size={15} />
+        <Icon path={serviceOwner || publicCollaborativePage ? icons.check : icons.share} size={15} />
         <span>
-          <strong>{serviceOwner ? 'Durable access control' : 'Sharing unavailable'}</strong>
+          <strong>{publicCollaborativePage ? 'Public collaboration' : serviceOwner ? 'Durable access control' : 'Sharing unavailable'}</strong>
           {serviceOwner ? 'Changes apply to the Rust ACL and live rooms immediately.' : unavailable}
         </span>
       </div>
 
-      <p className="identity-note">{SHARE_GRANT_LINE}</p>
+      {!publicCollaborativePage && <>
+        <p className="identity-note">{SHARE_GRANT_LINE}</p>
 
-      <form className="share-invite" onSubmit={(event) => { event.preventDefault(); void grant(); }}>
+        <form className="share-invite" onSubmit={(event) => { event.preventDefault(); void grant(); }}>
         <label htmlFor="share-principal">People with access</label>
         <div className="share-input-row">
           <input id="share-principal" data-autofocus placeholder="Marks principal ID" value={principal} disabled={!serviceOwner || busy} onChange={(event) => setPrincipal(event.target.value)} autoComplete="off" />
@@ -162,9 +171,9 @@ export function ShareDialog({ documentId, title, capabilities, onNotify }: Share
           </select>
           <button type="submit" className="button" disabled={!principal.trim() || !serviceOwner || busy}>Grant</button>
         </div>
-      </form>
+        </form>
 
-      <div className="access-list">
+        <div className="access-list">
         <div className="access-person">
           <span className="avatar avatar-self">Y</span>
           <span><strong>You</strong><small>{ROLE_COPY.owner.detail}</small></span>
@@ -177,9 +186,9 @@ export function ShareDialog({ documentId, title, capabilities, onNotify }: Share
             <button type="button" className="button" disabled={busy} onClick={() => void revoke(entry.principalId)}>Revoke</button>
           </div>
         ))}
-      </div>
+        </div>
 
-      <section className="identity-section">
+        <section className="identity-section">
         <h3>Bearer link</h3>
         <div className="share-input-row share-link-grant">
           <select aria-label="Link role" value={linkRole} disabled={!serviceOwner || busy} onChange={(event) => setLinkRole(event.target.value as GrantRole)}>
@@ -202,10 +211,18 @@ export function ShareDialog({ documentId, title, capabilities, onNotify }: Share
             <button type="button" className="button" disabled={busy} onClick={() => void revokeLink()}>Revoke link</button>
           </div>
         )}
-      </section>
+        </section>
+      </>}
 
       <div className="share-link-row">
-        <span><strong>{title}</strong><small>The plain page address carries no access token.</small></span>
+        <span>
+          <strong>{title}</strong>
+          <small>
+            {publicCollaborativePage
+              ? 'The opaque page address grants public editor access; no extra sharing switch is needed.'
+              : 'The plain page address carries no bearer token; existing access rules still apply.'}
+          </small>
+        </span>
         <button type="button" className="button primary" onClick={() => void copyPage()}><Icon path={icons.link} /> Copy page address</button>
       </div>
     </div>

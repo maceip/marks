@@ -151,7 +151,7 @@ export function TopBar(props: TopBarProps) {
               className="identity-chip"
               onClick={() => props.onAction('keep-workspace')}
             >
-              Temporary
+              Log In
             </button>
           )}
           {props.workspaceKind === 'local' && <span className="identity-chip">Local</span>}
@@ -235,7 +235,7 @@ export function TopBar(props: TopBarProps) {
             </button>
             {moreOpen && (
               <div className="popover-menu" role="menu">
-                {(!commandCenter ? props.workspaceKind === 'scratch' : available('identity.keep')) && <button type="button" role="menuitem" data-command-id="identity.keep" onClick={() => { setMoreOpen(false); invoke('identity.keep', 'keep-workspace'); }}><Icon path={icons.share} /> Keep workspace</button>}
+                {(!commandCenter ? props.workspaceKind === 'scratch' : available('identity.keep')) && <button type="button" role="menuitem" data-command-id="identity.keep" onClick={() => { setMoreOpen(false); invoke('identity.keep', 'keep-workspace'); }}><Icon path={icons.share} /> Log In</button>}
                 {(!commandCenter ? props.workspaceKind !== 'local' : available('identity.account')) && <button type="button" role="menuitem" data-command-id="identity.account" onClick={() => { setMoreOpen(false); invoke('identity.account', 'account'); }}><Icon path={icons.settings} /> Account</button>}
                 {(!commandCenter ? props.workspaceKind !== 'local' : available('identity.pairing')) && <button type="button" role="menuitem" data-command-id="identity.pairing" onClick={() => { setMoreOpen(false); invoke('identity.pairing', 'pairing'); }}><Icon path={icons.link} /> Phone confirmation</button>}
                 {(!commandCenter ? props.workspaceKind === 'session' : available('identity.sign-out')) && <button type="button" role="menuitem" data-command-id="identity.sign-out" onClick={() => { setMoreOpen(false); invoke('identity.sign-out', 'logout'); }}><Icon path={icons.close} /> Sign out</button>}

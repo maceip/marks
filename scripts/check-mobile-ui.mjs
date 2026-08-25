@@ -8,6 +8,7 @@ import { chromium, devices } from 'playwright';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,7 +18,22 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const bin = process.env.MARKS_BIN ?? join(root, 'target', 'debug', 'marks-server');
 const staticDir = process.env.MARKS_STATIC_DIR ?? join(root, 'client', 'dist');
 const work = mkdtempSync(join(tmpdir(), 'marks-mobile-ui.'));
-const port = 4219;
+const port = await new Promise((resolvePort, rejectPort) => {
+  const reservation = createServer();
+  reservation.once('error', rejectPort);
+  reservation.listen(0, '127.0.0.1', () => {
+    const address = reservation.address();
+    if (!address || typeof address === 'string') {
+      reservation.close();
+      rejectPort(new Error('could not reserve a mobile UI test port'));
+      return;
+    }
+    reservation.close((error) => {
+      if (error) rejectPort(error);
+      else resolvePort(address.port);
+    });
+  });
+});
 const origin = `http://127.0.0.1:${port}`;
 
 const serverLog = [];
@@ -45,7 +61,6 @@ process.on('exit', stop);
 
 const HOME_PRIMARY = '.home-actions .button.primary, .new-doc .button.primary';
 const RIBBON = '.phone-ribbon';
-const EDITOR_TAB = '.phone-ribbon [data-command-id="view.editor"]';
 
 async function assertNoHorizontalOverflow(page, label) {
   const overflow = await page.evaluate(() => ({
@@ -85,10 +100,12 @@ async function reachEditorByTouch(page, viewportWidth) {
     .catch(() => false);
   await assertNoHorizontalOverflow(page, `${viewportWidth}px entry`);
   if (ribbonSettled) {
-    // Document-first phone experience: the mobile ribbon is the surface.
-    const editorTab = page.locator(EDITOR_TAB).first();
-    await assertTappable(editorTab, 'ribbon editor tab', viewportWidth);
-    await editorTab.tap();
+    // Document-first phone experience: Import is the initial mobile ribbon
+    // object while the editor itself is already touch-ready below it.
+    const importTab = page.getByRole('tab', { name: 'Import', exact: true });
+    assert.equal(await importTab.getAttribute('aria-selected'), 'true', 'Import is selected on mobile first paint');
+    await assertTappable(importTab, 'initial Import ribbon tab', viewportWidth);
+    await importTab.tap();
   } else {
     const action = page.locator(HOME_PRIMARY).first();
     await assertTappable(action, 'home primary action', viewportWidth);
@@ -116,6 +133,20 @@ try {
     page.on('pageerror', (error) => pageErrors.push(error.stack ?? error.message));
     await page.goto(`${origin}/`, { waitUntil: 'domcontentloaded' });
     await reachEditorByTouch(page, page.viewportSize().width);
+
+    const loginPrompt = page.locator('.phone-identity');
+    assert.match(await loginPrompt.innerText(), /Open this page on a laptop to log in/i);
+    await loginPrompt.tap();
+    const loginDialog = page.getByRole('dialog');
+    await loginDialog.waitFor({ timeout: 10_000 });
+    assert.match(await loginDialog.innerText(), /Open this page on a laptop/i);
+    assert.equal(
+      await loginDialog.getByRole('button', { name: 'Log in on this phone only', exact: true }).isVisible(),
+      false,
+      'solo phone login stays buried in a collapsed disclosure',
+    );
+    console.log('  ok   logged-out mobile login is laptop-first and buries solo-phone login');
+    await loginDialog.getByRole('button', { name: 'Close', exact: true }).click();
 
     await page.locator('.cm-content').tap();
     await page.keyboard.type('Mobile touch editing works');

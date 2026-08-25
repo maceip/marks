@@ -129,7 +129,8 @@ function validateTicketResponse(
     throw new RoomAccessError('invalid room site assignment', false);
   }
   const validRole = role === 'owner' || role === 'editor' || role === 'commenter' || role === 'viewer';
-  if ((authority === 'session' && !validRole) || (authority === 'scratch' && role !== null)) {
+  const validScratchRole = role === null || role === 'editor';
+  if ((authority === 'session' && !validRole) || (authority === 'scratch' && !validScratchRole)) {
     throw new RoomAccessError('invalid room role', false);
   }
   if (!OPAQUE_ID_PATTERN.test(ticketId)) throw new RoomAccessError('invalid room ticket ID', false);

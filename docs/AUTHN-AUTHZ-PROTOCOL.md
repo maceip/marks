@@ -36,22 +36,22 @@ role, or decide whether a socket may write.
 ## 1. Product decision
 
 First paint has no registration form and no authentication ceremony. A new tab
-starts as a temporary scratch workspace. Its durable-upgrade message is:
+starts with a scratch owner capability and a service-persisted public page at a
+unique opaque slug. Its login message is:
 
-> This workspace is temporary. Scan with your phone to keep it and use it on
-> other devices.
+> This page is already saved and public. Log in with your phone to keep owner
+> access and use your account on other devices.
 
 The three v1 promotion rails are:
 
 1. **Phone controller:** scan a high-entropy QR link. The phone becomes, or uses,
    a controller for a durable random Marks principal. Each linked browser keeps
    its own silent device key.
-2. **Single-device keep:** when the visitor's only device is the one holding
-   the scratch workspace — a phone at the landing page with no laptop in
-   reach, or a laptop with no phone — there is nothing to scan and nothing to
-   link to. The pending device key already bound to that scratch signs its own
-   promotion and becomes the first controller. The pairing UI stays one tap
-   away for people who do have a second device.
+2. **Single-device login:** when the visitor's only device is the one holding
+   the scratch owner capability, the pending device key already bound to that
+   scratch signs its own promotion and becomes the first controller. On mobile
+   this is a disclosed fallback: the primary prompt asks the user to open the
+   public page on a laptop and use the phone-linked account flow.
 3. **Verified email token:** on supported Chrome deployments, redeem fresh,
    key-bound Email Verification Token evidence. The raw verified email is
    immediately reduced to a server-keyed locator. This rail is experimental and
@@ -71,8 +71,14 @@ ceremony and no user-presence requirement on ordinary login.
 
 The server must preserve all of these invariants:
 
-- A scratch capability is temporary authority over one scratch workspace. It
-  is not a `principalId` and is never displayed as a person.
+- A scratch capability is temporary owner authority over one scratch
+  workspace. It is not a `principalId` and is never displayed as a person.
+- Every scratch-created document is immediately durable and publicly editable
+  by its collision-resistant opaque slug. Knowledge of the slug grants the
+  fixed editor role, never owner, ACL-management, rename, or delete authority.
+- The seventh committed anonymous text mutation records the document's
+  persistence milestone atomically. Losing the scratch capability can lose
+  owner authority, but it does not erase the public document or committed text.
 - A durable principal is a server-generated random identifier. A controller,
   device key, email address, provider account, IP address, or ESBT site is never
   the principal identifier.
@@ -94,8 +100,9 @@ The server must preserve all of these invariants:
   enrolled device key may mint a new session only through a fresh, one-use,
   origin-bound challenge.
 - A document room receives an immutable `RoomActor` only after the Marks server
-  has validated either live scratch authority or a durable session/current ACL,
-  plus the matching one-use document ticket.
+  has validated a live scratch caller or durable session and then resolved
+  scratch ownership, current ACL/link authority, or the document's public-editor
+  bit, plus the matching one-use document ticket.
 - Owner/editor sockets may submit ESBT updates. Commenter/viewer sockets may
   not. Comments use a separate metadata operation and never ride inside an
   opaque ESBT update.
@@ -110,7 +117,7 @@ new tab
   |
   v
 SCRATCH
-  |  temporary capability; private scratch documents only
+  |  temporary owner capability; public-by-slug editor access
   |
   +-- phone scans QR --------------------+
   |                                      |
@@ -168,30 +175,37 @@ move the same scratch documents twice.
 - `scratchId`: 128 or more random bits, base64url;
 - `scratchCapability`: exactly 256 random bits, base64url on the wire;
 - `expiresAt`: v1 default 24 hours;
-- a private, unshared scratch document namespace.
+- an owner namespace whose new documents are public-editor by opaque slug.
 
 The server stores only `H("marks-bearer-secret-v1", capability)`. The browser
 stores the capability in `sessionStorage`, never `localStorage`, a URL, a
 cookie, analytics, or crash telemetry. Scratch requests carry it in an
 `Authorization: MarksScratch <scratchId>.<capability>` header.
 
-Reloading the same tab may continue. A browser-restored tab may continue. Marks
-does not promise recovery after the tab or its storage is lost. A duplicated
-tab may inherit browser session storage; server idempotency and claim
-serialization handle that race, but the UI must still describe the workspace
-as temporary.
+Reloading the same tab may retain scratch owner authority. A browser-restored
+tab may retain it. If the tab or its storage is lost, Marks does not promise to
+recover owner authority; the page itself remains available and editable at its
+public slug. A duplicated tab may inherit browser session storage; server
+idempotency and claim serialization handle that race.
 
-Scratch authority may create and edit its own private documents and export the
-current local Markdown. It may not create shares, public links, invitations,
-comments, durable history, or additional devices.
+Scratch owner authority may create, rename, delete, edit, and export its own
+documents. Any live scratch caller that knows a public slug may read, edit, and
+export that page under the fixed editor grant. Neither may create named ACLs,
+narrower bearer grants, invitations, principal-owned comments/history, or
+additional devices. Every accepted text mutation is journaled durably; the
+seventh committed anonymous mutation sets `persisted_at` once in the same
+transaction as the mutation receipt.
 
 Scratch synchronization uses the same room transport without pretending the
 capability is a person. An authenticated scratch request mints a 30-second,
-one-use scratch document ticket bound to scratch ID, document ID, site ID, and
-authorization epoch. Upgrade rechecks that the scratch is still live and
-unclaimed, then binds `RoomActor::Scratch`. Claiming the workspace increments
-the document epoch and closes its scratch sockets; the promoted browser
-reconnects with a durable principal ticket.
+one-use scratch document ticket bound to caller scratch ID, document ID, site
+ID, and authorization epoch. Mint and redemption both recheck whether that
+caller owns the page or the page still has public editor access. Upgrade
+rechecks that the owner scratch is live and unclaimed, then binds
+`RoomActor::Scratch`. Claiming the workspace increments the document epoch and
+closes its scratch sockets; the promoted browser reconnects with a durable
+principal ticket. A visitor's own scratch capability is never placed in the
+page URL and direct unauthenticated WebSocket admission still does not exist.
 
 ### Pending device key
 
@@ -328,9 +342,10 @@ scratch capability and the pending private key could already mint a pairing
 and consume it itself. It removes the second-device ceremony, not a check.
 Two consequences are deliberate:
 
-- The single key is the whole account. The UI must state plainly that losing
-  the device and its origin storage before linking another device is
-  unrecoverable, exactly like an unpromoted scratch tab.
+- The single key is the whole account identity. The UI must state plainly that
+  losing the device and its origin storage before linking another device loses
+  owner/account recovery. Public pages and committed text remain available at
+  their opaque slugs.
 - When a second device appears later, it links through the ordinary QR
   pairing: the second device mints the pairing from its own scratch, and this
   device — now a controller — signs the `marks-device-grant-v1` approval.
@@ -536,9 +551,11 @@ part of this protocol version.
 | Manage shares | yes | no | no | no |
 | Delete/restore document | yes | no | no | no |
 
-A `RoomActor::Scratch` may read, publish presence, export, edit, and delete only
-documents whose current owner is that exact live scratch record. It may not
-comment, share, or enter any principal ACL.
+An owning `RoomActor::Scratch` may read, publish presence, export, edit, and use
+owner-only REST management only for documents whose current owner is that exact
+live scratch record. A public-slug scratch visitor is re-resolved as fixed
+editor access and may read, publish presence, export, and edit, but not rename,
+delete, manage shares, comment as a principal, or enter any principal ACL.
 
 Unknown actions and roles fail closed. “Commenter” never means “let the client
 send an opaque update and trust it not to change text.” Comment mutation is a
@@ -551,7 +568,8 @@ For a durable principal, the browser calls
 current local `siteId`. The Rust server:
 
 1. validates the session cookie and live device;
-2. loads the non-deleted document and current ACL/link grant;
+2. loads the non-deleted document and resolves its current ACL/link grant or
+   fixed public-editor bit;
 3. resolves one role;
 4. creates a 256-bit one-use ticket with a 30-second expiry, bound to ticket ID,
    principal ID, session ID, device ID, document ID, site ID, and role;
@@ -583,9 +601,10 @@ Actor {
 }
 ```
 
-For scratch documents,
+For scratch-owned documents,
 `POST /v1/scratch/documents/{documentId}/session` performs the analogous check
-with scratch capability authority and mints the scratch form of the ticket.
+with the caller's scratch capability. The owning scratch receives `role: null`;
+a different live scratch caller opening a public slug receives `role: editor`.
 Both forms use the same redacted subprotocol transport.
 
 The room stores `RoomActor::Principal(Actor)` or `RoomActor::Scratch` on the
@@ -665,6 +684,9 @@ documents(
   scratch_id FK NULL,
   owner_principal_id FK NULL,
   auth_epoch,
+  public_edit BOOLEAN DEFAULT FALSE,
+  anonymous_edit_count INTEGER DEFAULT 0,
+  persisted_at NULL,
   ...durable room metadata...,
   CHECK(exactly one of scratch_id and owner_principal_id is non-null)
 )
@@ -694,7 +716,7 @@ reconstruct credentials.
 
 | Method and path | Authority | Purpose |
 | --- | --- | --- |
-| `POST /v1/auth/scratch` | none, rate limited | Create temporary workspace capability |
+| `POST /v1/auth/scratch` | none, rate limited | Create anonymous owner capability for public-by-slug pages |
 | `PUT /v1/auth/scratch/{id}/device` | scratch | Bind pending browser key |
 | `POST /v1/auth/scratch/{id}/bootstrap` | scratch + pending-key self-proof | Promote the only device to first controller |
 | `POST /v1/auth/pairings` | scratch | Create high-entropy QR pairing plus four-word code |
@@ -713,8 +735,8 @@ reconstruct credentials.
 | `DELETE /v1/auth/session` | session + CSRF | Revoke current session |
 | `GET /v1/auth/devices` | session | List controllers/devices/sessions |
 | `DELETE /v1/auth/devices/{id}` | controller + CSRF | Revoke device and descendant sessions |
-| `POST /v1/scratch/documents/{id}/session` | scratch | Mint one-use scratch room ticket |
-| `POST /v1/documents/{id}/session` | session + ACL | Mint one-use room ticket |
+| `POST /v1/scratch/documents/{slug}/session` | live scratch caller + owner or public-editor resolution | Mint one-use scratch room ticket |
+| `POST /v1/documents/{slug}/session` | session + ACL/link or public-editor resolution | Mint one-use room ticket |
 
 All endpoints have bounded JSON bodies, reject unknown security-relevant fields,
 use uniform external auth failures, and apply per-IP plus per-capability/device
@@ -762,8 +784,8 @@ pure, database-independent validators and typed authenticated results:
 - silent device-session challenges;
 - session secret/device/principal validation;
 - trusted EVT evidence binding and keyed locator derivation;
-- one-use document ticket redemption into `Actor`;
-- one-use scratch ticket redemption into a non-principal `ScratchActor`;
+- one-use ACL/link and public-editor document ticket redemption into `Actor`;
+- one-use owner/public scratch ticket redemption into a non-principal `ScratchActor`;
 - the complete document role matrix.
 
 The browser implementer contract — paths, JSON, cookies, and what the UI
@@ -790,7 +812,9 @@ redemption when no trusted adapter is configured.
 The identity gate is complete only when integration tests prove:
 
 1. first paint and scratch edit require no form or browser auth prompt;
-2. closing an unpromoted scratch tab is honestly presented as unrecoverable;
+2. a second anonymous browser can open the copied opaque slug and immediately
+   collaborate, while closing the creator is honestly presented as loss of
+   owner authority rather than loss of the public page;
 3. first-phone QR promotion preserves the scratch documents and creates one
    principal under duplicate/reordered requests;
 4. a single-device self-bootstrap on the only device preserves the scratch
@@ -812,7 +836,10 @@ The identity gate is complete only when integration tests prove:
     promoted principal without losing committed text;
 13. role downgrade takes effect on an already-open socket;
 14. ESBT snapshots and updates contain no Marks principal, session, email, role,
-    controller, device, or ticket data.
+    controller, device, or ticket data;
+15. the seventh committed anonymous text mutation sets the persistence marker,
+    and a newly created caller rehydrates the page after the creator scratch has
+    expired.
 
 Until those runtime gates pass against the Rust server and real browsers, the
 crate and this document are an implemented protocol boundary—not an end-to-end

@@ -15,8 +15,10 @@ use axum::response::{IntoResponse, Response};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use futures_util::{SinkExt, StreamExt};
 use marks_auth::{
-    DocumentId, ESBT_SUBPROTOCOL, RoomActor, RoomIdentity, TICKET_SUBPROTOCOL_PREFIX,
-    parse_ticket_subprotocol, redeem_document_ticket, redeem_scratch_document_ticket,
+    DocumentId, DocumentOwner, ESBT_SUBPROTOCOL, RoomActor, RoomIdentity,
+    TICKET_SUBPROTOCOL_PREFIX, parse_ticket_subprotocol, redeem_document_ticket,
+    redeem_public_document_ticket, redeem_public_scratch_document_ticket,
+    redeem_scratch_document_ticket, require_scratch_document,
 };
 use rusqlite::params;
 use sha2::{Digest, Sha256};
@@ -93,14 +95,26 @@ fn admit(
         let actor = match &ticket {
             store::StoredTicket::Principal(stored) => {
                 let cookie = cookie.as_ref().ok_or_else(ApiError::unauthenticated)?;
-                let actor = redeem_document_ticket(
-                    &stored.record,
-                    &ticket_secret,
-                    &cookie.session,
-                    &document.record,
-                    &stored.record.esbt_site,
-                    now,
-                )
+                let actor = if matches!(document.record.owner, DocumentOwner::Scratch(_)) {
+                    redeem_public_document_ticket(
+                        &stored.record,
+                        &ticket_secret,
+                        &cookie.session,
+                        &document.record,
+                        document.public_edit,
+                        &stored.record.esbt_site,
+                        now,
+                    )
+                } else {
+                    redeem_document_ticket(
+                        &stored.record,
+                        &ticket_secret,
+                        &cookie.session,
+                        &document.record,
+                        &stored.record.esbt_site,
+                        now,
+                    )
+                }
                 .map_err(|_| ApiError::unauthenticated())?;
                 let identity = principal_identity(actor.principal_id.as_str());
                 RoomActor::Principal(marks_auth::Actor { identity, ..actor })
@@ -108,14 +122,31 @@ fn admit(
             store::StoredTicket::Scratch(stored) => {
                 let scratch = store::load_scratch(conn, &stored.record.scratch_id)?
                     .ok_or_else(ApiError::unauthenticated)?;
-                let actor = redeem_scratch_document_ticket(
-                    &stored.record,
-                    &ticket_secret,
-                    &scratch,
+                let actor = if require_scratch_document(
                     &document.record,
-                    &stored.record.esbt_site,
-                    now,
+                    &stored.record.scratch_id,
                 )
+                .is_ok()
+                {
+                    redeem_scratch_document_ticket(
+                        &stored.record,
+                        &ticket_secret,
+                        &scratch,
+                        &document.record,
+                        &stored.record.esbt_site,
+                        now,
+                    )
+                } else {
+                    redeem_public_scratch_document_ticket(
+                        &stored.record,
+                        &ticket_secret,
+                        &scratch,
+                        &document.record,
+                        document.public_edit,
+                        &stored.record.esbt_site,
+                        now,
+                    )
+                }
                 .map_err(|_| ApiError::unauthenticated())?;
                 let identity = scratch_identity(document_id.as_str(), actor.scratch_id.as_str());
                 RoomActor::Scratch(marks_auth::ScratchActor { identity, ..actor })

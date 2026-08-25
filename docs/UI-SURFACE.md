@@ -60,16 +60,21 @@ address. The page people read is a Marks document: source, preview, ribbon,
 and the same Markdown that describes the product, accounts, and machinery.
 
 Identity chrome is presentation-complete in local mode on desktop, phone, and
-fold: Temporary chip, Keep workspace with an on-brand QR of `/link`, phone
+fold: anonymous/public status, Log In with an on-brand QR of `/link`, phone
 confirmation, Account devices/controllers/sessions, Share principal and link
-grants, mapped service-error toasts, and reconnect copy. Keep workspace is
-posture-aware: on the phone shell — where there is no second screen to scan —
-“Keep on this phone” leads and the pairing QR sits one tap behind it; on
-larger shells the QR leads and “Keep on this device only” is the quiet
-fallback. In service mode the same surfaces mint a real pairing, show the QR
-and four-word code, finalize the desktop tab, run the single-device
-self-bootstrap, and redeem a silent device session. The HTTP contract lives
-in [`UI-SERVICE-CONTRACT.md`](UI-SERVICE-CONTRACT.md).
+grants, mapped service-error toasts, and reconnect copy. Log In is
+posture-aware: the phone shell leads with opening the public page on a laptop
+and hides solo-phone login behind a secondary disclosure; larger shells lead
+with the phone-link QR and keep single-device login as a quiet fallback. In
+service mode the same surfaces mint a real pairing, show the QR and four-word
+code, finalize the desktop tab, run the optional single-device self-bootstrap,
+and redeem a silent device session. The HTTP contract lives in
+[`UI-SERVICE-CONTRACT.md`](UI-SERVICE-CONTRACT.md).
+
+Import is the initial ribbon tab on desktop, phone, and foldable shells. Its
+first-class entries are Notes app, Meeting, GitHub README, From URL, and From
+file. Dropping a PDF, DOC, DOCX, XLS, XLSX, or Markdown file anywhere on the
+app invokes the same import path; image drops continue to belong to the editor.
 
 ## Replaceable data plumbing
 

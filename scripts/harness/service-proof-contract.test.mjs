@@ -33,7 +33,10 @@ test('the repository exposes only current browser and service proof commands', (
 test('the current service proof owns the migrated two-browser scenarios', () => {
   const serviceProof = read('scripts/ci-service-ui.mjs');
   for (const assertion of [
-    'second isolated browser is admitted by current scratch authority',
+    'anonymous root creates a unique page through /v1/documents',
+    'anonymous page is public by its opaque slug on creation',
+    'more than six anonymous edits mark the public page persisted',
+    'copy-pasted slug admits a different anonymous editor without sharing settings',
     'isolated browser replicas converge through marks-server',
     'current service paints the remote browser caret',
     'presence bar shows both live browser connections',
@@ -42,11 +45,13 @@ test('the current service proof owns the migrated two-browser scenarios', () => 
     'isolated browser peer cold-opens committed content including preview writeback',
     'current service outline reflects admitted Markdown headings',
     'current service editor scrolling moves the preview',
+    'supported document drag shows the Markdown import target',
+    'document drop converts and creates one populated public page',
   ]) {
     assert.match(serviceProof, new RegExp(assertion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
   assert.match(serviceProof, /browser\.newContext/);
-  assert.match(serviceProof, /peerContext\.addInitScript/);
+  assert.doesNotMatch(serviceProof, /peerContext\.addInitScript/);
 });
 
 test('incremental CI is conservative, gated, cached, and keeps full browser coverage', () => {

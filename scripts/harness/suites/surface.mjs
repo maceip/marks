@@ -27,16 +27,17 @@ async function proposeFromInPageAgent(session, commandId) {
 
 async function createDocument(session) {
   await session.goto('/');
-  try {
-    await session.waitForSelector('.new-doc .button.primary', { timeout: 8_000 });
-    if (await session.isVisible('.new-doc .button.primary')) {
-      await session.click('.new-doc .button.primary');
-      return;
-    }
-  } catch {
-    // The persistent rail becomes an overlay below the desktop posture.
+  await session.waitForSelector(
+    '.cm-content, .new-doc .button.primary, .home-actions .button.primary',
+    { timeout: 15_000 },
+  );
+  // Service mode allocates a public slug on anonymous first paint. Local mode
+  // still presents one of the two explicit create controls.
+  if ((await session.count('.cm-content')) > 0) return;
+  if (await session.isVisible('.new-doc .button.primary')) {
+    await session.click('.new-doc .button.primary');
+    return;
   }
-  await session.waitForSelector('.home-actions .button.primary', { timeout: 15_000 });
   await session.click('.home-actions .button.primary');
 }
 
@@ -77,6 +78,26 @@ export async function runSurface(session, { check }) {
 
   check('opening shell does not stay up', (await session.count('.opening-shell')) === 0);
 
+  const importRibbon = await session.evaluate(() => {
+    const selected = document.querySelector('.ribbon-tab[aria-selected="true"]');
+    const expected = [
+      'import.notes-app',
+      'import.meeting',
+      'import.github-readme',
+      'import.url',
+      'document.import',
+    ];
+    return {
+      selected: selected?.textContent?.trim() ?? '',
+      commands: expected.map((id) => Boolean(document.querySelector(`[data-command-id="${id}"]`))),
+    };
+  });
+  check(
+    'desktop opens on the complete Import ribbon',
+    importRibbon.selected === 'Import' && importRibbon.commands.every(Boolean),
+    JSON.stringify(importRibbon),
+  );
+
   const materialState = await session.evaluate(() => ({
     tier: document.documentElement.dataset.surfaceTier,
     engine: document.documentElement.dataset.surfaceEngine,
@@ -109,7 +130,7 @@ export async function runSurface(session, { check }) {
 
   check('document renders blocks', (await session.count('.marks-preview .marks-block')) >= 1);
   check('desktop ribbon is registry-driven',
-    (await session.count('.ribbon-body [data-command-id="format.bold"]')) >= 1 &&
+    (await session.count('.ribbon-body [data-command-id="import.url"]')) === 1 &&
     (await session.count('.quick-access [data-command-id="format.bold"]')) >= 1);
 
   await session.click('.ribbon-tab');
@@ -228,7 +249,28 @@ export async function runSurface(session, { check }) {
   });
   check('selection toolbar preserves ribbon tab hit targets', homeTabOwnsHitTarget);
 
-  await session.click('.ribbon-tab:nth-child(2)');
+  await session.evaluate(() => {
+    const importTab = [...document.querySelectorAll('.ribbon-tab')]
+      .find((tab) => tab.textContent?.trim() === 'Import');
+    if (!(importTab instanceof HTMLButtonElement)) throw new Error('Import ribbon tab not found');
+    importTab.click();
+  });
+  await session.wait(100);
+  const importUrlOwnsHitTarget = await session.evaluate(() => {
+    const button = document.querySelector('[data-command-id="import.url"]');
+    if (!(button instanceof HTMLButtonElement)) return false;
+    const rect = button.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    return hit === button || hit?.closest('[data-command-id="import.url"]') === button;
+  });
+  check('floating document actions preserve Import command hit targets', importUrlOwnsHitTarget);
+
+  await session.evaluate(() => {
+    const home = [...document.querySelectorAll('.ribbon-tab')]
+      .find((tab) => tab.textContent?.trim() === 'Home');
+    if (!(home instanceof HTMLButtonElement)) throw new Error('Home ribbon tab not found');
+    home.click();
+  });
   await session.wait(100);
   if (
     (await session.count('button[data-command-id="input.dictate"]')) === 0 &&
@@ -292,25 +334,33 @@ export async function runSurface(session, { check }) {
   );
   await session.setOffline(false);
 
-  const contextLoss = await session.evaluate(() => {
+  const contextLossProbe = await session.evaluate(() => {
     const canvas = document.querySelector('.surface-material-canvas[data-ready="true"]');
-    if (!canvas) return { applicable: false, tier: document.documentElement.dataset.surfaceTier };
+    if (!canvas) return { applicable: false };
+    canvas.setAttribute('data-context-loss-probe', 'true');
+    const initialTier = document.documentElement.dataset.surfaceTier;
+    const initialEngine = document.documentElement.dataset.surfaceEngine;
     canvas.dispatchEvent(new Event('webglcontextlost', { cancelable: true }));
+    return { applicable: true, initialTier, initialEngine };
+  });
+  await session.wait(350);
+  const contextLoss = await session.evaluate((probe) => {
     const canvases = [...document.querySelectorAll('.surface-material-canvas')];
+    const failed = document.querySelector('[data-context-loss-probe="true"]');
     return {
-      applicable: true,
+      ...probe,
       tier: document.documentElement.dataset.surfaceTier,
       engine: document.documentElement.dataset.surfaceEngine,
+      failedReady: failed?.hasAttribute('data-ready') ?? null,
       canvases: canvases.length,
       visibleCanvases: canvases.filter((node) => getComputedStyle(node).display !== 'none').length,
     };
-  });
+  }, contextLossProbe);
   check(
-    'WebGL context loss removes canvases',
+    'GPU context loss disables the failed canvas and selects a fallback',
     !contextLoss.applicable || (
-      contextLoss.tier === 'foundation' &&
-      contextLoss.engine === 'css' &&
-      (contextLoss.visibleCanvases === 0 || contextLoss.canvases === 0)
+      contextLoss.failedReady === false &&
+      (contextLoss.engine !== contextLoss.initialEngine || contextLoss.tier !== contextLoss.initialTier)
     ),
     JSON.stringify(contextLoss),
   );
@@ -356,6 +406,13 @@ export async function runSurface(session, { check }) {
     bookSplit.previewLeft >= bookSplit.editorLeft + bookSplit.editorW - 8,
     JSON.stringify(bookSplit));
 
+  await session.evaluate(() => {
+    const home = [...document.querySelectorAll('.ribbon-tab')]
+      .find((tab) => tab.textContent?.trim() === 'Home');
+    if (!(home instanceof HTMLButtonElement)) throw new Error('Home ribbon tab not found');
+    home.click();
+  });
+  await session.wait(100);
   await session.click('.preview-pane');
   await session.wait(100);
   check('book fold split keeps compose until the app rail changes the view',
@@ -430,9 +487,24 @@ export async function runSurface(session, { check }) {
   }
 
   await session.goto(`${documentPath}?marks-posture=phone`);
-  await session.waitForSelector('.phone-nav', { timeout: 20_000 });
+  await session.waitForSelector('.phone-ribbon', { timeout: 20_000 });
   check('phone uses a focused composer instead of desktop ribbon',
-    (await session.count('.phone-nav')) === 1 && (await session.count('.ribbon-body')) === 0);
+    (await session.count('.phone-ribbon')) === 1 && (await session.count('.ribbon-body')) === 0);
+  const phoneImport = await session.evaluate(() => ({
+    selected: document.querySelector('.phone-ribbon-tabs [role="tab"][aria-selected="true"]')?.textContent?.trim() ?? '',
+    commands: [
+      'import.notes-app',
+      'import.meeting',
+      'import.github-readme',
+      'import.url',
+      'document.import',
+    ].map((id) => Boolean(document.querySelector(`.phone-ribbon [data-command-id="${id}"]`))),
+  }));
+  check(
+    'phone opens on the complete Import ribbon',
+    phoneImport.selected === 'Import' && phoneImport.commands.every(Boolean),
+    JSON.stringify(phoneImport),
+  );
   await session.waitForSelector('.workspace.phone-ghost .marks-preview .marks-block', { timeout: 20_000 });
   const phoneGhost = await session.evaluate(() => {
     const root = document.querySelector('.workspace');
@@ -524,47 +596,49 @@ export async function runSurface(session, { check }) {
     ghostPan.ok && ghostPan.bound === 'true' && ghostPan.draggingAfterDown && ghostPan.shift === 'end' && ghostPan.translate === '0%',
     JSON.stringify(ghostPan));
   await session.evaluate(() => {
-    const preview = [...document.querySelectorAll('.phone-nav > button')]
-      .find((button) => button.textContent?.includes('Preview'));
-    if (!(preview instanceof HTMLButtonElement)) throw new Error('phone Preview command not found');
-    preview.click();
+    const view = [...document.querySelectorAll('.phone-ribbon-tabs [role="tab"]')]
+      .find((button) => button.textContent?.trim() === 'View');
+    if (!(view instanceof HTMLButtonElement)) throw new Error('phone View tab not found');
+    view.click();
   });
+  await session.wait(100);
+  await session.click('.phone-ribbon [data-command-id="view.preview"]');
   await session.wait(250);
   check('phone preview mode removes the ghost overlay',
     (await session.count('.workspace.phone-ghost, .preview-ghost')) === 0 &&
     (await session.isVisible('.preview-pane')) &&
     !(await session.isVisible('.editor-pane')));
-  await session.evaluate(() => {
-    const write = [...document.querySelectorAll('.phone-nav > button')]
-      .find((button) => button.textContent?.includes('Write'));
-    if (!(write instanceof HTMLButtonElement)) throw new Error('phone Write command not found');
-    write.click();
-  });
+  await session.click('.phone-ribbon [data-command-id="view.editor"]');
   await session.waitForSelector('.workspace.phone-ghost', { timeout: 10_000 });
-  await session.click('.phone-nav > button:last-child');
+  await session.evaluate(() => {
+    const more = [...document.querySelectorAll('.phone-ribbon-tabs [role="tab"]')]
+      .find((button) => button.textContent?.trim() === 'More');
+    if (!(more instanceof HTMLButtonElement)) throw new Error('phone More tab not found');
+    more.click();
+  });
   await session.wait(150);
   const dataMode = await session.evaluate(() => document.documentElement.dataset.marksMode ?? 'local');
-  const pairingCount = await session.count('.phone-sheet [data-command-id="identity.pairing"]');
-  check('phone page sheet applies phone-confirmation eligibility',
+  const pairingCount = await session.count('.phone-ribbon [data-command-id="identity.pairing"]');
+  check('phone More ribbon applies phone-confirmation eligibility',
     dataMode === 'service' ? pairingCount === 1 : pairingCount === 0,
     `${dataMode}: ${pairingCount}`);
   await session.evaluate(() => {
-    const review = [...document.querySelectorAll('.phone-nav > button')]
+    const review = [...document.querySelectorAll('.phone-ribbon-tabs [role="tab"]')]
       .find((button) => button.textContent?.trim() === 'Review');
-    if (!(review instanceof HTMLButtonElement)) throw new Error('phone Review command not found');
+    if (!(review instanceof HTMLButtonElement)) throw new Error('phone Review tab not found');
     review.click();
   });
-  await session.waitForSelector('.phone-sheet[aria-label="Document intelligence commands"]');
+  await session.waitForSelector('.phone-ribbon-deck[aria-label="Review commands"]');
   if (ribbonWildEnabled) {
-    check('phone review sheet exposes all five possibility tools',
-      (await session.count('.phone-sheet [data-command-id^="wild."]')) === 5);
-    await session.click('.phone-sheet [data-command-id="wild.context-half-life"]');
+    check('phone Review ribbon exposes all five possibility tools',
+      (await session.count('.phone-ribbon [data-command-id^="wild."]')) === 5);
+    await session.click('.phone-ribbon [data-command-id="wild.context-half-life"]');
     await session.waitForSelector('.wild-studio[data-shell="phone"][data-wild-capability="half-life"]');
-    check('possibility layer becomes a focused phone sheet',
+    check('possibility layer becomes a focused phone surface',
       (await session.isVisible('.wild-studio[data-shell="phone"]')));
   } else {
-    check('disabled ribbon-wild stays absent from the phone review sheet',
-      (await session.count('.phone-sheet [data-command-id^="wild."]')) === 0);
+    check('disabled ribbon-wild stays absent from the phone Review ribbon',
+      (await session.count('.phone-ribbon [data-command-id^="wild."]')) === 0);
     const wildAssets = await session.evaluate(() => performance.getEntriesByType('resource')
       .map((entry) => entry.name)
       .filter((name) => /\/assets\/(?:WildStudio|WildTelemetry|wild|observations)-/.test(name)));
@@ -576,6 +650,7 @@ export async function runSurface(session, { check }) {
 
 export const SURFACE_CHECK_NAMES = [
   'opening shell does not stay up',
+  'desktop opens on the complete Import ribbon',
   'surface tier is explicit',
   'scrolling document bodies stay opaque',
   'reduced glass removes shader and blur',
@@ -600,12 +675,13 @@ export const SURFACE_CHECK_NAMES = [
   'source-changing agent work paints a live causal lightpath',
   'successful source commands capture a reversible counterfactual',
   'selection toolbar preserves ribbon tab hit targets',
+  'floating document actions preserve Import command hit targets',
   'voice input is honest',
   'select-all in the preview stays inside the document',
   'preview right-click opens the marks menu',
   'theme toggles',
   'connectivity state is honest',
-  'WebGL context loss removes canvases',
+  'GPU context loss disables the failed canvas and selects a fallback',
   'book fold uses a view rail and a full-width ribbon',
   'unfolded app rail is thinner than the Material 3 80dp rail',
   'book fold ribbon spans its chrome container',
@@ -621,13 +697,14 @@ export const SURFACE_CHECK_NAMES = [
   'laptop fold split is a real stacked hinge canvas',
   'possibility layer respects the unfolded laptop posture',
   'phone uses a focused composer instead of desktop ribbon',
+  'phone opens on the complete Import ribbon',
   'phone write keeps a full-width editor under a right-hand ghost preview',
   'phone ghost viewfinder is clipped and pointer-transparent',
   'phone two-finger pan snaps the ghost to the other page half',
   'phone preview mode removes the ghost overlay',
-  'phone page sheet applies phone-confirmation eligibility',
-  'disabled ribbon-wild stays absent from the phone review sheet',
+  'phone More ribbon applies phone-confirmation eligibility',
+  'disabled ribbon-wild stays absent from the phone Review ribbon',
   'disabled ribbon-wild requests no lazy code or style assets',
-  'phone review sheet exposes all five possibility tools',
-  'possibility layer becomes a focused phone sheet',
+  'phone Review ribbon exposes all five possibility tools',
+  'possibility layer becomes a focused phone surface',
 ];

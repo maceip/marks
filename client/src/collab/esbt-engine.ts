@@ -691,7 +691,7 @@ export class EsbtEngine implements CollabSession {
 
   private applyTicketPermissions(ticket: RoomTicket): void {
     const next: DocumentCapabilities['role'] =
-      ticket.authority === 'scratch' ? 'scratch' : ticket.role;
+      ticket.authority === 'scratch' ? (ticket.role ?? 'scratch') : ticket.role;
     this.applyPermissionRole(next);
   }
 

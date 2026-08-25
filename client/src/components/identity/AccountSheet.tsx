@@ -58,7 +58,7 @@ export function AccountSheet({ onNotify, onKeep, onSignedOut }: AccountSheetProp
       await logout();
       setSession(null);
       setInventory(null);
-      onNotify('Signed out', 'This tab is a temporary workspace again until you keep it.', 'success');
+      onNotify('Signed out', 'This tab is anonymous again. Its public pages remain available by URL.', 'success');
       onSignedOut?.();
     } catch {
       onNotify(SERVICE_ERROR_COPY[403].title, SERVICE_ERROR_COPY[403].detail, SERVICE_ERROR_COPY[403].tone);
@@ -84,9 +84,9 @@ export function AccountSheet({ onNotify, onKeep, onSignedOut }: AccountSheetProp
       <div className="local-notice">
         <Icon path={icons.check} size={15} />
         <span>
-          <strong>{session ? 'Kept workspace' : 'Temporary workspace'}</strong>
+          <strong>{session ? 'Logged in' : 'Not logged in'}</strong>
           {session
-            ? 'This tab has a rotating session. Documents you keep are visible on every linked device.'
+            ? 'This tab has a rotating session. Account documents are visible on every linked device.'
             : SCRATCH_HONEST_LINE}
         </span>
       </div>
@@ -133,7 +133,7 @@ export function AccountSheet({ onNotify, onKeep, onSignedOut }: AccountSheetProp
             <small>
               {persisted
                 ? 'This browser granted persistent storage: the device key is exempt from automatic eviction.'
-                : 'The browser may evict this origin’s storage when unused. Keeping a workspace requests persistence; installing the app strengthens the grant.'}
+                : 'The browser may evict this origin’s storage when unused. Logging in requests persistence; installing the app strengthens the grant.'}
             </small>
           </li>
         </ul>
@@ -194,7 +194,7 @@ export function AccountSheet({ onNotify, onKeep, onSignedOut }: AccountSheetProp
 
       <div className="dialog-actions">
         <button type="button" className="button" onClick={onKeep}>
-          Keep this workspace
+          Log In
         </button>
         <button type="button" className="button" onClick={() => void revoke()}>
           Revoke device

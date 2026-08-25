@@ -279,7 +279,7 @@ async fn check_url(raw: String) -> Value {
     }
 }
 
-enum CheckError {
+pub(crate) enum CheckError {
     Blocked,
     Unavailable,
 }
@@ -315,7 +315,7 @@ async fn follow_url(raw: &str) -> Result<(StatusCode, String, bool), CheckError>
     Err(CheckError::Unavailable)
 }
 
-fn parse_public_url(raw: &str) -> Result<Url, CheckError> {
+pub(crate) fn parse_public_url(raw: &str) -> Result<Url, CheckError> {
     if raw.len() > MAX_URL_BYTES {
         return Err(CheckError::Blocked);
     }
@@ -332,6 +332,28 @@ fn parse_public_url(raw: &str) -> Result<Url, CheckError> {
 }
 
 async fn pinned_request(url: &Url, head: bool) -> Result<reqwest::Response, CheckError> {
+    let client = pinned_client(url).await?;
+    let request = if head {
+        client.head(url.clone())
+    } else {
+        client
+            .get(url.clone())
+            .header(reqwest::header::RANGE, "bytes=0-0")
+    };
+    request
+        .header(
+            reqwest::header::ACCEPT,
+            "text/html,application/xhtml+xml;q=0.8,*/*;q=0.1",
+        )
+        .header(reqwest::header::USER_AGENT, "Marks-Link-Inspector/0.1")
+        .send()
+        .await
+        .map_err(|_| CheckError::Unavailable)
+}
+
+/// Resolve a URL to a public address and return a client pinned to that exact
+/// resolution. Callers must repeat this for every redirect hop.
+async fn pinned_client(url: &Url) -> Result<Client, CheckError> {
     let host = url.host_str().ok_or(CheckError::Blocked)?;
     let port = url.port_or_known_default().ok_or(CheckError::Blocked)?;
     let literal_ip = host
@@ -357,20 +379,18 @@ async fn pinned_request(url: &Url, head: bool) -> Result<reqwest::Response, Chec
     if literal_ip.is_none() {
         client = client.resolve(host, address);
     }
-    let client = client.build().map_err(|_| CheckError::Unavailable)?;
-    let request = if head {
-        client.head(url.clone())
-    } else {
-        client
-            .get(url.clone())
-            .header(reqwest::header::RANGE, "bytes=0-0")
-    };
-    request
+    client.build().map_err(|_| CheckError::Unavailable)
+}
+
+pub(crate) async fn pinned_public_get(url: &Url) -> Result<reqwest::Response, CheckError> {
+    pinned_client(url)
+        .await?
+        .get(url.clone())
         .header(
             reqwest::header::ACCEPT,
-            "text/html,application/xhtml+xml;q=0.8,*/*;q=0.1",
+            "text/html,application/xhtml+xml,text/plain;q=0.8",
         )
-        .header(reqwest::header::USER_AGENT, "Marks-Link-Inspector/0.1")
+        .header(reqwest::header::USER_AGENT, "Marks-Importer/0.1")
         .send()
         .await
         .map_err(|_| CheckError::Unavailable)

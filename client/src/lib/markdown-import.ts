@@ -11,7 +11,9 @@ export interface MarkdownImport {
   content: string;
 }
 
-export class MarkdownImportError extends Error {}
+export class MarkdownImportError extends Error {
+  override name = 'MarkdownImportError';
+}
 
 /** Validate before and after decoding: byte size bounds allocation while the
  * shared UTF-16 unit limit is the actual native/Wasm document contract. */

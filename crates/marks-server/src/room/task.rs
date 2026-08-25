@@ -17,11 +17,12 @@ use crate::config::Config;
 use crate::db::Db;
 use crate::error::{ApiError, ApiResult};
 use crate::ids::now_ms;
+use crate::routes::documents::apply_public_editor_floor;
 use crate::store;
 use esbt::Artifact;
 use esbt::ErrorCode;
 use esbt::clock::Version;
-use marks_auth::{DocumentAction, DocumentId, RoomActor, authorize_room_action};
+use marks_auth::{DocumentAction, DocumentId, DocumentRole, RoomActor, authorize_room_action};
 use rusqlite::{OptionalExtension, params};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -864,6 +865,20 @@ impl Room {
                 }
                 CommitAction::Receipt => None,
             });
+        let anonymous_edits = prepared
+            .iter()
+            .filter(|commit| {
+                commit.actor.kind == "scratch" && !matches!(commit.action, CommitAction::Receipt)
+            })
+            .count() as u64;
+        let anonymous_persisted_at = prepared
+            .iter()
+            .filter(|commit| {
+                commit.actor.kind == "scratch" && !matches!(commit.action, CommitAction::Receipt)
+            })
+            .map(|commit| commit.committed_at)
+            .max()
+            .unwrap_or_default();
         let committed: ApiResult<()> = self.db.tx(|db| {
             require_live_epoch(db, &document_id, epoch)?;
             for commit in &prepared {
@@ -949,6 +964,23 @@ impl Room {
             }
             if let Some((chars, updated_at)) = metadata {
                 update_document_metadata(db, &document_id, chars, updated_at)?;
+            }
+            if anonymous_edits > 0 {
+                db.execute(
+                    "UPDATE documents
+                     SET anonymous_edit_count = anonymous_edit_count + ?2,
+                         persisted_at = CASE
+                           WHEN persisted_at IS NULL
+                            AND anonymous_edit_count + ?2 > 6 THEN ?3
+                           ELSE persisted_at
+                         END
+                     WHERE id = ?1 AND public_edit = 1",
+                    params![
+                        document_id.as_str(),
+                        store::ms(anonymous_edits),
+                        store::ms(anonymous_persisted_at),
+                    ],
+                )?;
             }
             if let Some(snapshot) = &compact {
                 db.execute(
@@ -1301,6 +1333,8 @@ impl Room {
                     RoomActor::Principal(actor) => {
                         marks_auth::resolve_document_role(&row.record, &actor.principal_id, &acl)
                             .ok()
+                            .map(|role| apply_public_editor_floor(role, row.public_edit))
+                            .or_else(|| row.public_edit.then_some(DocumentRole::Editor))
                             .map(|role| {
                                 RoomActor::Principal(marks_auth::Actor {
                                     role,
@@ -1319,7 +1353,7 @@ impl Room {
                         let owns =
                             marks_auth::require_scratch_document(&row.record, &actor.scratch_id)
                                 .is_ok();
-                        (live && owns).then(|| {
+                        (live && (owns || row.public_edit)).then(|| {
                             RoomActor::Scratch(marks_auth::ScratchActor {
                                 authorization_epoch: epoch,
                                 ..actor.clone()

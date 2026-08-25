@@ -429,12 +429,16 @@ pub struct DocumentMetaRow {
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
     pub snapshot_revision: u64,
+    pub public_edit: bool,
+    pub anonymous_edit_count: u64,
+    pub persisted_at_ms: Option<u64>,
 }
 
 pub fn load_document(conn: &Connection, id: &DocumentId) -> ApiResult<Option<DocumentMetaRow>> {
     conn.query_row(
         "SELECT id, scratch_id, owner_principal_id, title, title_explicit, engine, chars,
-                auth_epoch, snapshot_revision, created_at, updated_at, deleted_at
+                auth_epoch, snapshot_revision, created_at, updated_at, deleted_at,
+                public_edit, anonymous_edit_count, persisted_at
          FROM documents WHERE id = ?1",
         params![id.as_str()],
         |row| {
@@ -451,6 +455,9 @@ pub fn load_document(conn: &Connection, id: &DocumentId) -> ApiResult<Option<Doc
                 row.get::<_, i64>(9)?,
                 row.get::<_, i64>(10)?,
                 row.get::<_, Option<i64>>(11)?,
+                row.get::<_, i64>(12)?,
+                row.get::<_, i64>(13)?,
+                row.get::<_, Option<i64>>(14)?,
             ))
         },
     )
@@ -469,6 +476,9 @@ pub fn load_document(conn: &Connection, id: &DocumentId) -> ApiResult<Option<Doc
             created_at,
             updated_at,
             deleted_at,
+            public_edit,
+            anonymous_edit_count,
+            persisted_at,
         )| {
             let owner = match (scratch, owner) {
                 (Some(scratch), None) => DocumentOwner::Scratch(
@@ -493,6 +503,9 @@ pub fn load_document(conn: &Connection, id: &DocumentId) -> ApiResult<Option<Doc
                 created_at_ms: from_ms(created_at),
                 updated_at_ms: from_ms(updated_at),
                 snapshot_revision: from_ms(snapshot_revision),
+                public_edit: public_edit != 0,
+                anonymous_edit_count: from_ms(anonymous_edit_count),
+                persisted_at_ms: opt_ms(persisted_at),
             })
         },
     )
