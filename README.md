@@ -1,4 +1,6 @@
-<a href="https://marks.secure.build"><img width="256" src="docs/screenshots/split-light.png" alt="Marks split workspace" /></a>
+<a href="https://marks.secure.build">
+<img width="256" src="https://github.com/user-attachments/assets/f66e8cde-a9af-479c-91d1-df2c68107087" />
+</a>
 
 [not ready for production // do not use ]
 # marks
