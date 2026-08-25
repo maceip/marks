@@ -47,4 +47,17 @@ test('a stale response cannot clear a newer pending create request', () => {
   assert.equal(anonymousStarterRequestId(storage, () => second), second);
   confirmAnonymousStarterRequest(first, storage);
   assert.equal(anonymousStarterRequestId(storage, () => first), second);
+  confirmAnonymousStarterRequest(second, storage);
+});
+
+test('storage denial does not crash anonymous starter creation', () => {
+  const denied = {
+    getItem(): string | null { throw new DOMException('blocked', 'SecurityError'); },
+    setItem(): void { throw new DOMException('blocked', 'SecurityError'); },
+    removeItem(): void { throw new DOMException('blocked', 'SecurityError'); },
+  };
+  const id = '33333333-3333-4333-8333-333333333333';
+  assert.equal(anonymousStarterRequestId(denied, () => id), id);
+  assert.equal(anonymousStarterRequestId(denied, () => assert.fail('must reuse volatile id')), id);
+  assert.doesNotThrow(() => confirmAnonymousStarterRequest(id, denied));
 });
