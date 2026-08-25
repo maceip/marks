@@ -508,6 +508,11 @@ export function App() {
       return;
     }
     try {
+      if (/\.pdf$/iu.test(file.name)) {
+        const { readPdfImport } = await import('./lib/wasm-document-import');
+        await createDocument(await readPdfImport(file));
+        return;
+      }
       if (UI_DATA_MODE === 'local') {
         const { readMarkdownImport } = await import('./lib/markdown-import');
         await createDocument(await readMarkdownImport(file));
