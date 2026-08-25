@@ -190,6 +190,76 @@ test('protocol progress clears the exact socket watchdog', { timeout: 1_000 }, a
   engine.destroy();
 });
 
+test('an idle synchronized socket error falls back to reconnect when close never arrives', { timeout: 1_000 }, async () => {
+  const engine = new EsbtEngine({
+    docId: 'socket-error-without-close',
+    user,
+    access: {
+      fetchSnapshot: async () => new Response(null, { status: 204 }),
+      admit: async () => { throw new Error('not used'); },
+    },
+  });
+  let closes = 0;
+  let reconnects = 0;
+  const socket = { close: () => { closes += 1; } } as unknown as WebSocket;
+  const state = engine as unknown as {
+    socket: WebSocket | null;
+    serverSynced: boolean;
+    onSocketError(socket: WebSocket, graceMs?: number): void;
+    scheduleReconnect(): void;
+  };
+  state.socket = socket;
+  state.serverSynced = true;
+  state.scheduleReconnect = () => { reconnects += 1; };
+
+  state.onSocketError(socket, 5);
+  await delay(20);
+
+  assert.equal(closes, 1);
+  assert.equal(state.socket, null);
+  assert.equal(state.serverSynced, false);
+  assert.equal(reconnects, 1);
+  assert.equal(engine.status(), 'offline');
+  engine.destroy();
+});
+
+test('a close delivered during socket error grace preserves its terminal Marks code', { timeout: 1_000 }, async () => {
+  const engine = new EsbtEngine({
+    docId: 'socket-error-terminal-close',
+    user,
+    access: {
+      fetchSnapshot: async () => new Response(null, { status: 204 }),
+      admit: async () => { throw new Error('not used'); },
+    },
+  });
+  let closes = 0;
+  let reconnects = 0;
+  let notice = '';
+  const socket = { close: () => { closes += 1; } } as unknown as WebSocket;
+  const state = engine as unknown as {
+    socket: WebSocket | null;
+    permissionRole: 'editor' | null;
+    onSocketError(socket: WebSocket, graceMs?: number): void;
+    onDisconnect(socket: WebSocket, code?: number): void;
+    scheduleReconnect(): void;
+  };
+  state.socket = socket;
+  state.permissionRole = 'editor';
+  state.scheduleReconnect = () => { reconnects += 1; };
+  engine.onError?.((error) => { notice = error.message; });
+
+  state.onSocketError(socket, 20);
+  state.onDisconnect(socket, 4403);
+  await delay(30);
+
+  assert.equal(closes, 1);
+  assert.equal(reconnects, 0);
+  assert.equal(engine.capabilities().edit, false);
+  assert.match(notice, /edit permission changed/u);
+  assert.match(notice, /File → Markdown/u);
+  engine.destroy();
+});
+
 for (const [code, expected] of [
   [4400, /rejected a pending edit as invalid/u],
   [4403, /edit permission changed/u],
@@ -207,7 +277,6 @@ for (const [code, expected] of [
     const socket = { close: () => undefined } as unknown as WebSocket;
     const state = engine as unknown as {
       socket: WebSocket | null;
-      socketAuthority: 'session' | 'scratch' | null;
       permissionRole: 'editor' | null;
       serverSynced: boolean;
       pendingMutations: Map<string, {
@@ -231,7 +300,6 @@ for (const [code, expected] of [
     let sends = 0;
     let notice = '';
     state.socket = socket;
-    state.socketAuthority = 'session';
     state.permissionRole = 'editor';
     state.serverSynced = true;
     state.scheduleReconnect = () => { reconnects += 1; };
@@ -272,19 +340,72 @@ for (const [code, expected] of [
   });
 }
 
-test('an unauthorized scratch close is terminal instead of accumulating offline edits', async () => {
+test('a scratch 4401 can promote through exactly one immediate session admission', async () => {
+  const promotedTicket = {
+    roomUrl: 'ws://example.test/collab/promoted',
+    ticketId: 'ticket_promoted123',
+    ticketSecret: 'A'.repeat(43),
+    siteId: '7',
+    role: 'owner' as const,
+    authority: 'session' as const,
+    displayIdentity: {
+      participantId: 'principal_promoted123',
+      displayName: 'Promoted User',
+    },
+  };
+  let admissions = 0;
+  let openedAuthority: 'session' | 'scratch' | null = null;
   const engine = new EsbtEngine({
-    docId: 'scratch-authority-revoked',
+    docId: 'scratch-authority-promoted',
     user,
     access: {
       fetchSnapshot: async () => new Response(null, { status: 204 }),
-      admit: async () => { throw new Error('not used'); },
+      admit: async () => {
+        admissions += 1;
+        return promotedTicket;
+      },
     },
   });
   const socket = { close: () => undefined } as unknown as WebSocket;
   const state = engine as unknown as {
     socket: WebSocket | null;
-    socketAuthority: 'session' | 'scratch' | null;
+    permissionRole: 'scratch' | 'owner' | null;
+    onDisconnect(socket: WebSocket, code?: number): void;
+    openSocket(ticket: typeof promotedTicket): void;
+  };
+  state.socket = socket;
+  state.permissionRole = 'scratch';
+  state.openSocket = (ticket) => { openedAuthority = ticket.authority; };
+
+  state.onDisconnect(socket, 4401);
+
+  assert.equal(engine.capabilities().role, null);
+  assert.equal(engine.capabilities().edit, false, 'stale scratch writes freeze before admission settles');
+  await delay(0);
+  assert.equal(admissions, 1);
+  assert.equal(openedAuthority, 'session');
+  assert.equal(engine.capabilities().role, 'owner');
+  assert.equal(engine.capabilities().edit, true);
+  engine.destroy();
+});
+
+test('a denied scratch 4401 terminalizes only after one fresh admission', async () => {
+  const denial = Object.assign(new Error('room admission was denied (401)'), { retryable: false });
+  let admissions = 0;
+  const engine = new EsbtEngine({
+    docId: 'scratch-authority-revoked',
+    user,
+    access: {
+      fetchSnapshot: async () => new Response(null, { status: 204 }),
+      admit: async () => {
+        admissions += 1;
+        throw denial;
+      },
+    },
+  });
+  const socket = { close: () => undefined } as unknown as WebSocket;
+  const state = engine as unknown as {
+    socket: WebSocket | null;
     permissionRole: 'scratch' | null;
     onDisconnect(socket: WebSocket, code?: number): void;
     scheduleReconnect(): void;
@@ -292,7 +413,6 @@ test('an unauthorized scratch close is terminal instead of accumulating offline 
   let reconnects = 0;
   let notice = '';
   state.socket = socket;
-  state.socketAuthority = 'scratch';
   state.permissionRole = 'scratch';
   state.scheduleReconnect = () => { reconnects += 1; };
   engine.onError?.((error) => { notice = error.message; });
@@ -300,9 +420,12 @@ test('an unauthorized scratch close is terminal instead of accumulating offline 
   state.onDisconnect(socket, 4401);
 
   assert.equal(engine.capabilities().edit, false);
+  await delay(0);
+  assert.equal(admissions, 1);
   assert.equal(reconnects, 0);
-  assert.match(notice, /anonymous page credential is no longer authorized/u);
+  assert.match(notice, /could not reauthorize/u);
   assert.match(notice, /File → Markdown/u);
+  await assert.rejects(engine.whenDurable(), /File → Markdown/u);
   engine.destroy();
 });
 
@@ -343,26 +466,29 @@ test('a non-retryable readmission denial revokes a cached editable role', async 
   engine.destroy();
 });
 
-test('a session authority epoch close stays read-only while a fresh ticket is retried', () => {
+test('a transient 4401 admission failure stays read-only and enters the bounded retry lane', async () => {
+  const transient = Object.assign(new Error('room admission request failed'), { retryable: true });
+  let admissions = 0;
   const engine = new EsbtEngine({
     docId: 'session-authority-refresh',
     user,
     access: {
       fetchSnapshot: async () => new Response(null, { status: 204 }),
-      admit: async () => { throw new Error('not used'); },
+      admit: async () => {
+        admissions += 1;
+        throw transient;
+      },
     },
   });
   const socket = { close: () => undefined } as unknown as WebSocket;
   const state = engine as unknown as {
     socket: WebSocket | null;
-    socketAuthority: 'session' | 'scratch' | null;
     permissionRole: 'owner' | null;
     onDisconnect(socket: WebSocket, code?: number): void;
     scheduleReconnect(): void;
   };
   let reconnects = 0;
   state.socket = socket;
-  state.socketAuthority = 'session';
   state.permissionRole = 'owner';
   state.scheduleReconnect = () => { reconnects += 1; };
 
@@ -370,6 +496,9 @@ test('a session authority epoch close stays read-only while a fresh ticket is re
 
   assert.equal(engine.capabilities().role, null);
   assert.equal(engine.capabilities().edit, false);
+  await delay(0);
+  assert.equal(admissions, 1, '4401 starts one immediate fresh admission');
   assert.equal(reconnects, 1);
+  assert.equal(engine.status(), 'offline');
   engine.destroy();
 });

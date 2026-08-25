@@ -98,6 +98,7 @@ export const FINAL_CHECKPOINT_RELEASE_MS = PERSIST_LOCK_TIMEOUT_MS + 250;
 export const SOCKET_HANDSHAKE_TIMEOUT_MS = 10_000;
 export const SOCKET_INITIAL_SYNC_TIMEOUT_MS = 10_000;
 export const SOCKET_COMMIT_TIMEOUT_MS = 15_000;
+export const SOCKET_ERROR_CLOSE_GRACE_MS = 1_000;
 
 const userKey = (siteId: string) => `${siteId}-cm-user`;
 const fromCrdt = Annotation.define<boolean>();
@@ -135,7 +136,6 @@ export class EsbtEngine implements CollabSession {
   private committedRevision = 0n;
   private lastPruneAt = 0;
   private pendingTicket: RoomTicket | null = null;
-  private socketAuthority: RoomTicket['authority'] | null = null;
   private permissionRole: DocumentCapabilities['role'];
   /**
    * Authority is resolved asynchronously, before or after CodeMirror mounts.
@@ -185,6 +185,8 @@ export class EsbtEngine implements CollabSession {
   private markdownTimer: number | null = null;
   private socketDeadlineTimer: number | null = null;
   private socketDeadlineTarget: WebSocket | null = null;
+  private socketErrorCloseTimer: number | null = null;
+  private socketErrorCloseTarget: WebSocket | null = null;
   private readonly unsubscribers: Array<() => void> = [];
   private readonly changeListeners = new Set<(change: DocumentChange) => void>();
   private readonly statusListeners = new Set<(status: ConnectionStatus) => void>();
@@ -992,7 +994,6 @@ export class EsbtEngine implements CollabSession {
     const socket = new WebSocket(url, roomTicketProtocols(ticket));
     socket.binaryType = 'arraybuffer';
     this.socket = socket;
-    this.socketAuthority = ticket.authority;
     this.serverSynced = false;
     this.armSocketDeadline(socket, SOCKET_HANDSHAKE_TIMEOUT_MS);
 
@@ -1006,25 +1007,14 @@ export class EsbtEngine implements CollabSession {
       this.send(MSG_PRESENCE_DELTA, this.ephemeral.encodeAll());
     });
     socket.addEventListener('close', (event) => this.onDisconnect(socket, event.code));
-    socket.addEventListener('error', () => {
-      if (this.socket !== socket) return;
-      // Browsers normally follow `error` with a `close` event. Preserve that
-      // event's Marks close code; the armed progress deadline remains the
-      // fallback for a transport that never reports closure.
-      try {
-        socket.close();
-      } catch {
-        this.onDisconnect(socket);
-      }
-    });
+    socket.addEventListener('error', () => this.onSocketError(socket));
   }
 
   private onDisconnect(socket: WebSocket, code?: number): void {
     if (this.socket !== socket) return;
-    const authority = this.socketAuthority;
+    this.clearSocketErrorCloseDeadline(socket);
     this.clearSocketDeadline(socket);
     this.socket = null;
-    this.socketAuthority = null;
     this.serverSynced = false;
     if (this.destroyed || this.storageFatal) return;
 
@@ -1049,22 +1039,53 @@ export class EsbtEngine implements CollabSession {
       );
       return;
     }
-    if (code === CLOSE_AUTHORITY_CHANGED && authority === 'scratch') {
-      this.enterTerminalRecovery(
-        code,
-        'This anonymous page credential is no longer authorized. Editing has been stopped so this device does not accumulate unsendable work.',
-      );
-      return;
-    }
-
     this.setStatus('offline');
     if (code === CLOSE_AUTHORITY_CHANGED) {
-      // An ACL/session epoch changed. Keep the replica readable, but do not
-      // admit offline edits under stale authority while a fresh ticket is
-      // being resolved.
+      // Promotion, ACL changes, and revocation share the same close code.
+      // Revoke stale writes synchronously, then make one immediate admission
+      // against the live authority. A promoted scratch can return with a
+      // session ticket; deterministic denial enters recovery, while a
+      // transient failure stays read-only in the ordinary bounded retry lane.
       this.applyPermissionRole(null);
+      this.connect();
+      return;
     }
     this.scheduleReconnect();
+  }
+
+  private onSocketError(
+    socket: WebSocket,
+    graceMs = SOCKET_ERROR_CLOSE_GRACE_MS,
+  ): void {
+    if (this.socket !== socket || this.destroyed || this.storageFatal) return;
+    if (this.socketErrorCloseTarget === socket) return;
+
+    this.clearSocketErrorCloseDeadline();
+    this.socketErrorCloseTarget = socket;
+    this.socketErrorCloseTimer = window.setTimeout(() => {
+      if (this.socket !== socket || this.socketErrorCloseTarget !== socket) return;
+      // An idle synchronized socket has no ordinary progress watchdog. If the
+      // browser reports `error` without the required follow-up `close`, detach
+      // it ourselves so the normal retry lane cannot strand indefinitely.
+      this.clearSocketErrorCloseDeadline(socket);
+      this.onDisconnect(socket);
+    }, Math.max(1, graceMs));
+
+    try {
+      socket.close();
+    } catch {
+      this.clearSocketErrorCloseDeadline(socket);
+      this.onDisconnect(socket);
+    }
+  }
+
+  private clearSocketErrorCloseDeadline(socket?: WebSocket): void {
+    if (socket && this.socketErrorCloseTarget !== socket) return;
+    if (this.socketErrorCloseTimer !== null) {
+      window.clearTimeout(this.socketErrorCloseTimer);
+    }
+    this.socketErrorCloseTimer = null;
+    this.socketErrorCloseTarget = null;
   }
 
   private armSocketDeadline(socket: WebSocket, timeoutMs: number): void {
@@ -1116,11 +1137,11 @@ export class EsbtEngine implements CollabSession {
   private handleOffline = (): void => {
     this.admissionAbort?.abort();
     this.admissionAbort = null;
+    this.clearSocketErrorCloseDeadline();
     const socket = this.socket;
     if (socket) {
       this.clearSocketDeadline(socket);
       this.socket = null;
-      this.socketAuthority = null;
       this.serverSynced = false;
       try {
         socket.close();
@@ -1144,10 +1165,10 @@ export class EsbtEngine implements CollabSession {
     this.flushLocalSave();
     // Emit tombstones while the transport is still available, then close it.
     this.activity.pagehide();
+    this.clearSocketErrorCloseDeadline();
     this.clearSocketDeadline();
     this.socket?.close();
     this.socket = null;
-    this.socketAuthority = null;
   };
 
   private importRemote(bytes: Uint8Array): void {
@@ -1578,6 +1599,7 @@ export class EsbtEngine implements CollabSession {
 
     this.admissionAbort?.abort();
     this.admissionAbort = null;
+    this.clearSocketErrorCloseDeadline();
     this.clearSocketDeadline();
     if (this.reconnectTimer !== null) {
       window.clearTimeout(this.reconnectTimer);
@@ -1593,7 +1615,6 @@ export class EsbtEngine implements CollabSession {
     }
     const socket = this.socket;
     this.socket = null;
-    this.socketAuthority = null;
     try {
       socket?.close();
     } catch {
@@ -1639,6 +1660,7 @@ export class EsbtEngine implements CollabSession {
       }
       this.admissionAbort?.abort();
       this.admissionAbort = null;
+      this.clearSocketErrorCloseDeadline();
       this.clearSocketDeadline();
       this.serverSynced = false;
       const socket = this.socket;
@@ -1754,6 +1776,7 @@ export class EsbtEngine implements CollabSession {
     window.removeEventListener('beforeunload', this.handlePageHide);
     this.admissionAbort?.abort();
     this.admissionAbort = null;
+    this.clearSocketErrorCloseDeadline();
     this.clearSocketDeadline();
     if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
     if (this.snapshotReplyTimer !== null) clearTimeout(this.snapshotReplyTimer);
@@ -1764,7 +1787,6 @@ export class EsbtEngine implements CollabSession {
     this.tabs.destroy();
     this.socket?.close();
     this.socket = null;
-    this.socketAuthority = null;
     const replica = this.doc;
     this.doc = null;
     releaseReplicaAfterCheckpoint(replica, finalCheckpoint);
