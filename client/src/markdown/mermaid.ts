@@ -15,6 +15,7 @@ let mermaidPromise: Promise<MermaidApi> | null = null;
 let currentTheme: 'light' | 'dark' = 'light';
 let counter = 0;
 let renderQueue: Promise<void> = Promise.resolve();
+let renderCircuitError: string | null = null;
 
 /** Rendered SVG by diagram source, so re-mounting a block never re-runs mermaid. */
 const svgCache = new Map<string, string>();
@@ -130,6 +131,19 @@ async function renderHosts(hosts: HTMLElement[]): Promise<void> {
   }
   if (eligible.length === 0) return;
 
+  if (renderCircuitError) {
+    for (const { host, output, source } of eligible) {
+      const cached = svgCache.get(source);
+      if (cached) {
+        output.innerHTML = cached;
+        host.dataset.mermaid = 'done';
+      } else {
+        showDiagramError(host, output, renderCircuitError);
+      }
+    }
+    return;
+  }
+
   let mermaid: MermaidApi;
   try {
     mermaid = await getMermaid();
@@ -141,7 +155,8 @@ async function renderHosts(hosts: HTMLElement[]): Promise<void> {
 
   // Mermaid owns shared DOM/config state. Serialize bounded diagrams so one
   // public page cannot fan out synchronous graph layout on the main thread.
-  for (const { host, output, source } of eligible) {
+  for (let index = 0; index < eligible.length; index += 1) {
+    const { host, output, source } = eligible[index];
     const cached = svgCache.get(source);
     if (cached) {
       output.innerHTML = cached;
@@ -164,6 +179,14 @@ async function renderHosts(hosts: HTMLElement[]): Promise<void> {
       output.innerHTML = svg;
       host.dataset.mermaid = 'done';
     } catch (error) {
+      if (isMermaidRenderTimeout(error)) {
+        renderCircuitError =
+          'Diagram rendering timed out. Reload this page before trying diagrams again.';
+        for (const remaining of eligible.slice(index)) {
+          showDiagramError(remaining.host, remaining.output, renderCircuitError);
+        }
+        return;
+      }
       showDiagramError(
         host,
         output,
@@ -171,6 +194,10 @@ async function renderHosts(hosts: HTMLElement[]): Promise<void> {
       );
     }
   }
+}
+
+export function isMermaidRenderTimeout(error: unknown): boolean {
+  return error instanceof Error && error.name === 'TimeoutError';
 }
 
 export function validateMermaidSource(source: string): string | null {
@@ -183,7 +210,7 @@ export function validateMermaidSource(source: string): string | null {
   if ((source.match(/\S+/gu) ?? []).length > MAX_DIAGRAM_TOKENS) {
     return 'Diagram has too many tokens to render safely.';
   }
-  if ((source.match(/-->|---|==>|-\.->|->|<-|[\[\]{}()]/gu) ?? []).length > MAX_DIAGRAM_STRUCTURE) {
+  if ((source.match(/-->|---|==>|-\.->|->|<-|[,;\[\]{}()]/gu) ?? []).length > MAX_DIAGRAM_STRUCTURE) {
     return 'Diagram graph is too complex to render safely.';
   }
   return null;
