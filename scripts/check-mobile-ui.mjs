@@ -1,8 +1,9 @@
 // Mobile browser UI proof against a live marks-server: a real phone
 // profile (touch, mobile viewport, device scale factor, mobile user agent)
-// admits, creates a document by tapping, and types into the editor; narrow
-// widths never overflow horizontally; the primary touch target stays
-// comfortably tappable.
+// lands in the document-first phone experience, reaches the editor through
+// the mobile ribbon, and types by touch; narrow widths never overflow
+// horizontally; primary touch targets stay comfortably tappable. If the
+// phone entry ever becomes a home screen again, the home branch covers it.
 import { chromium, devices } from 'playwright';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -42,7 +43,9 @@ const stop = () => {
 };
 process.on('exit', stop);
 
-const PRIMARY = '.home-actions .button.primary, .new-doc .button.primary';
+const HOME_PRIMARY = '.home-actions .button.primary, .new-doc .button.primary';
+const RIBBON = '.phone-ribbon';
+const EDITOR_TAB = '.phone-ribbon [data-command-id="view.editor"]';
 
 async function assertNoHorizontalOverflow(page, label) {
   const overflow = await page.evaluate(() => ({
@@ -54,6 +57,46 @@ async function assertNoHorizontalOverflow(page, label) {
     `${label}: content ${overflow.scroll}px overflows the ${overflow.client}px viewport`,
   );
   console.log(`  ok   ${label} fits without horizontal overflow (${overflow.client}px)`);
+}
+
+async function assertTappable(locator, label, viewportWidth) {
+  const box = await locator.boundingBox();
+  assert(box, `${label} renders a tappable box`);
+  assert(
+    box.height >= 40 && box.width >= 40,
+    `${label} is ${box.width}x${box.height}px; touch targets need at least 40px`,
+  );
+  assert(
+    box.x >= 0 && box.x + box.width <= viewportWidth,
+    `${label} sits inside the ${viewportWidth}px viewport`,
+  );
+  console.log(`  ok   ${label} is a ${Math.round(box.width)}x${Math.round(box.height)}px touch target`);
+  return box;
+}
+
+async function reachEditorByTouch(page, viewportWidth) {
+  // The phone entry may briefly flash the home surface before settling on
+  // the document-first experience; wait for the stable ribbon state and
+  // fall back to the home flow only when it never arrives.
+  const ribbonSettled = await page
+    .locator(RIBBON)
+    .waitFor({ timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false);
+  await assertNoHorizontalOverflow(page, `${viewportWidth}px entry`);
+  if (ribbonSettled) {
+    // Document-first phone experience: the mobile ribbon is the surface.
+    const editorTab = page.locator(EDITOR_TAB).first();
+    await assertTappable(editorTab, 'ribbon editor tab', viewportWidth);
+    await editorTab.tap();
+  } else {
+    const action = page.locator(HOME_PRIMARY).first();
+    await assertTappable(action, 'home primary action', viewportWidth);
+    await action.tap();
+    await page.waitForURL((url) => url.pathname.startsWith('/d/document_'), { timeout: 30_000 });
+  }
+  await page.locator('.cm-content').first().waitFor({ timeout: 30_000 });
+  console.log('  ok   touch navigation reaches the editor');
 }
 
 try {
@@ -72,27 +115,7 @@ try {
     const page = await phone.newPage();
     page.on('pageerror', (error) => pageErrors.push(error.stack ?? error.message));
     await page.goto(`${origin}/`, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector(PRIMARY, { timeout: 30_000 });
-    await assertNoHorizontalOverflow(page, 'phone home');
-
-    const action = page.locator(PRIMARY).first();
-    const box = await action.boundingBox();
-    assert(box, 'primary action renders a tappable box');
-    assert(
-      box.height >= 40 && box.width >= 40,
-      `primary action is ${box.width}x${box.height}px; touch targets need at least 40px`,
-    );
-    const viewport = page.viewportSize();
-    assert(
-      box.x >= 0 && box.x + box.width <= viewport.width,
-      'primary action sits inside the phone viewport',
-    );
-    console.log(`  ok   primary action is a ${Math.round(box.width)}x${Math.round(box.height)}px touch target`);
-
-    await action.tap();
-    await page.waitForURL((url) => url.pathname.startsWith('/d/document_'), { timeout: 30_000 });
-    await page.waitForSelector('.cm-content', { timeout: 30_000 });
-    console.log('  ok   tapping the primary action admits and opens a document');
+    await reachEditorByTouch(page, page.viewportSize().width);
 
     await page.locator('.cm-content').tap();
     await page.keyboard.type('Mobile touch editing works');
@@ -105,7 +128,8 @@ try {
     await assertNoHorizontalOverflow(page, 'phone editor');
     await phone.close();
 
-    // The smallest supported phone width still lays out cleanly.
+    // The smallest supported phone width still lays out cleanly and keeps
+    // the same touch path reachable.
     const small = await browser.newContext({
       viewport: { width: 320, height: 568 },
       isMobile: true,
@@ -115,14 +139,7 @@ try {
     const smallPage = await small.newPage();
     smallPage.on('pageerror', (error) => pageErrors.push(error.stack ?? error.message));
     await smallPage.goto(`${origin}/`, { waitUntil: 'domcontentloaded' });
-    await smallPage.waitForSelector(PRIMARY, { timeout: 30_000 });
-    await assertNoHorizontalOverflow(smallPage, '320px home');
-    const smallBox = await smallPage.locator(PRIMARY).first().boundingBox();
-    assert(
-      smallBox && smallBox.x >= 0 && smallBox.x + smallBox.width <= 320,
-      'primary action stays inside a 320px viewport',
-    );
-    console.log('  ok   the 320px layout keeps the primary action reachable');
+    await reachEditorByTouch(smallPage, 320);
     await small.close();
 
     assert.deepEqual(pageErrors, [], `mobile pages threw: ${pageErrors.join('\n')}`);
