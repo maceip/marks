@@ -2,12 +2,12 @@
 // profile (touch, mobile viewport, device scale factor, mobile user agent)
 // lands in the document-first phone experience, reaches the editor through
 // the mobile ribbon, and types by touch; narrow widths never overflow
-// horizontally; primary touch targets stay comfortably tappable. If the
-// phone entry ever becomes a home screen again, the home branch covers it.
+// horizontally; primary touch targets stay comfortably tappable. A return to
+// the old Home entry is a failure: anonymous service entry is document-first.
 import { chromium, devices } from 'playwright';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { accessSync, constants, cpSync, mkdtempSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -16,8 +16,52 @@ import { CHROME_LAUNCH_ARGS, launchEnv } from './harness/env.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const bin = process.env.MARKS_BIN ?? join(root, 'target', 'debug', 'marks-server');
-const staticDir = process.env.MARKS_STATIC_DIR ?? join(root, 'client', 'dist');
 const work = mkdtempSync(join(tmpdir(), 'marks-mobile-ui.'));
+const configuredStaticDir = process.env.MARKS_STATIC_DIR?.trim();
+const staticDir = join(work, 'service-dist');
+let server = null;
+let serverSpawnError = null;
+let stopped = false;
+const stop = () => {
+  if (stopped) return;
+  stopped = true;
+  server?.kill('SIGTERM');
+  rmSync(work, { recursive: true, force: true });
+};
+process.on('exit', stop);
+
+try {
+  accessSync(bin, constants.X_OK);
+  // Keep this proof independent from client/dist. Other validation lanes may
+  // legitimately build the default local client at the same time; sharing
+  // that directory used to turn an artifact mismatch into a misleading wait
+  // for a phone ribbon that a local-mode root never renders. Even an explicit
+  // release artifact is snapshotted before the server starts.
+  if (configuredStaticDir) {
+    const source = resolve(root, configuredStaticDir);
+    console.log(`copying service artifact ${source} into the isolated mobile proof`);
+    cpSync(source, staticDir, { recursive: true });
+  } else {
+    console.log('building an isolated service-mode client for the mobile proof');
+    execFileSync(
+      'npm',
+      ['run', 'build', '--workspace=client', '--', '--outDir', staticDir, '--emptyOutDir'],
+      {
+        cwd: root,
+        stdio: ['ignore', 'ignore', 'inherit'],
+        timeout: 120_000,
+        env: {
+          ...process.env,
+          VITE_MARKS_DATA_MODE: 'service',
+          VITE_MARKS_TEST_SERVICE_WORKER: '0',
+        },
+      },
+    );
+  }
+} catch (error) {
+  stop();
+  throw error;
+}
 const port = await new Promise((resolvePort, rejectPort) => {
   const reservation = createServer();
   reservation.once('error', rejectPort);
@@ -37,7 +81,7 @@ const port = await new Promise((resolvePort, rejectPort) => {
 const origin = `http://127.0.0.1:${port}`;
 
 const serverLog = [];
-const server = spawn(bin, [], {
+server = spawn(bin, [], {
   env: {
     ...process.env,
     MARKS_LISTEN: `127.0.0.1:${port}`,
@@ -50,16 +94,82 @@ const server = spawn(bin, [], {
 });
 server.stdout.on('data', (chunk) => serverLog.push(chunk));
 server.stderr.on('data', (chunk) => serverLog.push(chunk));
-let stopped = false;
-const stop = () => {
-  if (stopped) return;
-  stopped = true;
-  server.kill('SIGTERM');
-  rmSync(work, { recursive: true, force: true });
-};
-process.on('exit', stop);
+server.once('error', (error) => {
+  serverSpawnError = error;
+});
+const serverFailure = new Promise((_, reject) => {
+  server.once('error', (error) => {
+    reject(new Error(`marks-server could not start: ${error.message}`));
+  });
+  server.once('exit', (code, signal) => {
+    if (!stopped) {
+      reject(new Error(
+        `marks-server exited unexpectedly (code=${String(code)}, signal=${String(signal)})${serverOutput() ? `\n${serverOutput()}` : ''}`,
+      ));
+    }
+  });
+});
+void serverFailure.catch(() => undefined);
 
 const RIBBON = '.phone-ribbon';
+
+function serverOutput() {
+  return Buffer.concat(serverLog).toString().trim();
+}
+
+async function waitForServer() {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (serverSpawnError) {
+      throw new Error(`marks-server could not start: ${serverSpawnError.message}`);
+    }
+    if (server.exitCode !== null) {
+      throw new Error(
+        `marks-server exited with code ${server.exitCode} before becoming ready${serverOutput() ? `\n${serverOutput()}` : ''}`,
+      );
+    }
+    try {
+      const response = await fetch(`${origin}/readyz`, {
+        signal: AbortSignal.timeout(1_000),
+      });
+      if (response.ok) return;
+    } catch {}
+    await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+  }
+  throw new Error(
+    `marks-server did not become ready within 15 seconds${serverOutput() ? `\n${serverOutput()}` : ''}`,
+  );
+}
+
+async function assertServiceMode(page, label) {
+  const mode = await page.evaluate(() => document.documentElement.dataset.marksMode ?? 'missing');
+  assert.equal(
+    mode,
+    'service',
+    `${label} loaded data-marks-mode=${mode}; the mobile proof requires an isolated service-mode artifact`,
+  );
+}
+
+function rejectOnPageFailure(page, label, pageErrors) {
+  const failure = new Promise((_, reject) => {
+    page.once('pageerror', (error) => {
+      const detail = error.stack ?? error.message;
+      pageErrors.push(`${label}: ${detail}`);
+      reject(new Error(`${label} page error: ${detail}`));
+    });
+    page.once('crash', () => reject(new Error(`${label} page crashed`)));
+  });
+  void failure.catch(() => undefined);
+  return failure;
+}
+
+async function navigate(page, url, failure) {
+  await Promise.race([
+    page.goto(url, { waitUntil: 'domcontentloaded' }),
+    failure,
+    serverFailure,
+  ]);
+}
 
 async function assertNoHorizontalOverflow(page, label) {
   const overflow = await page.evaluate(() => ({
@@ -88,13 +198,27 @@ async function assertTappable(locator, label, viewportWidth) {
   return box;
 }
 
-async function reachEditorByTouch(page, viewportWidth) {
+async function reachEditorByTouch(page, viewportWidth, failure) {
   // Service mode is document-first: the temporary opening shell must resolve
   // directly to the unique public page, never to the workspace home.
-  await page.locator(RIBBON).waitFor({ timeout: 30_000 });
+  await assertServiceMode(page, `${viewportWidth}px entry`);
+  await Promise.race([
+    Promise.all([
+      page.waitForURL((url) => /^\/d\/document_/.test(url.pathname), { timeout: 30_000 }),
+      page.locator(RIBBON).waitFor({ timeout: 30_000 }),
+      page.waitForFunction(
+        () =>
+          document.querySelector('.marks-preview')?.textContent?.includes('Google Docs for Markdown') &&
+          document.querySelector('.marks-preview table') != null,
+        undefined,
+        { timeout: 30_000 },
+      ),
+    ]),
+    failure,
+    serverFailure,
+  ]);
   await assertNoHorizontalOverflow(page, `${viewportWidth}px entry`);
   assert.equal(await page.locator('.home-surface').count(), 0, 'anonymous service entry never exposes workspace home');
-  await page.waitForURL((url) => /^\/d\/document_/.test(url.pathname), { timeout: 30_000 });
   assert.match(page.url(), /\/d\/document_/, 'anonymous mobile entry receives a unique document slug');
 
   // Import remains the first ribbon object while the document itself opens
@@ -102,13 +226,6 @@ async function reachEditorByTouch(page, viewportWidth) {
   const importTab = page.getByRole('tab', { name: 'Import', exact: true });
   assert.equal(await importTab.getAttribute('aria-selected'), 'true', 'Import is selected on mobile first paint');
   await assertTappable(importTab, 'initial Import ribbon tab', viewportWidth);
-  await page.waitForFunction(
-    () =>
-      document.querySelector('.marks-preview')?.textContent?.includes('Google Docs for Markdown') &&
-      document.querySelector('.marks-preview table') != null,
-    undefined,
-    { timeout: 30_000 },
-  );
   const hero = await page.evaluate(() => {
     const app = document.querySelector('.app');
     const heading = document.querySelector('.marks-preview h1');
@@ -135,12 +252,7 @@ async function reachEditorByTouch(page, viewportWidth) {
 }
 
 try {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    try {
-      if ((await fetch(`${origin}/healthz`)).ok) break;
-    } catch {}
-    await new Promise((resolveWait) => setTimeout(resolveWait, 250));
-  }
+  await waitForServer();
 
   const browser = await chromium.launch({ args: CHROME_LAUNCH_ARGS, env: launchEnv() });
   const pageErrors = [];
@@ -148,21 +260,41 @@ try {
     // A current Android phone profile: touch, mobile UA, high DPR.
     const phone = await browser.newContext({ ...devices['Pixel 7'] });
     const page = await phone.newPage();
-    page.on('pageerror', (error) => pageErrors.push(error.stack ?? error.message));
-    await page.goto(`${origin}/`, { waitUntil: 'domcontentloaded' });
-    await reachEditorByTouch(page, page.viewportSize().width);
+    const pageFailure = rejectOnPageFailure(page, 'primary phone', pageErrors);
+    const created = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' && new URL(response.url()).pathname === '/v1/documents',
+      { timeout: 30_000 },
+    );
+    void created.catch(() => undefined);
+    await navigate(page, `${origin}/`, pageFailure);
+    await assertServiceMode(page, 'primary phone');
+    const createdResponse = await Promise.race([created, pageFailure, serverFailure]);
+    assert.equal(
+      createdResponse.status(),
+      201,
+      `anonymous mobile bootstrap returned ${createdResponse.status()} from /v1/documents`,
+    );
+    await reachEditorByTouch(page, page.viewportSize().width, pageFailure);
 
     const sharedUrl = page.url();
     const linkedPhone = await browser.newContext({ ...devices['Pixel 7'] });
     const linkedPage = await linkedPhone.newPage();
-    linkedPage.on('pageerror', (error) => pageErrors.push(error.stack ?? error.message));
-    await linkedPage.goto(sharedUrl, { waitUntil: 'domcontentloaded' });
-    await linkedPage.locator(RIBBON).waitFor({ timeout: 30_000 });
-    await linkedPage.waitForFunction(
-      () => document.querySelector('.marks-preview')?.textContent?.includes('Google Docs for Markdown'),
-      undefined,
-      { timeout: 30_000 },
-    );
+    const linkedFailure = rejectOnPageFailure(linkedPage, 'copied mobile slug', pageErrors);
+    await navigate(linkedPage, sharedUrl, linkedFailure);
+    await assertServiceMode(linkedPage, 'copied mobile slug');
+    await Promise.race([
+      Promise.all([
+        linkedPage.locator(RIBBON).waitFor({ timeout: 30_000 }),
+        linkedPage.waitForFunction(
+          () => document.querySelector('.marks-preview')?.textContent?.includes('Google Docs for Markdown'),
+          undefined,
+          { timeout: 30_000 },
+        ),
+      ]),
+      linkedFailure,
+      serverFailure,
+    ]);
     assert.equal(linkedPage.url(), sharedUrl, 'a copied slug opens the same public page');
     assert.equal(
       await linkedPage.getByRole('tab', { name: 'Import', exact: true }).getAttribute('aria-selected'),
@@ -178,11 +310,20 @@ try {
     const loginDialog = page.getByRole('dialog');
     await loginDialog.waitFor({ timeout: 10_000 });
     assert.match(await loginDialog.innerText(), /Open this page on a laptop/i);
+    const soloDisclosure = loginDialog.locator('details.keep-solo-disclosure');
+    const soloLogin = soloDisclosure.locator('button', { hasText: 'Log in on this phone only' });
+    assert.equal(await soloDisclosure.count(), 1, 'solo-phone login remains available in one disclosure');
+    assert.equal(await soloLogin.count(), 1, 'solo-phone login button remains present');
     assert.equal(
-      await loginDialog.getByRole('button', { name: 'Log in on this phone only', exact: true }).isVisible(),
+      await soloLogin.isVisible(),
       false,
       'solo phone login stays buried in a collapsed disclosure',
     );
+    const soloSummary = soloDisclosure.locator('summary');
+    await assertTappable(soloSummary, 'solo-phone login disclosure', page.viewportSize().width);
+    await soloSummary.tap();
+    await soloLogin.waitFor({ state: 'visible', timeout: 5_000 });
+    await assertTappable(soloLogin, 'revealed solo-phone login button', page.viewportSize().width);
     console.log('  ok   logged-out mobile login is laptop-first and buries solo-phone login');
     await loginDialog.getByRole('button', { name: 'Close', exact: true }).click();
 
@@ -209,9 +350,22 @@ try {
       deviceScaleFactor: 2,
     });
     const smallPage = await small.newPage();
-    smallPage.on('pageerror', (error) => pageErrors.push(error.stack ?? error.message));
-    await smallPage.goto(`${origin}/`, { waitUntil: 'domcontentloaded' });
-    await reachEditorByTouch(smallPage, 320);
+    const smallFailure = rejectOnPageFailure(smallPage, '320px phone', pageErrors);
+    const smallCreated = smallPage.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' && new URL(response.url()).pathname === '/v1/documents',
+      { timeout: 30_000 },
+    );
+    void smallCreated.catch(() => undefined);
+    await navigate(smallPage, `${origin}/`, smallFailure);
+    await assertServiceMode(smallPage, '320px phone');
+    const smallCreatedResponse = await Promise.race([smallCreated, smallFailure, serverFailure]);
+    assert.equal(
+      smallCreatedResponse.status(),
+      201,
+      `320px anonymous bootstrap returned ${smallCreatedResponse.status()} from /v1/documents`,
+    );
+    await reachEditorByTouch(smallPage, 320, smallFailure);
     await small.close();
 
     assert.deepEqual(pageErrors, [], `mobile pages threw: ${pageErrors.join('\n')}`);

@@ -777,14 +777,15 @@ export class EsbtEngine implements CollabSession {
         // deployments may have cached an incompatible ESBT artifact under its
         // fixed key; discard only that cache and reseed the canonical Markdown.
         stored = null;
-        try {
-          await deleteReplicaJournal(this.docId);
-        } catch (deleteError) {
+        // Cleanup is deliberately best-effort. A stale cross-tab Web Lock or
+        // IndexedDB transaction must not hold the built-in welcome page on its
+        // opening shell forever; the canonical in-memory seed can render now.
+        void deleteReplicaJournal(this.docId).catch((deleteError) => {
           this.recordStorageError(
             'The outdated welcome-page cache could not be removed. A fresh copy is open for this visit.',
             deleteError,
           );
-        }
+        });
         console.warn('marks: discarded an incompatible built-in welcome snapshot', error);
       } finally {
         probe?.destroy();

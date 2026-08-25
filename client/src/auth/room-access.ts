@@ -1,4 +1,5 @@
 import type { DocumentAccessProvider, DocumentRole, RoomTicket } from '../collab/types';
+import { fetchWithTimeout, SERVICE_REQUEST_TIMEOUT_MS } from '../browser/network.ts';
 import { decodeBase64Url, OPAQUE_ID_PATTERN } from './protocol.ts';
 import type { ScratchCredential } from './scratch.ts';
 
@@ -44,7 +45,7 @@ export function createMarksDocumentAccess(
   return {
     fetchSnapshot(documentId, signal) {
       const authority = options.authority();
-      return fetchImpl(
+      return fetchWithTimeout(
         `${documentPrefix(authority)}/${encodeURIComponent(documentId)}/snapshot?shallow=1`,
         {
           credentials: 'same-origin',
@@ -54,6 +55,8 @@ export function createMarksDocumentAccess(
           },
           signal,
         },
+        SERVICE_REQUEST_TIMEOUT_MS,
+        fetchImpl,
       );
     },
 
@@ -62,17 +65,22 @@ export function createMarksDocumentAccess(
       const prefix = documentPrefix(authority);
       let response: Response;
       try {
-        response = await fetchImpl(`${prefix}/${encodeURIComponent(documentId)}/session`, {
-          method: 'POST',
-          credentials: 'same-origin',
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-            ...authorityHeaders(authority),
+        response = await fetchWithTimeout(
+          `${prefix}/${encodeURIComponent(documentId)}/session`,
+          {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+              Accept: 'application/json',
+              'Content-Type': 'application/json',
+              ...authorityHeaders(authority),
+            },
+            body: JSON.stringify(siteId ? { siteId } : {}),
+            signal,
           },
-          body: JSON.stringify(siteId ? { siteId } : {}),
-          signal,
-        });
+          SERVICE_REQUEST_TIMEOUT_MS,
+          fetchImpl,
+        );
       } catch (error) {
         if (isAbortError(error)) throw error;
         throw new RoomAccessError('room admission request failed', true);

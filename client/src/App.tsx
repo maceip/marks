@@ -142,6 +142,7 @@ export function App() {
   const user = useMemo(loadUser, []);
   const [serviceCaller, setServiceCaller] = useState<ServiceCaller | null>(null);
   const [serviceCallerResolved, setServiceCallerResolved] = useState(UI_DATA_MODE !== 'service');
+  const [serviceCallerError, setServiceCallerError] = useState<string | null>(null);
   useEffect(() => {
     void getOrCreatePendingDevice().catch(() => undefined);
   }, []);
@@ -153,6 +154,7 @@ export function App() {
         if (cancelled) return;
         setServiceCaller(caller);
         setServiceCallerResolved(true);
+        setServiceCallerError(null);
         if (caller.kind === 'scratch') {
           void bindPendingDevice().catch(() => undefined);
         }
@@ -161,6 +163,7 @@ export function App() {
         if (!cancelled) {
           setServiceCaller(null);
           setServiceCallerResolved(true);
+          setServiceCallerError('Marks could not reach the document service in time.');
         }
       });
     return () => {
@@ -213,7 +216,7 @@ export function App() {
     : null;
   const preparingMarketingPresentation =
     marketingPresentationKey !== null && preparedMarketingPresentation !== marketingPresentationKey;
-  const { session, status, peers, hydrated } = useSession(
+  const { session, status, peers, hydrated, error: sessionError } = useSession(
     resolved && supported ? docId : null,
     user,
     documentAccess,
@@ -956,6 +959,7 @@ export function App() {
   const openingAnonymousEntry =
     UI_DATA_MODE === 'service' &&
     route.name === 'home' &&
+    serviceCallerError === null &&
     (!serviceCallerResolved || (serviceCaller?.kind === 'scratch' && uiError === null));
   const openingPage =
     openingAnonymousEntry || (route.name === 'document' && (!resolved || preparingMarketingPresentation));
@@ -1077,6 +1081,16 @@ export function App() {
           </Suspense>
         ) : openingPage ? (
           <OpeningShell cached={false} offline={surface.network === 'offline'} />
+        ) : UI_DATA_MODE === 'service' && (serviceCallerError || (route.name === 'home' && uiError)) ? (
+          <div className="empty-state">
+            <div className="empty-card">
+              <h2>Page could not open</h2>
+              <p>{serviceCallerError ?? uiError} Check the connection, then try again.</p>
+              <button type="button" className="button primary" onClick={() => location.reload()}>
+                Try again
+              </button>
+            </div>
+          </div>
         ) : docId && resolved && !supported ? (
           <div className="empty-state">
             <div className="empty-card">
@@ -1090,6 +1104,16 @@ export function App() {
               ) : (
                 <p>This document does not exist, was deleted, or is not available to this session.</p>
               )}
+            </div>
+          </div>
+        ) : docId && sessionError ? (
+          <div className="empty-state">
+            <div className="empty-card">
+              <h2>Document connection failed</h2>
+              <p>{sessionError} Your URL is unchanged; try the connection again.</p>
+              <button type="button" className="button primary" onClick={() => location.reload()}>
+                Try again
+              </button>
             </div>
           </div>
         ) : session ? (

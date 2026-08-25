@@ -1,4 +1,5 @@
 import { redeemEnrolledDevice } from './device-session.ts';
+import { fetchWithTimeout, SERVICE_REQUEST_TIMEOUT_MS } from '../browser/network.ts';
 import type { RoomAuthority } from './room-access.ts';
 import { cacheSession, clearCachedSession, hasSeenSession, sessionFromUnknown } from './session-cache.ts';
 import {
@@ -78,12 +79,15 @@ export async function ensureServiceCaller(
 
 async function resolveFromNetwork(options: EnsureServiceCallerOptions): Promise<ServiceCaller> {
   const fetchImpl = options.fetch ?? globalThis.fetch;
+  const deadline = Date.now() + SERVICE_REQUEST_TIMEOUT_MS;
+  const boundedFetch = ((input: RequestInfo | URL, init: RequestInit = {}) =>
+    fetchWithTimeout(input, init, Math.max(1, deadline - Date.now()), fetchImpl)) as typeof fetch;
   const storage = options.storage ?? sessionStorage;
   const persistentStorage = options.persistentStorage;
 
   let session: Response;
   try {
-    session = await fetchImpl('/v1/auth/session', { credentials: 'same-origin' });
+    session = await boundedFetch('/v1/auth/session', { credentials: 'same-origin' });
   } catch (error) {
     const scratch = loadScratchCredential(storage);
     if (scratch) return { kind: 'scratch', credential: scratch };
@@ -98,7 +102,7 @@ async function resolveFromNetwork(options: EnsureServiceCallerOptions): Promise<
   }
 
   try {
-    const recovered = await redeemEnrolledDevice(fetchImpl);
+    const recovered = await redeemEnrolledDevice(boundedFetch);
     if (recovered) {
       clearScratchCredential(storage);
       return { kind: 'session' };
@@ -110,7 +114,7 @@ async function resolveFromNetwork(options: EnsureServiceCallerOptions): Promise<
   const existing = loadScratchCredential(storage);
   if (existing) return { kind: 'scratch', credential: existing };
 
-  const created = await fetchImpl('/v1/auth/scratch', {
+  const created = await boundedFetch('/v1/auth/scratch', {
     method: 'POST',
     credentials: 'same-origin',
     headers: { Accept: 'application/json' },

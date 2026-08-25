@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { getActiveCaller } from '../../auth/caller';
+import { pollPairingUntilSettled } from '../../auth/pairing-poll.ts';
 import { bindPendingDevice } from '../../auth/pending-device';
 import {
   finalizePairing,
@@ -59,7 +60,7 @@ export function KeepWorkspace({ onNotify, onOpenPhone, onPromoted, phone = false
   useEffect(() => {
     if (!service || !pairingOpen || alreadyKept) return;
     let cancelled = false;
-    let poll: number | undefined;
+    const controller = new AbortController();
     void (async () => {
       setStatus('minting');
       try {
@@ -68,30 +69,28 @@ export function KeepWorkspace({ onNotify, onOpenPhone, onPromoted, phone = false
         if (cancelled) return;
         setTicket(minted);
         setStatus('waiting');
-        poll = window.setInterval(() => {
-          void finalizePairing(minted.pairingId).then((result) => {
-            if (cancelled || result === 'pending') return;
-            if (result === 'gone') {
-              setStatus('failed');
-              if (poll) window.clearInterval(poll);
-              return;
-            }
-            setStatus('kept');
-            if (poll) window.clearInterval(poll);
-            onNotifyRef.current('Logged in', 'This browser is linked and can open your account documents.', 'success');
-            onPromotedRef.current?.();
-          });
-        }, 1500);
-      } catch {
-        if (!cancelled) {
+        const result = await pollPairingUntilSettled({
+          expiresAtMs: minted.expiresAtMs,
+          signal: controller.signal,
+          finalize: (signal) => finalizePairing(minted.pairingId, signal),
+        });
+        if (cancelled) return;
+        if (result === 'gone') {
           setStatus('failed');
-          onNotifyRef.current(SERVICE_ERROR_COPY[401].title, SERVICE_ERROR_COPY[401].detail, SERVICE_ERROR_COPY[401].tone);
+          return;
         }
+        setStatus('kept');
+        onNotifyRef.current('Logged in', 'This browser is linked and can open your account documents.', 'success');
+        onPromotedRef.current?.();
+      } catch {
+        if (cancelled || controller.signal.aborted) return;
+        setStatus('failed');
+        onNotifyRef.current(SERVICE_ERROR_COPY[401].title, SERVICE_ERROR_COPY[401].detail, SERVICE_ERROR_COPY[401].tone);
       }
     })();
     return () => {
       cancelled = true;
-      if (poll) window.clearInterval(poll);
+      controller.abort(new DOMException('Login dialog closed.', 'AbortError'));
     };
   }, [service, pairingOpen, alreadyKept]);
 

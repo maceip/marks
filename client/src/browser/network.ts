@@ -8,6 +8,11 @@
 
 export type NetworkQuality = 'online' | 'slow' | 'offline';
 
+/** Ordinary metadata/auth calls should never leave the shell unresolved. */
+export const SERVICE_REQUEST_TIMEOUT_MS = 15_000;
+/** Import conversion includes a bounded server-side worker/network budget. */
+export const IMPORT_REQUEST_TIMEOUT_MS = 35_000;
+
 interface NavigatorConnection {
   effectiveType?: string;
   saveData?: boolean;
@@ -56,17 +61,25 @@ export function subscribeNetwork(listener: (quality: NetworkQuality) => void): (
 }
 
 export async function fetchWithTimeout(
-  url: string,
+  url: RequestInfo | URL,
   init: RequestInit,
   timeoutMs: number,
+  fetchImpl: typeof fetch = globalThis.fetch,
 ): Promise<Response> {
   if (timeoutMs <= 0) throw new DOMException('The user aborted a request.', 'AbortError');
 
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  const propagateAbort = () => controller.abort(init.signal?.reason);
+  if (init.signal?.aborted) propagateAbort();
+  else init.signal?.addEventListener('abort', propagateAbort, { once: true });
+  const timer = globalThis.setTimeout(
+    () => controller.abort(new DOMException('The request timed out.', 'TimeoutError')),
+    timeoutMs,
+  );
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    return await fetchImpl(url, { ...init, signal: controller.signal });
   } finally {
-    window.clearTimeout(timer);
+    globalThis.clearTimeout(timer);
+    init.signal?.removeEventListener('abort', propagateAbort);
   }
 }

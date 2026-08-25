@@ -54,6 +54,43 @@ test('the current service proof owns the migrated two-browser scenarios', () => 
   assert.doesNotMatch(serviceProof, /peerContext\.addInitScript/);
 });
 
+test('mobile and service proofs fail fast without sharing a mutable client artifact', () => {
+  const mobileProof = read('scripts/check-mobile-ui.mjs');
+  assert.match(mobileProof, /join\(work, 'service-dist'\)/);
+  assert.match(mobileProof, /'build', '--workspace=client'.*'--outDir', staticDir, '--emptyOutDir'/s);
+  assert.match(mobileProof, /VITE_MARKS_DATA_MODE: 'service'/);
+  assert.match(mobileProof, /timeout: 120_000/);
+  assert.match(mobileProof, /fetch\(`\$\{origin\}\/readyz`/);
+  assert.match(mobileProof, /marks-server did not become ready within 15 seconds/);
+  assert.match(mobileProof, /loaded data-marks-mode=\$\{mode\}/);
+  assert.doesNotMatch(mobileProof, /join\(root, 'client', 'dist'\)/);
+
+  const serviceProof = read('scripts/ci-service-ui.mjs');
+  assert.match(serviceProof, /service proof loaded data-marks-mode=/);
+  assert.match(serviceProof, /rebuild with VITE_MARKS_DATA_MODE=service/);
+});
+
+test('anonymous and copied-slug failures leave opening shells with a retry surface', () => {
+  const app = read('client/src/App.tsx');
+  const sessionHook = read('client/src/hooks/useSession.ts');
+  const caller = read('client/src/auth/caller.ts');
+  const pendingDevice = read('client/src/auth/pending-device.ts');
+  const api = read('client/src/lib/api.ts');
+  const roomAccess = read('client/src/auth/room-access.ts');
+  const engine = read('client/src/collab/esbt-engine.ts');
+
+  assert.match(caller, /SERVICE_REQUEST_TIMEOUT_MS/);
+  assert.match(pendingDevice, /fetchWithTimeout/);
+  assert.match(api, /IMPORT_REQUEST_TIMEOUT_MS/);
+  assert.match(roomAccess, /fetchWithTimeout/);
+  assert.match(sessionHook, /setError\(error instanceof Error/);
+  assert.match(app, /Page could not open/);
+  assert.match(app, /Document connection failed/);
+  assert.match(app, /Try again/);
+  assert.match(engine, /void deleteReplicaJournal\(this\.docId\)\.catch/);
+  assert.doesNotMatch(engine, /await deleteReplicaJournal\(this\.docId\)/);
+});
+
 test('incremental CI is conservative, gated, cached, and keeps full browser coverage', () => {
   const workflow = read('.github/workflows/ci.yml');
   assert.match(workflow, /^\s*impact:\s*$/m);

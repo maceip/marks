@@ -1,5 +1,10 @@
 import { applyServiceCallerHeaders, ensureServiceCaller } from '../auth/caller';
 import { getCachedSession } from '../auth/session-cache.ts';
+import {
+  fetchWithTimeout,
+  IMPORT_REQUEST_TIMEOUT_MS,
+  SERVICE_REQUEST_TIMEOUT_MS,
+} from '../browser/network.ts';
 import { ServiceError } from './service-errors';
 
 export interface DocumentMeta {
@@ -80,12 +85,21 @@ export interface ImportedMarkdownDto {
   sourceUrl?: string | null;
 }
 
-export async function authenticatedResponse(path: string, init?: RequestInit): Promise<Response> {
+export async function authenticatedResponse(
+  path: string,
+  init?: RequestInit,
+  timeoutMs = SERVICE_REQUEST_TIMEOUT_MS,
+): Promise<Response> {
+  const deadline = Date.now() + timeoutMs;
   let caller = await ensureServiceCaller();
   const perform = () => {
     const headers = new Headers(init?.headers);
     applyServiceCallerHeaders(headers, caller);
-    return fetch(path, { ...init, credentials: 'same-origin', headers });
+    return fetchWithTimeout(
+      path,
+      { ...init, credentials: 'same-origin', headers },
+      Math.max(1, deadline - Date.now()),
+    );
   };
   let response = await perform();
   if (response.status === 401 && caller.kind === 'scratch') {
@@ -96,7 +110,12 @@ export async function authenticatedResponse(path: string, init?: RequestInit): P
   return response;
 }
 
-async function csrfRequest<T>(path: string, body: unknown): Promise<T> {
+async function csrfRequest<T>(
+  path: string,
+  body: unknown,
+  timeoutMs = SERVICE_REQUEST_TIMEOUT_MS,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
   let caller = await ensureServiceCaller();
   if (caller.kind === 'session' && !getCachedSession()) {
     caller = await ensureServiceCaller({ forceProbe: true });
@@ -108,12 +127,16 @@ async function csrfRequest<T>(path: string, body: unknown): Promise<T> {
     if (!session) throw new ServiceError(401);
     headers.set('X-Marks-CSRF', session.csrf);
   }
-  const response = await fetch(path, {
-    method: 'POST',
-    body: JSON.stringify(body),
-    headers,
-    credentials: 'same-origin',
-  });
+  const response = await fetchWithTimeout(
+    path,
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers,
+      credentials: 'same-origin',
+    },
+    Math.max(1, deadline - Date.now()),
+  );
   if (!response.ok) throw new ServiceError(response.status);
   return (await response.json()) as T;
 }
@@ -192,6 +215,7 @@ export async function uploadDocumentAsset(
       },
       body: file,
     },
+    IMPORT_REQUEST_TIMEOUT_MS,
   );
   return (await response.json()) as { asset: DocumentAssetDto };
 }
@@ -204,18 +228,19 @@ export async function importDocumentFile(file: File): Promise<ImportedMarkdownDt
       'X-Marks-Filename': assetFilename(file.name),
     },
     body: file,
-  });
+  }, IMPORT_REQUEST_TIMEOUT_MS);
   return (await response.json()) as ImportedMarkdownDto;
 }
 
 export function importWebPage(url: string): Promise<ImportedMarkdownDto> {
-  return csrfRequest('/v1/import/url', { url });
+  return csrfRequest('/v1/import/url', { url }, IMPORT_REQUEST_TIMEOUT_MS);
 }
 
 export async function downloadDocumentBundle(id: string): Promise<Blob> {
   const response = await authenticatedResponse(
     `/v1/documents/${encodeURIComponent(id)}/export-bundle`,
     { headers: { Accept: 'application/zip' } },
+    IMPORT_REQUEST_TIMEOUT_MS,
   );
   return response.blob();
 }

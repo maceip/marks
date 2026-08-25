@@ -166,7 +166,7 @@
 .keep-stage small { display: block; margin-top: 4px; color: var(--color-fg-muted); font-size: 11px; line-height: 1.5; }
 .keep-solo { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--material-border); border-radius: 16px; background: var(--color-bg-sunken); }
 .keep-solo small { color: var(--color-fg-muted); font-size: 11px; line-height: 1.5; }
-.keep-solo .button { justify-self: start; }
+.keep-solo .button { justify-self: start; min-height: 40px; }
 .mobile-login-path { display: grid; gap: 12px; }
 .mobile-login-path > .button { justify-self: start; }
 .laptop-login-stage > .icon { justify-self: center; }

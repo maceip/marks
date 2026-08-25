@@ -14,6 +14,7 @@ export interface SessionState {
   status: ConnectionStatus;
   peers: Peer[];
   hydrated: boolean;
+  error: string | null;
 }
 
 /**
@@ -32,6 +33,7 @@ export function useSession(
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
   const [peers, setPeers] = useState<Peer[]>([]);
   const [hydrated, setHydrated] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Identity changes should not tear down a live session.
   const identity = useMemo(() => user, [user.name, user.colorIndex, user.id]);
@@ -41,6 +43,7 @@ export function useSession(
       setSession(null);
       setHydrated(false);
       setPeers([]);
+      setError(null);
       return;
     }
 
@@ -53,6 +56,7 @@ export function useSession(
       setStatus('connecting');
       setHydrated(false);
       setPeers([]);
+      setError(null);
       return;
     }
 
@@ -62,6 +66,7 @@ export function useSession(
     setStatus('connecting');
     setPeers([]);
     setHydrated(false);
+    setError(null);
 
     // The documents shell should not pay for CodeMirror, the CRDT, or their
     // bindings. Load the editing engine only when a document is ready to open.
@@ -85,6 +90,7 @@ export function useSession(
           return;
         }
         next = session;
+        setError(null);
         setSession(next);
         setStatus(next.status());
         setPeers(next.peers());
@@ -99,6 +105,7 @@ export function useSession(
         if (active) {
           console.error('[marks] session bootstrap failed', error);
           setStatus('offline');
+          setError(error instanceof Error ? error.message : 'The document session could not open.');
         }
       });
 
@@ -110,5 +117,5 @@ export function useSession(
     };
   }, [docId, identity, isAboutDocument(docId) ? null : access]);
 
-  return { session, status, peers, hydrated };
+  return { session, status, peers, hydrated, error };
 }
