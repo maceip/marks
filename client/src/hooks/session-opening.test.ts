@@ -13,7 +13,7 @@ function deferred<T>(): {
   return { promise, resolve };
 }
 
-test('session opening times out even when the lazy module load ignores cancellation', async () => {
+test('session opening times out even when the lazy module load ignores cancellation', { timeout: 1_000 }, async () => {
   await assert.rejects(
     openSessionWithTimeout(
       () => new Promise(() => undefined),
@@ -23,7 +23,7 @@ test('session opening times out even when the lazy module load ignores cancellat
   );
 });
 
-test('a session constructed after its deadline is destroyed', async () => {
+test('a session constructed after its deadline is destroyed', { timeout: 1_000 }, async () => {
   const construction = deferred<{ destroy(): void }>();
   let destroyed = 0;
   const opening = openSessionWithTimeout(
@@ -38,7 +38,7 @@ test('a session constructed after its deadline is destroyed', async () => {
   assert.equal(destroyed, 1);
 });
 
-test('caller cancellation bounds session opening', async () => {
+test('caller cancellation bounds session opening', { timeout: 1_000 }, async () => {
   const controller = new AbortController();
   const opening = openSessionWithTimeout(
     () => new Promise(() => undefined),

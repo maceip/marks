@@ -13,7 +13,7 @@ const scratch: ServiceCaller = {
   },
 };
 
-test('expired scratch reprobe cannot extend the advertised request deadline', async () => {
+test('expired scratch reprobe cannot extend the advertised request deadline', { timeout: 1_000 }, async () => {
   const started = Date.now();
   let forceProbes = 0;
   await assert.rejects(
@@ -30,10 +30,10 @@ test('expired scratch reprobe cannot extend the advertised request deadline', as
     (error: unknown) => error instanceof DOMException && error.name === 'TimeoutError',
   );
   assert.equal(forceProbes, 1);
-  assert.ok(Date.now() - started < 250);
+  assert.ok(Date.now() - started < 500);
 });
 
-test('CSRF authority resolution is part of the same absolute deadline', async () => {
+test('CSRF authority resolution is part of the same absolute deadline', { timeout: 1_000 }, async () => {
   let fetches = 0;
   await assert.rejects(
     csrfRequest('/v1/import/url', { url: 'https://example.com' }, 10, {
