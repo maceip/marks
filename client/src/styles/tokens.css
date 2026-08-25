@@ -200,7 +200,7 @@
   /* Application dimensions --------------------------------------------- */
   --layout-titlebar-height: 48px;
   --layout-ribbon-height: 148px;
-  --layout-mobile-ribbon-height: 104px;
+  --layout-mobile-ribbon-height: 126px;
   --layout-statusbar-height: 30px;
   --layout-sidebar-width: 268px;
   /* Thinner than Material 3 navigation rail (80dp). */

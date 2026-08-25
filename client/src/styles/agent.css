@@ -88,6 +88,7 @@
 }
 .agent-provider:focus-visible { border-color: var(--color-action); box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-action) 18%, transparent); }
 .agent-provider:disabled { opacity: .6; }
+.agent-provider-label { text-align: center; }
 
 .agent-running-dot {
   position: absolute;
@@ -211,15 +212,27 @@
 
 :root[data-shell='phone'] .agent-pill {
   right: 8px;
-  bottom: calc(84px + env(safe-area-inset-bottom) + var(--keyboard-inset, 0px));
+  bottom: calc(var(--layout-mobile-ribbon-height) + env(safe-area-inset-bottom) + 8px);
   left: 8px;
   width: auto;
-  max-height: calc(100dvh - 160px - var(--keyboard-inset, 0px));
+  max-height: calc(100dvh - 160px);
 }
 :root[data-shell='phone'] .agent-pill.inspector-linked { width: auto; }
 :root[data-shell='phone'] .agent-pill-compose { grid-template-columns: 40px minmax(0, 1fr) auto 34px; min-height: 52px; }
 :root[data-shell='phone'] .agent-pill-panel { max-height: min(46vh, 420px); }
-
+:root[data-shell='phone'] .agent-pill.phone-minimized {
+  right: 12px;
+  left: auto;
+  width: 52px;
+  border-radius: 50%;
+}
+:root[data-shell='phone'] .agent-pill.phone-minimized .agent-pill-compose {
+  display: block;
+  min-height: 50px;
+  padding: 5px;
+}
+:root[data-shell='phone'] .agent-pill.phone-minimized .agent-pill-compose > :not(.agent-orb) { display: none; }
+:root[data-shell='phone'] .agent-pill.phone-minimized .agent-orb { width: 40px; height: 40px; }
 :root[data-shell='fold-book'] .agent-pill {
   right: max(14px, calc(var(--segment-1-width) * .04));
   width: min(520px, calc(var(--segment-1-width) - 28px));

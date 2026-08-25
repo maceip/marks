@@ -21,8 +21,13 @@ components rather than adding selectors.
    region. **Focus mode** does the same while also removing nonessential chrome.
 7. On phone or short coarse-pointer viewports, the desktop pattern is replaced
    by the fixed-bottom tab/deck composer. This **mobile substitution** uses
-   touch targets and horizontal group scrolling; it is not a scaled desktop
-   ribbon.
+   the same projected tabs, groups, availability rules, profile, contextual
+   tabs, agent relevance, and feature flags as desktop. The active command deck
+   stays visible above its horizontally scrollable task tabs, so common actions
+   remain one tap away instead of opening a second grid of buttons. **More** is
+   the phone label for the desktop **File** task, and **All** exposes the same
+   expanded profile—including optional commands only when their build-time
+   configuration is enabled.
 
 ## States
 
