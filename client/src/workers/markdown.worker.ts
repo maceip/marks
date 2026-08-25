@@ -3,9 +3,10 @@ import type { Token } from 'markdown-it';
 import { collectHeadings, envSignature, groupTokens, hashString } from '../markdown/blocks';
 import { incrementalParseSafe, splitSourceBlocks } from '../markdown/incremental';
 import { createMarkdownIt, type MarkdownRendererFeatures } from '../markdown/md';
-import type { BlockPatch, Heading, RenderRequest, RenderResponse } from '../markdown/types';
+import type { BlockPatch, Heading, RenderedResponse, RenderRequest, RenderResponse } from '../markdown/types';
 import { countWords } from '../lib/format';
-import { applyTextEdits } from '../text/change';
+import { createSerialDispatcher } from '../markdown/serial-dispatch';
+import { transitionPatch } from '../markdown/worker-state';
 
 /**
  * Markdown rendering, off the main thread.
@@ -46,6 +47,7 @@ let lastEnvSignature = '';
 let lastText = '';
 let lastEnv: Record<string, unknown> = {};
 let lastHeadings: Heading[] = [];
+const WORKER_GENERATION = crypto.randomUUID();
 
 function clearRenderCache(): void {
   cache = new Map();
@@ -76,7 +78,7 @@ async function loadRequestedFeatures(text: string): Promise<void> {
   clearRenderCache();
 }
 
-async function render(seq: number, text: string): Promise<RenderResponse> {
+async function render(seq: number, text: string): Promise<RenderedResponse> {
   await loadRequestedFeatures(text);
 
   const incremental = lastText.length > 0 ? incrementalParseSafe(lastText, text) : null;
@@ -155,6 +157,7 @@ async function render(seq: number, text: string): Promise<RenderResponse> {
   return {
     type: 'rendered',
     seq,
+    generation: WORKER_GENERATION,
     blocks,
     headings: lastHeadings,
     stats: {
@@ -170,7 +173,7 @@ async function render(seq: number, text: string): Promise<RenderResponse> {
   };
 }
 
-function renderIncremental(seq: number, text: string, dirtyKeys: string[]): RenderResponse {
+function renderIncremental(seq: number, text: string, dirtyKeys: string[]): RenderedResponse {
   const dirtySet = new Set(dirtyKeys);
   const parseStart = performance.now();
   const sourceBlocks = splitSourceBlocks(text);
@@ -213,6 +216,7 @@ function renderIncremental(seq: number, text: string, dirtyKeys: string[]): Rend
   return {
     type: 'rendered',
     seq,
+    generation: WORKER_GENERATION,
     blocks,
     headings: lastHeadings,
     stats: {
@@ -246,9 +250,7 @@ function remapHeadingLines(text: string, headings: Heading[]): Heading[] {
   }));
 }
 
-self.onmessage = async (event: MessageEvent<RenderRequest>) => {
-  const message = event.data;
-
+async function processMessage(message: RenderRequest): Promise<void> {
   if (message.type === 'reset') {
     clearRenderCache();
     return;
@@ -258,7 +260,16 @@ self.onmessage = async (event: MessageEvent<RenderRequest>) => {
     let text = lastText;
     let textAccepted = false;
     try {
-      text = message.type === 'render' ? message.text : applyTextEdits(lastText, message.edits);
+      if (message.type === 'patch') {
+        const transition = transitionPatch(lastText, WORKER_GENERATION, message);
+        if (transition.type !== 'applied') {
+          (self as unknown as Worker).postMessage(transition satisfies RenderResponse);
+          return;
+        }
+        text = transition.text;
+      } else {
+        text = message.text;
+      }
       textAccepted = true;
       (self as unknown as Worker).postMessage(await render(message.seq, text));
     } catch (error) {
@@ -269,6 +280,7 @@ self.onmessage = async (event: MessageEvent<RenderRequest>) => {
       const response: RenderResponse = {
         type: 'rendered',
         seq: message.seq,
+        generation: WORKER_GENERATION,
         blocks: [
           {
             key: `error-${message.seq}`,
@@ -292,4 +304,17 @@ self.onmessage = async (event: MessageEvent<RenderRequest>) => {
       (self as unknown as Worker).postMessage(response);
     }
   }
+}
+
+// `message` events arrive in order, but async event listeners themselves can
+// overlap. A first render may await lazy KaTeX or syntax-highlighter imports;
+// processing a later delta during that await would apply its coordinates to
+// the old `lastText`. Serialize reset, render and patch as one state machine.
+const dispatchMessage = createSerialDispatcher<RenderRequest>(
+  processMessage,
+  (error) => console.error('[marks] markdown worker message failed', error),
+);
+
+self.onmessage = (event: MessageEvent<RenderRequest>) => {
+  void dispatchMessage(event.data);
 };

@@ -39,13 +39,34 @@ export interface RenderStats {
 
 export type RenderRequest =
   | { type: 'render'; seq: number; text: string }
-  | { type: 'patch'; seq: number; edits: TextEdit[] }
+  | {
+      type: 'patch';
+      seq: number;
+      edits: TextEdit[];
+      /** Worker generation that produced the base DOM now held by the client. */
+      generation: string;
+      /** Cheap guard against applying valid coordinates to the wrong source. */
+      baseChars: number;
+      chars: number;
+    }
   | { type: 'reset' };
 
-export interface RenderResponse {
+export interface RenderedResponse {
   type: 'rendered';
   seq: number;
+  generation: string;
   blocks: BlockPatch[];
   headings: Heading[];
   stats: RenderStats;
 }
+
+/** The worker restarted or otherwise no longer owns the patch's base text. */
+export interface RenderResyncResponse {
+  type: 'resync';
+  seq: number;
+  generation: string;
+  actualChars: number;
+  reason: 'generation' | 'base-length' | 'result-length' | 'invalid-edit';
+}
+
+export type RenderResponse = RenderedResponse | RenderResyncResponse;
