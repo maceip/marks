@@ -11,6 +11,7 @@ import {
 
 class FakeWorker {
   onmessage: ((event: MessageEvent<unknown>) => void) | null = null;
+  onmessageerror: ((event: MessageEvent<unknown>) => void) | null = null;
   onerror: ((event: ErrorEvent) => void) | null = null;
   request: DocumentImportWorkerRequest | null = null;
   transfer: Transferable[] = [];

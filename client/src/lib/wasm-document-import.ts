@@ -20,6 +20,7 @@ export interface PdfImportFile {
 
 interface ImportWorker {
   onmessage: ((event: MessageEvent<unknown>) => void) | null;
+  onmessageerror: ((event: MessageEvent<unknown>) => void) | null;
   onerror: ((event: ErrorEvent) => void) | null;
   postMessage(message: DocumentImportWorkerRequest, transfer: Transferable[]): void;
   terminate(): void;
@@ -88,6 +89,9 @@ function convertPdfBytes(
       if (event.data.type === 'error') settle({ error: conversionError(event.data) });
       else settle({ markdown: event.data.markdown });
     };
+    worker.onmessageerror = () => {
+      settle({ error: new Error('The PDF converter returned an unreadable response.') });
+    };
     worker.onerror = () => {
       settle({ error: new Error('The browser PDF converter stopped unexpectedly.') });
     };
@@ -97,7 +101,11 @@ function convertPdfBytes(
       return;
     }
 
-    worker.postMessage({ type: 'convert', format: 'pdf', bytes }, [bytes]);
+    try {
+      worker.postMessage({ type: 'convert', format: 'pdf', bytes }, [bytes]);
+    } catch (error) {
+      settle({ error });
+    }
   });
 }
 
