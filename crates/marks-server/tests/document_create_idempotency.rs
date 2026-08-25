@@ -2,7 +2,7 @@ mod common;
 
 use common::{TestServer, temp_db};
 use serde_json::{Value, json};
-use tokio::io::{AsyncWriteExt, Interest};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -68,7 +68,6 @@ async fn lost_create_response_replays_one_slug_after_restart_and_rebinding_confl
     })
     .await
     .expect("server commits before the client abandons its response");
-    socket.ready(Interest::READABLE).await.unwrap();
     drop(socket);
     first.stop().await;
 
