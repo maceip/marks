@@ -487,8 +487,8 @@ try {
 
   await page.waitForSelector('.cm-content', { timeout: 30_000 });
   await page.waitForFunction(
-    () => document.querySelector('.cm-content')?.textContent?.includes('Google Docs for Markdown') &&
-      document.querySelector('.marks-preview')?.textContent?.includes('Typical Markdown') &&
+    () => document.querySelector('.cm-content')?.innerText?.includes('Google Docs for Markdown') &&
+      document.querySelector('.marks-preview')?.innerText?.includes('Typical Markdown') &&
       document.querySelector('.app')?.getAttribute('data-marketing') === 'true',
     undefined,
     { timeout: 30_000 },
@@ -511,11 +511,20 @@ try {
     initialMarkdown.includes('# Google Docs for Markdown') &&
       initialMarkdown.includes('Delete this entire introduction'),
   );
+  const marketingPresentation = await page.evaluate(() => ({
+    editor: document.querySelector('.cm-content')?.innerText ?? '',
+    preview: document.querySelector('.marks-preview')?.innerText ?? '',
+    marker: document.querySelector('.app')?.getAttribute('data-marketing') ?? '',
+    mode: [...(document.querySelector('.workspace')?.classList ?? [])]
+      .find((name) => name.startsWith('mode-')) ?? '',
+  }));
   requireCheck(
     check,
     'new public slug renders the Markdown marketing page inside the real workspace',
-    (await page.locator('.marks-preview').innerText()).includes('Typical Markdown') &&
-      (await page.locator('.app').getAttribute('data-marketing')) === 'true',
+    marketingPresentation.preview.includes('Typical Markdown') &&
+      marketingPresentation.marker === 'true',
+    `marker=${marketingPresentation.marker || 'missing'} mode=${marketingPresentation.mode || 'missing'} ` +
+      `editor=${marketingPresentation.editor.length} preview=${marketingPresentation.preview.length}`,
   );
   const committedText = `Cross-browser ${args.browser} proof 🧭`;
   const fixture = SERVICE_FIXTURE(args.browser);

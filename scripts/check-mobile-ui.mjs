@@ -242,8 +242,9 @@ async function reachEditorByTouch(page, viewportWidth, failure) {
       page.locator(RIBBON).waitFor({ timeout: 30_000 }),
       page.waitForFunction(
         () =>
-          document.querySelector('.marks-preview')?.textContent?.includes('Google Docs for Markdown') &&
+          document.querySelector('.marks-preview')?.innerText?.includes('Google Docs for Markdown') &&
           document.querySelector('.marks-preview table') != null &&
+          document.querySelector('.workspace')?.classList.contains('mode-preview') === true &&
           document.querySelector('.app')?.getAttribute('data-marketing') === 'true',
         undefined,
         { timeout: 30_000 },

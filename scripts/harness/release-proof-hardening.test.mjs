@@ -53,6 +53,7 @@ test('browser proof bounds recovery waits and publishes receipts only after succ
   assert.match(script, /if \(receiptPath\) rmSync\(receiptPath, \{ force: true \}\)/);
   assert.match(script, /writeReceiptAtomically\(receiptPath, pendingReceipt\)/);
   assert.match(marketingWait, /getAttribute\('data-marketing'\) === 'true'/);
+  assert.match(marketingWait, /querySelector\('\.marks-preview'\)\?\.innerText/);
   assert.match(marketingWait, /timeout: 30_000/);
   assert.ok(
     script.indexOf('const failed = results.filter') <
@@ -61,11 +62,33 @@ test('browser proof bounds recovery waits and publishes receipts only after succ
   );
 });
 
+test('anonymous marketing identity survives the creation and metadata handoff', () => {
+  const app = read('client/src/App.tsx');
+  const identityStart = app.indexOf('const metadataIdentifiesMarketingDocument');
+  const identity = app.slice(identityStart, app.indexOf('const { session', identityStart));
+  const presentationEffectStart = app.indexOf("useEffect(() => {\n    if (!marketingPresentationKey)");
+  const presentationEffect = app.slice(
+    presentationEffectStart,
+    app.indexOf("\n\n  useEffect(() => {\n    localStorage.setItem('marks:ribbon-collapsed'", presentationEffectStart),
+  );
+  const starter = app.slice(
+    app.indexOf('.then(({ created, createScope, requestId, confirmRequest })'),
+    app.indexOf("\n      .catch(() => {", app.indexOf('.then(({ created, createScope, requestId, confirmRequest })')),
+  );
+
+  assert.match(identity, /knownMarketingDocumentId === docId/);
+  assert.match(starter, /setKnownMarketingDocumentId\(created\.id\)[\s\S]*navigate\(/);
+  assert.match(presentationEffect, /if \(!marketingPresentationKey\) return;/);
+  assert.doesNotMatch(presentationEffect, /setPreparedMarketingPresentation\(null\)/);
+});
+
 test('mobile proof waits for the complete marketing presentation before inspecting it', () => {
   const script = read('scripts/check-mobile-ui.mjs');
   const readinessStart = script.indexOf('Promise.all([');
   const readiness = script.slice(readinessStart, script.indexOf('await assertNoHorizontalOverflow', readinessStart));
   assert.match(readiness, /getAttribute\('data-marketing'\) === 'true'/);
+  assert.match(readiness, /querySelector\('\.marks-preview'\)\?\.innerText/);
+  assert.match(readiness, /classList\.contains\('mode-preview'\)/);
   assert.match(readiness, /timeout: 30_000/);
 });
 

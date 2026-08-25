@@ -202,6 +202,7 @@ export function App() {
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [uiError, setUiError] = useState<string | null>(null);
   const [preparedMarketingPresentation, setPreparedMarketingPresentation] = useState<string | null>(null);
+  const [knownMarketingDocumentId, setKnownMarketingDocumentId] = useState<string | null>(null);
   const [dragImportActive, setDragImportActive] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [ribbonCollapsed, setRibbonCollapsed] = useState(
@@ -225,9 +226,12 @@ export function App() {
   const documents = useDocuments(route.name !== 'benchmark' && route.name !== 'design-system');
   const docId = route.name === 'document' ? route.id : null;
   const { meta, engine, supported, resolved, error: metadataError } = useDocumentMeta(docId);
+  const metadataIdentifiesMarketingDocument =
+    meta?.id === docId && meta.public === true && meta.title === ABOUT_DOCUMENT_TITLE;
   const marketingDocument =
     isAboutDocument(docId) ||
-    (meta?.id === docId && meta.public === true && meta.title === ABOUT_DOCUMENT_TITLE);
+    knownMarketingDocumentId === docId ||
+    metadataIdentifiesMarketingDocument;
   const marketingPresentationKey = marketingDocument && docId
     ? `${docId}:${phone ? 'phone' : 'wide'}`
     : null;
@@ -270,10 +274,17 @@ export function App() {
   useEffect(() => localStorage.setItem('marks:mode', mode), [mode]);
 
   useEffect(() => {
-    if (!marketingPresentationKey) {
-      setPreparedMarketingPresentation(null);
-      return;
+    if (docId && (isAboutDocument(docId) || metadataIdentifiesMarketingDocument)) {
+      // Metadata can be temporarily unavailable while a public slug changes
+      // hands between creation, cache hydration, and the authoritative GET.
+      // Once this route is positively identified, keep its presentation
+      // stable; the exact id comparison cannot mark another page as marketing.
+      setKnownMarketingDocumentId(docId);
     }
+  }, [docId, metadataIdentifiesMarketingDocument]);
+
+  useEffect(() => {
+    if (!marketingPresentationKey) return;
     // Both the built-in /welcome document and the anonymous editable clone
     // mount only after their initial presentation is ready. That keeps Import
     // selected even on a cold, copy-pasted slug; later user mode changes do not
@@ -539,6 +550,7 @@ export function App() {
         confirmRequest(createScope, requestId);
         if (location.pathname === '/') {
           setMode(phone ? 'preview' : 'split');
+          setKnownMarketingDocumentId(created.id);
           setPreparedMarketingPresentation(`${created.id}:${phone ? 'phone' : 'wide'}`);
           navigate({ name: 'document', id: created.id }, { replace: true });
         }
