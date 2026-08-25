@@ -21,6 +21,9 @@ import {
   type EsbtDocument as Document,
   type EsbtComponentManifest,
 } from '../collab/wasm';
+import { fetchWithTimeout } from '../browser/network.ts';
+
+const BENCHMARK_ARTIFACT_TIMEOUT_MS = 20_000;
 
 const TIMINGS: BenchTiming[] = [
   'instantiateMs',
@@ -162,7 +165,11 @@ async function sha256(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
 }
 
 async function fetchArtifactBundle(): Promise<ArtifactBundle> {
-  const manifestResponse = await fetch(ESBT_COMPONENT_MANIFEST_URL);
+  const manifestResponse = await fetchWithTimeout(
+    ESBT_COMPONENT_MANIFEST_URL,
+    {},
+    BENCHMARK_ARTIFACT_TIMEOUT_MS,
+  );
   if (!manifestResponse.ok) {
     throw new Error(`could not load the component manifest (${manifestResponse.status})`);
   }
@@ -172,9 +179,10 @@ async function fetchArtifactBundle(): Promise<ArtifactBundle> {
   }
 
   const [componentResponse, witResponse, ...moduleResponses] = await Promise.all([
-    fetch(manifest.component.path),
-    fetch('/esbt.wit'),
-    ...manifest.core_modules.map((descriptor) => fetch(descriptor.path)),
+    fetchWithTimeout(manifest.component.path, {}, BENCHMARK_ARTIFACT_TIMEOUT_MS),
+    fetchWithTimeout('/esbt.wit', {}, BENCHMARK_ARTIFACT_TIMEOUT_MS),
+    ...manifest.core_modules.map((descriptor) =>
+      fetchWithTimeout(descriptor.path, {}, BENCHMARK_ARTIFACT_TIMEOUT_MS)),
   ]);
   if (!componentResponse.ok || !witResponse.ok || moduleResponses.some((response) => !response.ok)) {
     throw new Error('could not load every declared component artifact');

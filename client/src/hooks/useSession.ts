@@ -8,6 +8,7 @@ import type {
 } from '../collab/types';
 import { isAboutDocument } from '../content/about';
 import { UI_DATA_MODE } from '../lib/product';
+import { openSessionWithTimeout } from './session-opening.ts';
 
 export interface SessionState {
   session: CollabSession | null;
@@ -63,6 +64,7 @@ export function useSession(
     let active = true;
     let next: CollabSession | null = null;
     let unsubscribe: Array<() => void> = [];
+    const opening = new AbortController();
     setStatus('connecting');
     setPeers([]);
     setHydrated(false);
@@ -70,20 +72,20 @@ export function useSession(
 
     // The documents shell should not pay for CodeMirror, the CRDT, or their
     // bindings. Load the editing engine only when a document is ready to open.
-    const factory =
-      UI_DATA_MODE === 'local' || isAboutDocument(docId)
-        ? import('../demo/local-session').then(({ createLocalSession }) => () =>
-            createLocalSession(docId, identity),
-          )
-        : import('../collab').then(({ createSession }) => {
-            if (!access) {
-              throw new Error('service mode requires a document admission provider');
-            }
-            return () => createSession({ docId, user: identity, access });
-          });
-
-    void factory
-      .then((create) => create())
+    void openSessionWithTimeout(
+      () =>
+        UI_DATA_MODE === 'local' || isAboutDocument(docId)
+          ? import('../demo/local-session').then(({ createLocalSession }) => () =>
+              createLocalSession(docId, identity),
+            )
+          : import('../collab').then(({ createSession }) => {
+              if (!access) {
+                throw new Error('service mode requires a document admission provider');
+              }
+              return () => createSession({ docId, user: identity, access });
+            }),
+      { signal: opening.signal },
+    )
       .then((session) => {
         if (!active) {
           session.destroy();
@@ -111,6 +113,7 @@ export function useSession(
 
     return () => {
       active = false;
+      opening.abort(new DOMException('The document route changed.', 'AbortError'));
       for (const off of unsubscribe) off();
       next?.destroy();
       setSession(null);

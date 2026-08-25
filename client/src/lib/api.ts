@@ -1,11 +1,16 @@
-import { applyServiceCallerHeaders, ensureServiceCaller } from '../auth/caller';
+import {
+  applyServiceCallerHeaders,
+  ensureServiceCaller,
+  type ServiceCaller,
+} from '../auth/caller.ts';
 import { getCachedSession } from '../auth/session-cache.ts';
 import {
   fetchWithTimeout,
   IMPORT_REQUEST_TIMEOUT_MS,
+  runWithTimeout,
   SERVICE_REQUEST_TIMEOUT_MS,
 } from '../browser/network.ts';
-import { ServiceError } from './service-errors';
+import { ServiceError } from './service-errors.ts';
 
 export interface DocumentMeta {
   id: string;
@@ -85,60 +90,86 @@ export interface ImportedMarkdownDto {
   sourceUrl?: string | null;
 }
 
+interface ApiRequestDependencies {
+  ensureCaller?: (options?: { forceProbe?: boolean }) => Promise<ServiceCaller>;
+  fetch?: typeof fetch;
+}
+
 export async function authenticatedResponse(
   path: string,
   init?: RequestInit,
   timeoutMs = SERVICE_REQUEST_TIMEOUT_MS,
+  dependencies: ApiRequestDependencies = {},
 ): Promise<Response> {
-  const deadline = Date.now() + timeoutMs;
-  let caller = await ensureServiceCaller();
-  const perform = () => {
-    const headers = new Headers(init?.headers);
-    applyServiceCallerHeaders(headers, caller);
-    return fetchWithTimeout(
-      path,
-      { ...init, credentials: 'same-origin', headers },
-      Math.max(1, deadline - Date.now()),
-    );
-  };
-  let response = await perform();
-  if (response.status === 401 && caller.kind === 'scratch') {
-    caller = await ensureServiceCaller({ forceProbe: true });
-    response = await perform();
-  }
-  if (!response.ok) throw new ServiceError(response.status);
-  return response;
+  const ensureCaller = dependencies.ensureCaller ?? ensureServiceCaller;
+  return runWithTimeout(
+    async (signal) => {
+      const deadline = Date.now() + timeoutMs;
+      let caller = await ensureCaller();
+      const perform = () => {
+        const headers = new Headers(init?.headers);
+        applyServiceCallerHeaders(headers, caller);
+        return fetchWithTimeout(
+          path,
+          { ...init, signal, credentials: 'same-origin', headers },
+          Math.max(1, deadline - Date.now()),
+          dependencies.fetch ?? globalThis.fetch,
+        );
+      };
+      let response = await perform();
+      if (response.status === 401 && caller.kind === 'scratch') {
+        caller = await ensureCaller({ forceProbe: true });
+        response = await perform();
+      }
+      if (!response.ok) throw new ServiceError(response.status);
+      return response;
+    },
+    timeoutMs,
+    init?.signal,
+    new DOMException('The service request took too long. Try again.', 'TimeoutError'),
+  );
 }
 
-async function csrfRequest<T>(
+export async function csrfRequest<T>(
   path: string,
   body: unknown,
   timeoutMs = SERVICE_REQUEST_TIMEOUT_MS,
+  dependencies: ApiRequestDependencies = {},
 ): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
-  let caller = await ensureServiceCaller();
-  if (caller.kind === 'session' && !getCachedSession()) {
-    caller = await ensureServiceCaller({ forceProbe: true });
-  }
-  const headers = new Headers({ 'Content-Type': 'application/json' });
-  applyServiceCallerHeaders(headers, caller);
-  if (caller.kind === 'session') {
-    const session = getCachedSession();
-    if (!session) throw new ServiceError(401);
-    headers.set('X-Marks-CSRF', session.csrf);
-  }
-  const response = await fetchWithTimeout(
-    path,
-    {
-      method: 'POST',
-      body: JSON.stringify(body),
-      headers,
-      credentials: 'same-origin',
+  const ensureCaller = dependencies.ensureCaller ?? ensureServiceCaller;
+  return runWithTimeout(
+    async (signal) => {
+      const deadline = Date.now() + timeoutMs;
+      let caller = await ensureCaller();
+      if (caller.kind === 'session' && !getCachedSession()) {
+        caller = await ensureCaller({ forceProbe: true });
+      }
+      const headers = new Headers({ 'Content-Type': 'application/json' });
+      applyServiceCallerHeaders(headers, caller);
+      if (caller.kind === 'session') {
+        const session = getCachedSession();
+        if (!session) throw new ServiceError(401);
+        headers.set('X-Marks-CSRF', session.csrf);
+      }
+      const response = await fetchWithTimeout(
+        path,
+        {
+          method: 'POST',
+          body: JSON.stringify(body),
+          headers,
+          credentials: 'same-origin',
+          signal,
+        },
+        Math.max(1, deadline - Date.now()),
+        dependencies.fetch ?? globalThis.fetch,
+      );
+      if (!response.ok) throw new ServiceError(response.status);
+      return (await response.json()) as T;
     },
-    Math.max(1, deadline - Date.now()),
+    timeoutMs,
+    null,
+    new DOMException('The service request took too long. Try again.', 'TimeoutError'),
   );
-  if (!response.ok) throw new ServiceError(response.status);
-  return (await response.json()) as T;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
