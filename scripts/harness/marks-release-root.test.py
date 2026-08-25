@@ -208,6 +208,19 @@ class ReleaseRootContract(unittest.TestCase):
         self.assertIn("unique-10.js", pooled)
         self.assertIn("shared.js", pooled)
 
+    def test_caches_over_their_caps_are_cleared_and_repopulate(self):
+        mod = self.mod
+        cache = Path(mod.CACHE) / "npm"
+        cache.mkdir(parents=True)
+        (cache / "kept-small").write_bytes(b"x" * 10)
+        mod.CACHE_LIMIT_BYTES = {"npm": 1024}
+        mod.bound_caches()
+        self.assertTrue((cache / "kept-small").exists(), "under-cap caches are untouched")
+        (cache / "bloat").write_bytes(b"x" * 4096)
+        mod.bound_caches()
+        self.assertEqual(list(cache.iterdir()), [], "over-cap caches are cleared entirely")
+        self.assertTrue(cache.is_dir(), "the cache root survives for the next build")
+
     def test_legacy_direct_installation_is_captured_as_a_sealed_release(self):
         mod = self.mod
         marks_root = Path(mod.MARKS_ROOT)

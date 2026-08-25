@@ -40,6 +40,15 @@ VERIFIED_GIT = fixed_path("MARKS_TEST_VERIFIED_GIT", "/var/cache/marks-deploy/gi
 LIVE_DB = fixed_path("MARKS_TEST_LIVE_DB", "/var/lib/marks/marks.db3")
 BACKUPS = fixed_path("MARKS_TEST_BACKUPS", "/var/lib/marks/backups")
 KEEP_RELEASES = 8
+# Build caches accelerate the next release but must never grow without
+# bound. A cache over its cap is cleared entirely — the next build simply
+# repopulates it — which is deterministic and cannot corrupt state.
+CACHE_LIMIT_BYTES = {
+    "npm": 2 * 1024**3,
+    "cargo": 4 * 1024**3,
+    "target": 8 * 1024**3,
+    "home": 1 * 1024**3,
+}
 DISPATCHER = Path("/usr/local/libexec/marks-deploy-ssh")
 UPLOADER = Path("/usr/local/libexec/marks-upload")
 RELEASE_ROOT = Path("/usr/local/sbin/marks-release-root")
@@ -491,6 +500,32 @@ def link_release_assets(release: Path) -> None:
             os.link(item, target)
 
 
+def directory_bytes(path: Path) -> int:
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            info = (Path(root) / name).lstat()
+            if stat.S_ISREG(info.st_mode):
+                total += info.st_size
+    return total
+
+
+def bound_caches() -> None:
+    for name, limit in CACHE_LIMIT_BYTES.items():
+        cache = CACHE / name
+        if not cache.is_dir():
+            continue
+        used = directory_bytes(cache)
+        if used <= limit:
+            continue
+        print(f"cache {name} holds {used} bytes (cap {limit}); clearing it")
+        for entry in cache.iterdir():
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
+
+
 def prune_releases() -> None:
     """Bounded retention plus shared-pool garbage collection.
 
@@ -658,6 +693,7 @@ def build_and_activate(source: Path, git_dir: Path, revision: str) -> None:
     snapshot_legacy()
     activate(release, observe=True)
     prune_releases()
+    bound_caches()
 
 
 def rollback(requested=None) -> None:
