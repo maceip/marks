@@ -164,12 +164,17 @@ sudo install -d -o root -g root -m 0755 /var/lib/marks-deploy/build
 sudo fallocate -l 24G /var/lib/marks-deploy-build.ext4
 sudo chown root:root /var/lib/marks-deploy-build.ext4
 sudo chmod 0600 /var/lib/marks-deploy-build.ext4
-sudo mkfs.ext4 -m 0 -L marks-deploy-build /var/lib/marks-deploy-build.ext4
+sudo mkfs.ext4 -E nodiscard -m 0 -L marks-deploy-build /var/lib/marks-deploy-build.ext4
+test "$(($(stat -c %b /var/lib/marks-deploy-build.ext4) * 512))" \
+  -ge "$(stat -c %s /var/lib/marks-deploy-build.ext4)"
 ```
 
 Do not substitute `truncate`, `dd ... seek=`, or another sparse-image
 technique: the helper checks allocated blocks and refuses a sparse backing
-file. Add the persistent mount to `/etc/fstab`, then mount it:
+file. The `nodiscard` format option is equally important: without it, `mkfs`
+can discard the freshly allocated extents and turn the image sparse again. The
+post-format allocation check above must pass. Add the persistent mount to
+`/etc/fstab`, then mount it:
 
 ```fstab
 /var/lib/marks-deploy-build.ext4 /var/lib/marks-deploy/build ext4 loop,nodev,nosuid 0 2

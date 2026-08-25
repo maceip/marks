@@ -759,6 +759,20 @@ class ReleaseRootContract(unittest.TestCase):
         )
         self.assertIn("--setenv=HOME=/work/.marks-npm-home", npm)
         self.assertIn("--setenv=npm_config_cache=/work/.marks-npm-cache", npm)
+        self.assertIn(
+            "--property=TemporaryFileSystem=/marks-npm-config:ro,nodev,nosuid,noexec,size=1M",
+            npm,
+        )
+        self.assertIn(
+            "--setenv=npm_config_userconfig=/marks-npm-config/user",
+            npm,
+        )
+        self.assertIn(
+            "--setenv=npm_config_globalconfig=/marks-npm-config/global",
+            npm,
+        )
+        self.assertNotIn("--setenv=npm_config_userconfig=/dev/null", npm)
+        self.assertNotIn("--setenv=npm_config_globalconfig=/dev/null", npm)
         self.assertIn("--property=PrivateNetwork=yes", npm)
         self.assertIn("--property=ProtectProc=invisible", npm)
         self.assertIn("--property=ProcSubset=pid", npm)

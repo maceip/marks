@@ -12,6 +12,7 @@ const read = (path) => readFileSync(resolve(root, path), 'utf8');
 const dispatcher = read('deploy/host/marks-deploy-ssh');
 const releaseRoot = read('deploy/host/marks-release-root');
 const sqliteWorker = read('deploy/host/marks-sqlite-worker');
+const hostReadme = read('deploy/host/README.md');
 const client = read('scripts/deploy-secure-build.sh');
 
 test('the checked-in service template is exactly the repository unit', () => {
@@ -112,6 +113,10 @@ test('the boundary policy files stay restrictive', () => {
   assert.match(sshd, /^\s*PermitTTY no$/m);
   assert.match(sshd, /^\s*AllowTcpForwarding no$/m);
   assert.match(sshd, /^\s*PasswordAuthentication no$/m);
+  assert.match(sshd, /^\s*PermitTunnel no$/m);
+  assert.match(sshd, /^\s*PermitUserRC no$/m);
+  assert.match(sshd, /^\s*MaxSessions 1$/m);
+  assert.match(sshd, /^\s*AuthorizedKeysFile \/etc\/ssh\/authorized_keys\/%u$/m);
   assert.doesNotMatch(sshd, /^--$/m);
 
   const sshdBinary = ['/usr/sbin/sshd', '/usr/local/sbin/sshd'].find(existsSync);
@@ -170,6 +175,8 @@ test('root build storage is a distinct fixed-capacity filesystem', () => {
   assert.match(releaseRoot, /\{"nodev", "nosuid"\}\.issubset/u);
   assert.match(releaseRoot, /validate_loop_backing_contract\(/u);
   assert.match(releaseRoot, /st_blocks \* 512 < backing_info\.st_size/u);
+  assert.match(hostReadme, /mkfs\.ext4 -E nodiscard -m 0/u);
+  assert.match(hostReadme, /stat -c %b \/var\/lib\/marks-deploy-build\.ext4/u);
   assert.match(releaseRoot, /purge_stale_build_state\(\)[\s\S]{0,300}source = claim_uploaded_source/u);
   assert.match(releaseRoot, /def purge_stale_release_staging\(/u);
   assert.match(releaseRoot, /purge_stale_release_staging\(\)/u);
@@ -192,6 +199,10 @@ test('every untrusted build process has a wall-clock and resource bound', () => 
   );
   assert.match(releaseRoot, /--setenv=HOME=\/work\/\.marks-npm-home/u);
   assert.match(releaseRoot, /--setenv=npm_config_cache=\/work\/\.marks-npm-cache/u);
+  assert.match(releaseRoot, /TemporaryFileSystem=\/marks-npm-config:ro,nodev,nosuid,noexec,size=1M/u);
+  assert.match(releaseRoot, /npm_config_userconfig=\/marks-npm-config\/user/u);
+  assert.match(releaseRoot, /npm_config_globalconfig=\/marks-npm-config\/global/u);
+  assert.doesNotMatch(releaseRoot, /npm_config_(?:user|global)config=\/dev\/null/u);
   assert.match(releaseRoot, /def build_identity\(/u);
   assert.match(releaseRoot, /account = pwd\.getpwnam\("marks-build"\)/u);
   assert.match(releaseRoot, /"ci",\s*"--ignore-scripts"/u);
