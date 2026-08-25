@@ -5,8 +5,10 @@
  * those are live document state, and a stale snapshot in this cache would
  * fight the CRDT replica already sitting in IndexedDB.
  *
- * Updates install in the background and take over on the next navigation.
- * We never prompt the user to refresh.
+ * Updates take over immediately: waiting for every tab to close is the
+ * classic way production updates silently fail to roll out, and an old tab
+ * stays coherent anyway because the server serves every retained release's
+ * hashed assets from the shared pool. We never prompt the user to refresh.
  *
  * VERSION is stamped by the client build from a digest of the entry
  * documents and the ESBT component manifest. Any release that changes the
@@ -33,6 +35,9 @@ const ROOT_RUNTIME = new Set([
 
 self.addEventListener('install', (event) => {
   event.waitUntil(precacheCoherentShell());
+  // Activate as soon as the coherent precache commits; activation drops
+  // every cache namespace from the previous release.
+  self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
@@ -48,10 +53,6 @@ self.addEventListener('activate', (event) => {
       self.clients.claim(),
     ]),
   );
-});
-
-self.addEventListener('message', (event) => {
-  if (event.data === 'skipWaiting') self.skipWaiting();
 });
 
 self.addEventListener('fetch', (event) => {

@@ -2,6 +2,7 @@ import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin } from 'vite';
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const API_TARGET = process.env.MARKS_SERVER ?? 'http://localhost:3000';
@@ -13,23 +14,29 @@ const API_TARGET = process.env.MARKS_SERVER ?? 'http://localhost:3000';
 // namespace from the built entry documents and the component manifest so
 // any release that changes the shell or the component also changes sw.js.
 function stampServiceWorker(): Plugin {
+  let outputDir = 'dist';
+  let projectRoot = '';
   return {
     name: 'marks-stamp-service-worker',
     apply: 'build',
+    configResolved(config) {
+      outputDir = config.build.outDir;
+      projectRoot = config.root;
+    },
     closeBundle() {
-      const dist = new URL('./dist/', import.meta.url);
+      const dist = resolve(projectRoot, outputDir);
       const digest = createHash('sha256');
       for (const input of ['index.html', 'welcome/index.html', 'esbt.component.manifest.json']) {
-        digest.update(readFileSync(new URL(input, dist)));
+        digest.update(readFileSync(join(dist, input)));
       }
-      const worker = fileURLToPath(new URL('sw.js', dist));
+      const worker = join(dist, 'sw.js');
       const source = readFileSync(worker, 'utf8');
-      const stamped = source.replace(
-        /^const VERSION = '[^']+';$/m,
-        `const VERSION = '${digest.digest('hex').slice(0, 16)}';`,
+      const pattern = /^const VERSION = '[^']+';$/m;
+      if (!pattern.test(source)) throw new Error('sw.js VERSION stamp target is missing');
+      writeFileSync(
+        worker,
+        source.replace(pattern, `const VERSION = '${digest.digest('hex').slice(0, 16)}';`),
       );
-      if (stamped === source) throw new Error('sw.js VERSION stamp target is missing');
-      writeFileSync(worker, stamped);
     },
   };
 }
