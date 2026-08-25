@@ -29,12 +29,12 @@ export const SERVICE_ERROR_COPY: Record<400 | 401 | 403 | 404 | 409 | 429 | 500,
   },
   409: {
     title: 'That change conflicts',
-    detail: 'Do not create a second principal. Another request already won.',
+    detail: 'Another login request already completed. Return to the original browser.',
     tone: 'danger',
   },
   429: {
     title: 'Slow down',
-    detail: 'Wait, then try again. Do not mint another scratch in a tight loop.',
+    detail: 'Wait a moment, then try again.',
     tone: 'neutral',
   },
   500: {

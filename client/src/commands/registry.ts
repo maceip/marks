@@ -89,10 +89,10 @@ function ui(
 }
 
 const definitions: CommandDefinition[] = [
-  ui('import.notes-app', 'Notes app', 'template-notes', 'import', 'Templates', 'file', { description: 'Create a lightweight notes page', keyTip: 'N', priority: 100, presentation: 'large', requiresDocument: false }),
+  ui('import.notes-app', 'Notes', 'template-notes', 'import', 'Templates', 'file', { description: 'Create a lightweight notes page', keyTip: 'N', priority: 100, presentation: 'large', requiresDocument: false }),
   ui('import.meeting', 'Meeting', 'template-meeting', 'import', 'Templates', 'comment', { description: 'Create a meeting page for notes, decisions, and actions', keyTip: 'M', priority: 98, presentation: 'large', requiresDocument: false }),
   ui('import.github-readme', 'GitHub README', 'template-github-readme', 'import', 'Templates', 'code', { description: 'Create a README with installation, usage, and contribution sections', keyTip: 'G', priority: 96, presentation: 'large', requiresDocument: false }),
-  ui('import.url', 'From URL', 'import-url', 'import', 'Sources', 'link', { description: 'Convert a public web page to Markdown', keyTip: 'U', priority: 94, presentation: 'large', requiresDocument: false, risk: 'external', agent: { exposed: false } }),
+  ui('import.url', 'Import web page', 'import-url', 'import', 'Sources', 'link', { description: 'Convert a public web page to Markdown', keyTip: 'U', priority: 94, presentation: 'large', requiresDocument: false, risk: 'external', agent: { exposed: false } }),
   ui('document.import', 'From file', 'import', 'import', 'Sources', 'download', { description: 'Import Markdown, PDF, Word, or Excel', keyTip: 'F', priority: 92, requiresDocument: false, risk: 'external', agent: { exposed: false } }),
   ui('document.new', 'New', 'new', 'file', 'Create', 'plus', { description: 'Create a blank document', keyTip: 'N', priority: 100, requiresDocument: false }),
   ui('document.templates', 'Template', 'templates', 'file', 'Create', 'template', { description: 'Create from a structured template', keyTip: 'T', requiresDocument: false }),
@@ -216,10 +216,10 @@ const definitions: CommandDefinition[] = [
   editor('shape.change-arrow', 'Arrow', 'change-shape-arrow', 'shape', 'Change shape', 'arrow', { description: 'Change the active shape to an arrow', contexts: ['shape'], contextual: true, priority: 87 }),
   editor('shape.change-bubble', 'Callout', 'change-shape-bubble', 'shape', 'Change shape', 'bubble', { description: 'Change the active shape to a callout', contexts: ['shape'], contextual: true, priority: 86 }),
 
-  ui('identity.keep', 'Log In', 'keep-workspace', 'file', 'Identity', 'share', { description: 'Link this page to a durable account', requiresDocument: false, workspaceKinds: ['scratch'], category: 'Identity', priority: 80, hiddenWhenUnavailable: true }),
-  ui('identity.account', 'Account & devices', 'account', 'file', 'Identity', 'settings', { description: 'Manage this browser and confirmed devices', requiresDocument: false, workspaceKinds: ['scratch', 'session'], category: 'Identity', priority: 70, hiddenWhenUnavailable: true }),
-  ui('identity.pairing', 'Phone confirmation', 'pairing', 'file', 'Identity', 'link', { description: 'Open the QR and phrase phone-confirmation flow', requiresDocument: false, workspaceKinds: ['scratch', 'session'], category: 'Identity', priority: 75, hiddenWhenUnavailable: true, risk: 'external' }),
-  ui('identity.sign-out', 'Sign out', 'logout', 'file', 'Identity', 'clear', { description: 'Revoke this browser session', requiresDocument: false, workspaceKinds: ['session'], category: 'Identity', priority: 40, hiddenWhenUnavailable: true, risk: 'destructive' }),
+  ui('identity.keep', 'Log In', 'keep-workspace', 'login', 'Account', 'share', { description: 'Log in with your phone', requiresDocument: false, workspaceKinds: ['scratch'], category: 'Identity', priority: 100, presentation: 'large', hiddenWhenUnavailable: true }),
+  ui('identity.account', 'Account', 'account', 'file', 'Account', 'settings', { description: 'Manage your account and logged-in devices', requiresDocument: false, workspaceKinds: ['session'], category: 'Identity', priority: 70, hiddenWhenUnavailable: true }),
+  ui('identity.pairing', 'Approve Login', 'pairing', 'file', 'Account', 'link', { description: 'Approve a login from another device', requiresDocument: false, workspaceKinds: ['session'], category: 'Identity', priority: 75, hiddenWhenUnavailable: true, risk: 'external' }),
+  ui('identity.sign-out', 'Log Out', 'logout', 'file', 'Account', 'clear', { description: 'Log out on this browser', requiresDocument: false, workspaceKinds: ['session'], category: 'Identity', priority: 40, hiddenWhenUnavailable: true, risk: 'destructive' }),
 ];
 
 const byId = new Map(definitions.map((definition) => [definition.id, definition]));

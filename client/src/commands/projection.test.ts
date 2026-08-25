@@ -101,13 +101,18 @@ test('foldables still project a dedicated command surface for the view rail', ()
   assert.equal(renderedLaptop.some((command) => command.id === 'review.comments'), true);
 });
 
-test('phone confirmation appears for service workspaces and not local-only documents', () => {
+test('login approval appears only after login and not for anonymous or local-only documents', () => {
   const session = projectCommands(environment({ workspaceKind: 'session' }), 'phone');
+  const scratch = projectCommands(environment({
+    workspaceKind: 'scratch',
+    capabilities: { role: 'scratch', edit: true, comment: false, saveVersion: false, manageShares: false },
+  }), 'phone');
   const local = projectCommands(environment({
     workspaceKind: 'local',
     capabilities: { role: 'local', edit: true, comment: true, saveVersion: true, manageShares: true },
   }), 'phone');
   assert.equal(session.some((command) => command.id === 'identity.pairing'), true);
+  assert.equal(scratch.some((command) => command.id === 'identity.pairing'), false);
   assert.equal(local.some((command) => command.id === 'identity.pairing'), false);
 });
 
@@ -119,16 +124,35 @@ test('new-user composition is narrower and agent relevance can raise a command',
   assert.equal(raised.find((tab) => tab.id === 'tools')?.agentRaised, true);
 });
 
-test('import is the first shared ribbon object with the requested starters', () => {
+test('anonymous ribbon starts with templates and a direct login control', () => {
   for (const shell of ['desktop', 'phone', 'fold-book'] as const) {
-    const ribbon = composeRibbon(environment({ shell }));
+    const ribbon = composeRibbon(environment({
+      shell,
+      workspaceKind: 'scratch',
+      capabilities: { role: 'scratch', edit: true, comment: false, saveVersion: false, manageShares: false },
+    }));
     assert.equal(ribbon[0]?.id, 'import', shell);
+    assert.equal(ribbon[0]?.label, 'Start from template', shell);
+    assert.equal(ribbon[1]?.id, 'login', shell);
+    assert.equal(ribbon[1]?.label, 'Log In', shell);
+    assert.deepEqual(
+      ribbon[1]?.groups.flatMap((group) => group.commands).map((command) => command.id),
+      ['identity.keep'],
+      shell,
+    );
     const commands = ribbon[0]?.groups.flatMap((group) => group.commands).map((command) => command.id) ?? [];
     assert.ok(commands.includes('import.notes-app'), shell);
     assert.ok(commands.includes('import.meeting'), shell);
     assert.ok(commands.includes('import.github-readme'), shell);
     assert.ok(commands.includes('import.url'), shell);
     assert.ok(commands.includes('document.import'), shell);
+    assert.equal(
+      ribbon.find((tab) => tab.id === 'file')?.groups
+        .flatMap((group) => group.commands)
+        .some((command) => command.id === 'identity.keep'),
+      false,
+      shell,
+    );
   }
 });
 

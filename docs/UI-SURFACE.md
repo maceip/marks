@@ -66,22 +66,21 @@ the source and rendering side by side. Either posture can switch to Editor,
 replace all of the introduction, share the current URL, or trash the page
 using the normal document controls.
 
-Identity chrome is presentation-complete in local mode on desktop, phone, and
-fold: anonymous/public status, Log In with an on-brand QR of `/link`, phone
-confirmation, Account devices/controllers/sessions, Share principal and link
-grants, mapped service-error toasts, and reconnect copy. Log In is
-posture-aware: the phone shell leads with opening the public page on a laptop
-and hides solo-phone login behind a secondary disclosure; larger shells lead
-with the phone-link QR and keep single-device login as a quiet fallback. In
-service mode the same surfaces mint a real pairing, show the QR and four-word
-code, finalize the desktop tab, run the optional single-device self-bootstrap,
-and redeem a silent device session. The HTTP contract lives in
+Identity chrome uses the familiar Log In, Log Out, and Account labels on
+desktop, phone, and foldable shells. Log In is posture-aware: larger shells
+open the QR flow, while the phone shell tells the visitor to open the same
+public page on a laptop and scan that laptop's QR code. Phone-only registration
+is not advertised or rendered. In service mode the same surfaces mint the
+short-lived login request, show the QR and four-word code, finish the desktop
+login, and restore an approved device login on return visits. The HTTP contract lives in
 [`UI-SERVICE-CONTRACT.md`](UI-SERVICE-CONTRACT.md).
 
-Import is the initial ribbon tab on desktop, phone, and foldable shells. Its
-first-class entries are Notes app, Meeting, GitHub README, From URL, and From
-file. Dropping a PDF, DOC, DOCX, XLS, XLSX, or Markdown file anywhere on the
-app invokes the same import path; image drops continue to belong to the editor.
+Start from template is the initial ribbon tab on desktop, phone, and foldable
+shells. Its first-class entries are Notes, Meeting, GitHub README, Import
+web page, and From file. On anonymous clients, Log In is the second top-level
+ribbon control and opens the posture-aware flow above. Dropping a PDF, DOC,
+DOCX, XLS, XLSX, or Markdown file anywhere on the app invokes the same import
+path; image drops continue to belong to the editor.
 
 ## Replaceable data plumbing
 

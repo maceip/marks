@@ -61,7 +61,8 @@ interface DesktopRibbonProps {
 type KeyTipLayer = 'tabs' | 'commands' | null;
 
 const TAB_PREFERRED: Partial<Record<RibbonTabId, string>> = {
-  import: 'I',
+  import: 'S',
+  login: 'L',
   file: 'F',
   home: 'H',
   insert: 'N',
@@ -210,6 +211,13 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
     setTab(id);
     setOverflowOpen(false);
     setGalleryOpen(null);
+    if (id === 'login') {
+      const login = tabs
+        .flatMap((item) => item.groups)
+        .flatMap((group) => group.commands)
+        .find((command) => command.id === 'identity.keep');
+      if (login?.enabled) void center.invoke(login.id);
+    }
   };
 
   const changePresence = (value: DocumentPresenceDisplay) => {
@@ -229,6 +237,7 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
         {tabs.map((item) => (
           <RibbonTabButton
             key={item.id}
+            data-ribbon-tab={item.id}
             selected={tab === item.id}
             contextual={item.contextual}
             className={item.agentRaised ? 'agent-raised' : undefined}

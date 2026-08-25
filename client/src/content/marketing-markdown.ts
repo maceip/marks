@@ -56,20 +56,20 @@ Try a task while you read. Checking a box in the preview writes the source.
 - [ ] Insert a table or a callout from the ribbon
 :::
 
-## Accounts, without a signup wall
+## Log in without a signup wall
 
-First paint has no registration form. A new tab is a scratch workspace.
+First paint has no registration form. A new tab opens a saved public page immediately.
 
 | Path | What you do | What Marks keeps |
 | --- | --- | --- |
-| Scratch | Just start typing | Saved public page by URL; persistence milestone at seven edits |
-| Phone | Choose Log In on a laptop and scan its QR link | A durable principal plus a silent device key |
-| Email | Redeem a verified-email token where enabled | The same principal, email reduced to a locator |
+| No login | Just start typing | A saved public page with its own URL |
+| Log In | On a laptop, choose Log In and scan the QR code with your phone | Your account on both devices |
+| Return visit | Open Marks again | Your account pages and public links |
 
-After that, return visits use a rotating HTTP-only session cookie. If the cookie is gone but this browser is still enrolled, Marks signs a one-use challenge with the device key. No passkey ceremony.
+After that, this browser can restore your login securely on return visits. No password or passkey ceremony.
 
 :::note
-A scratch workspace is not a person. Your durable identity is a random principal, not your email. Collaboration rooms receive a role and a one-use ticket — never a cookie or a display name.
+Public pages work without an account. Logging in keeps account controls and makes your account pages available on the devices you approve.
 :::
 
 ## The machinery
@@ -84,5 +84,5 @@ Optional renderers — highlight.js, KaTeX, Mermaid — load when the document a
 
 ## Make it yours
 
-Select everything and replace it, keep a useful section, or start from an Import template. This is an ordinary public Marks page, not protected marketing chrome.
+Select everything and replace it, keep a useful section, or choose Start from template. This is an ordinary public Marks page, not protected marketing chrome.
 `;

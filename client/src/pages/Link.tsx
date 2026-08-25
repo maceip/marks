@@ -10,7 +10,7 @@ interface LinkPageProps {
   onKeep: () => void;
 }
 
-/** Phone confirmation surface. Same tokens as the desktop identity chrome. */
+/** Phone-side login approval surface. Same tokens as the desktop identity chrome. */
 export function LinkPage({ pairing, onNotify, onKeep }: LinkPageProps) {
   const state = pairing === 'invalid' ? 'invalid' : pairing ? 'ready' : 'waiting';
 
@@ -19,8 +19,8 @@ export function LinkPage({ pairing, onNotify, onKeep }: LinkPageProps) {
       <section className="home-hero surface-material-host">
         <SurfaceMaterial variant="hero" />
         <div className="home-hero-copy">
-          <span className="home-kicker"><MarksMark size={16} /> Phone confirmation</span>
-          <h2>Keep a workspace from this phone.</h2>
+          <span className="home-kicker"><MarksMark size={16} /> Log In</span>
+          <h2>Finish logging in on your phone.</h2>
           <p>
             Scan the QR, or type the four words if this client cannot scan. The secret stays in the
             fragment or the words. This page does not invent a password, a passcode, or a sent
@@ -32,7 +32,7 @@ export function LinkPage({ pairing, onNotify, onKeep }: LinkPageProps) {
         <PairingInspect state={state} pairing={pairing} onNotify={onNotify} />
         <div className="dialog-actions">
           <button type="button" className="button" onClick={onKeep}>
-            Log in this tab instead
+            Open Login Help
           </button>
         </div>
       </section>

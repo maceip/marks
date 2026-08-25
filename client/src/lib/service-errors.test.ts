@@ -10,7 +10,7 @@ describe('service error copy', () => {
       assert.doesNotMatch(copy.detail, /\/v1|\{ "error"/);
     }
     assert.match(copyForHttpStatus(401).detail, /look the same/);
-    assert.match(copyForHttpStatus(409).detail, /second principal/);
+    assert.match(copyForHttpStatus(409).detail, /login request/i);
   });
 
   it('treats unknown statuses as a generic failure', () => {

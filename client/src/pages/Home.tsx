@@ -116,7 +116,7 @@ export function Home({
       </section>
 
       <footer className="home-footer-card">
-        <span><Icon path={icons.check} size={14} /> <strong>{local ? 'Browser-local mode' : temporary ? 'Scratch service mode' : 'Authenticated service mode'}</strong> · {local ? 'local persistence' : 'Rust persistence and ESBT collaboration'}</span>
+        <span><Icon path={icons.check} size={14} /> <strong>{local ? 'Browser-local mode' : temporary ? 'Anonymous service mode' : 'Logged-in service mode'}</strong> · {local ? 'local persistence' : 'Rust persistence and ESBT collaboration'}</span>
         <div className="home-footer-actions">
           <button type="button" onClick={() => onOpen(ABOUT_DOCUMENT_ID)}>Google Docs for Markdown</button>
           <button type="button" onClick={onOpenPreferences}><Icon path={icons.settings} size={14} /> Appearance</button>

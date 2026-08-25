@@ -25,6 +25,16 @@ async function proposeFromInPageAgent(session, commandId) {
   }, commandId);
 }
 
+async function waitForAbsent(session, selector, { timeout = 10_000 } = {}) {
+  const deadline = Date.now() + timeout;
+  while (await session.count(selector)) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for ${selector} to disappear`);
+    }
+    await session.wait(50);
+  }
+}
+
 async function createDocument(session) {
   await session.goto('/');
   const dataMode = await session.evaluate(() => document.documentElement.dataset.marksMode ?? 'local');
@@ -85,6 +95,8 @@ export async function runSurface(session, { check }) {
 
   const importRibbon = await session.evaluate(() => {
     const selected = document.querySelector('.ribbon-tab[aria-selected="true"]');
+    const topLevel = [...document.querySelectorAll('.ribbon-tab')]
+      .map((tab) => tab.textContent?.trim() ?? '');
     const expected = [
       'import.notes-app',
       'import.meeting',
@@ -94,14 +106,44 @@ export async function runSurface(session, { check }) {
     ];
     return {
       selected: selected?.textContent?.trim() ?? '',
+      topLevel,
       commands: expected.map((id) => Boolean(document.querySelector(`[data-command-id="${id}"]`))),
     };
   });
   check(
-    'desktop opens on the complete Import ribbon',
-    importRibbon.selected === 'Import' && importRibbon.commands.every(Boolean),
+    'desktop opens on the complete Start from template ribbon',
+    importRibbon.selected === 'Start from template' && importRibbon.commands.every(Boolean),
     JSON.stringify(importRibbon),
   );
+  const desktopDataMode = await session.evaluate(() => document.documentElement.dataset.marksMode ?? 'local');
+  check(
+    'anonymous desktop puts Log In second',
+    desktopDataMode !== 'service' || (
+      importRibbon.topLevel[0] === 'Start from template' &&
+      importRibbon.topLevel[1] === 'Log In'
+    ),
+    JSON.stringify(importRibbon.topLevel),
+  );
+  if (desktopDataMode === 'service') {
+    await session.evaluate(() => {
+      const login = [...document.querySelectorAll('.ribbon-tab')]
+        .find((tab) => tab.textContent?.trim() === 'Log In');
+      if (!(login instanceof HTMLButtonElement)) throw new Error('Log In ribbon control not found');
+      login.click();
+    });
+    await session.waitForSelector('[role="dialog"] .qr-mark', { timeout: 10_000 });
+    const desktopLogin = await session.evaluate(() => ({
+      title: document.querySelector('[role="dialog"] h2')?.textContent?.trim() ?? '',
+      scan: document.querySelector('[role="dialog"]')?.textContent?.includes('Scan with your phone') ?? false,
+    }));
+    check(
+      'desktop Log In opens the phone QR flow',
+      desktopLogin.title === 'Log In' && desktopLogin.scan,
+      JSON.stringify(desktopLogin),
+    );
+    await session.click('[role="dialog"] button[aria-label="Close"]');
+    await waitForAbsent(session, '[role="dialog"]');
+  }
 
   const materialState = await session.evaluate(() => ({
     tier: document.documentElement.dataset.surfaceTier,
@@ -256,8 +298,8 @@ export async function runSurface(session, { check }) {
 
   await session.evaluate(() => {
     const importTab = [...document.querySelectorAll('.ribbon-tab')]
-      .find((tab) => tab.textContent?.trim() === 'Import');
-    if (!(importTab instanceof HTMLButtonElement)) throw new Error('Import ribbon tab not found');
+      .find((tab) => tab.textContent?.trim() === 'Start from template');
+    if (!(importTab instanceof HTMLButtonElement)) throw new Error('Start from template ribbon tab not found');
     importTab.click();
   });
   await session.wait(100);
@@ -268,7 +310,7 @@ export async function runSurface(session, { check }) {
     const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
     return hit === button || hit?.closest('[data-command-id="import.url"]') === button;
   });
-  check('floating document actions preserve Import command hit targets', importUrlOwnsHitTarget);
+  check('floating document actions preserve template command hit targets', importUrlOwnsHitTarget);
 
   await session.evaluate(() => {
     const home = [...document.querySelectorAll('.ribbon-tab')]
@@ -493,7 +535,7 @@ export async function runSurface(session, { check }) {
 
   await session.goto(`${documentPath}?marks-posture=phone`);
   await session.waitForSelector('.phone-ribbon', { timeout: 20_000 });
-  await session.waitForSelector('.phone-ribbon-deck[aria-label="Import commands"]', { timeout: 20_000 });
+  await session.waitForSelector('.phone-ribbon-deck[aria-label="Start from template commands"]', { timeout: 20_000 });
   check('phone uses a focused composer instead of desktop ribbon',
     (await session.count('.phone-ribbon')) === 1 && (await session.count('.ribbon-body')) === 0);
   const phoneDataMode = await session.evaluate(() => document.documentElement.dataset.marksMode ?? 'local');
@@ -509,6 +551,8 @@ export async function runSurface(session, { check }) {
     mode: [...(document.querySelector('.workspace')?.classList ?? [])]
       .find((name) => name.startsWith('mode-')) ?? '',
     selected: document.querySelector('.phone-ribbon-tabs [role="tab"][aria-selected="true"]')?.textContent?.trim() ?? '',
+    topLevel: [...document.querySelectorAll('.phone-ribbon-tabs [role="tab"]')]
+      .map((tab) => tab.textContent?.trim() ?? ''),
     editor: Boolean(document.querySelector('.editor-pane')),
     renderedBlocks: document.querySelectorAll('.preview-pane .marks-preview .marks-block').length,
     commands: [
@@ -520,16 +564,24 @@ export async function runSurface(session, { check }) {
     ].map((id) => Boolean(document.querySelector(`.phone-ribbon [data-command-id="${id}"]`))),
   }));
   check(
-    'phone opens on the complete Import ribbon',
-    phoneImport.selected === 'Import' && phoneImport.commands.every(Boolean),
+    'phone opens on the complete Start from template ribbon',
+    phoneImport.selected === 'Start from template' && phoneImport.commands.every(Boolean),
     JSON.stringify(phoneImport),
   );
   check(
-    'service phone public marketing document opens in Preview with Import selected',
+    'anonymous phone puts Log In second',
+    phoneImport.dataMode !== 'service' || (
+      phoneImport.topLevel[0] === 'Start from template' &&
+      phoneImport.topLevel[1] === 'Log In'
+    ),
+    JSON.stringify(phoneImport.topLevel),
+  );
+  check(
+    'service phone public marketing document opens in Preview with Start from template selected',
     phoneImport.dataMode !== 'service' || (
       phoneImport.marketing === 'true' &&
       phoneImport.mode === 'mode-preview' &&
-      phoneImport.selected === 'Import' &&
+      phoneImport.selected === 'Start from template' &&
       !phoneImport.editor &&
       phoneImport.renderedBlocks >= 1
     ),
@@ -675,9 +727,32 @@ export async function runSurface(session, { check }) {
   });
   await session.waitForSelector('.phone-ribbon-deck[aria-label="More commands"]', { timeout: 10_000 });
   const pairingCount = await session.count('.phone-ribbon [data-command-id="identity.pairing"]');
-  check('phone More ribbon applies phone-confirmation eligibility',
-    phoneDataMode === 'service' ? pairingCount === 1 : pairingCount === 0,
+  const buriedLoginCount = await session.count('.phone-ribbon-deck[aria-label="More commands"] [data-command-id="identity.keep"]');
+  check('phone More does not duplicate anonymous login',
+    pairingCount === 0 && buriedLoginCount === 0,
     `${phoneDataMode}: ${pairingCount}`);
+  if (phoneDataMode === 'service') {
+    await session.evaluate(() => {
+      const login = [...document.querySelectorAll('.phone-ribbon-tabs [role="tab"]')]
+        .find((button) => button.textContent?.trim() === 'Log In');
+      if (!(login instanceof HTMLButtonElement)) throw new Error('phone Log In control not found');
+      login.click();
+    });
+    await session.waitForSelector('[role="dialog"]', { timeout: 10_000 });
+    const mobileLogin = await session.evaluate(() => ({
+      laptop: document.querySelector('[role="dialog"]')?.textContent?.includes('Open this page on a laptop') ?? false,
+      soloDisclosure: document.querySelectorAll('[role="dialog"] .keep-solo-disclosure').length,
+      soloButton: [...document.querySelectorAll('[role="dialog"] button')]
+        .some((button) => /phone only|only this phone/i.test(button.textContent ?? '')),
+    }));
+    check(
+      'phone Log In is laptop-first with no phone-only registration',
+      mobileLogin.laptop && mobileLogin.soloDisclosure === 0 && !mobileLogin.soloButton,
+      JSON.stringify(mobileLogin),
+    );
+    await session.click('[role="dialog"] button[aria-label="Close"]');
+    await waitForAbsent(session, '[role="dialog"]');
+  }
   await session.evaluate(() => {
     const review = [...document.querySelectorAll('.phone-ribbon-tabs [role="tab"]')]
       .find((button) => button.textContent?.trim() === 'Review');
@@ -706,7 +781,9 @@ export async function runSurface(session, { check }) {
 
 export const SURFACE_CHECK_NAMES = [
   'opening shell does not stay up',
-  'desktop opens on the complete Import ribbon',
+  'desktop opens on the complete Start from template ribbon',
+  'anonymous desktop puts Log In second',
+  'desktop Log In opens the phone QR flow',
   'surface tier is explicit',
   'scrolling document bodies stay opaque',
   'reduced glass removes shader and blur',
@@ -731,7 +808,7 @@ export const SURFACE_CHECK_NAMES = [
   'source-changing agent work paints a live causal lightpath',
   'successful source commands capture a reversible counterfactual',
   'selection toolbar preserves ribbon tab hit targets',
-  'floating document actions preserve Import command hit targets',
+  'floating document actions preserve template command hit targets',
   'voice input is honest',
   'select-all in the preview stays inside the document',
   'preview right-click opens the marks menu',
@@ -753,13 +830,15 @@ export const SURFACE_CHECK_NAMES = [
   'laptop fold split is a real stacked hinge canvas',
   'possibility layer respects the unfolded laptop posture',
   'phone uses a focused composer instead of desktop ribbon',
-  'phone opens on the complete Import ribbon',
-  'service phone public marketing document opens in Preview with Import selected',
+  'phone opens on the complete Start from template ribbon',
+  'anonymous phone puts Log In second',
+  'service phone public marketing document opens in Preview with Start from template selected',
   'phone write keeps a full-width editor under a right-hand ghost preview',
   'phone ghost viewfinder is clipped and pointer-transparent',
   'phone two-finger pan snaps the ghost to the other page half',
   'phone preview mode removes the ghost overlay',
-  'phone More ribbon applies phone-confirmation eligibility',
+  'phone More does not duplicate anonymous login',
+  'phone Log In is laptop-first with no phone-only registration',
   'disabled ribbon-wild stays absent from the phone Review ribbon',
   'disabled ribbon-wild requests no lazy code or style assets',
   'phone Review ribbon exposes all five possibility tools',

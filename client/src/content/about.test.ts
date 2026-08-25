@@ -41,9 +41,9 @@ describe('about document', () => {
   });
 
   it('explains the product, accounts, and the machinery', () => {
-    assert.match(ABOUT_DOCUMENT, /scratch workspace/i);
-    assert.match(ABOUT_DOCUMENT, /session cookie/i);
-    assert.match(ABOUT_DOCUMENT, /device key/i);
+    assert.match(ABOUT_DOCUMENT, /saved public page/i);
+    assert.match(ABOUT_DOCUMENT, /scan the QR code/i);
+    assert.match(ABOUT_DOCUMENT, /restore your login securely/i);
     assert.match(ABOUT_DOCUMENT, /ESBT/);
     assert.match(ABOUT_DOCUMENT, /Web Worker/);
     assert.match(ABOUT_DOCUMENT, /Liquid glass/);

@@ -48,7 +48,7 @@ interface AppOverlaysProps {
   theme: 'light' | 'dark';
   preferences: UiPreferences;
   hasDocument: boolean;
-  /** Phone posture: laptop linking leads; phone-only login stays secondary. */
+  /** Phone posture: login requires opening this public page on a laptop. */
   phone: boolean;
   dataMode: 'local' | 'service';
   capabilities: DocumentCapabilities | null;
@@ -790,22 +790,20 @@ export function AppOverlays(props: AppOverlaysProps) {
     content = <ShareDialog key={renderedDialog.documentId} documentId={renderedDialog.documentId} title={renderedDialog.title} publicPage={renderedDialog.publicPage} capabilities={props.capabilities} onNotify={props.onNotify} />;
   } else if (renderedDialog?.type === 'keep-workspace') {
     title = 'Log In';
-    description = props.phone ? 'A linked laptop is the preferred account path.' : 'Use your phone to link this browser to an account.';
+    description = props.phone ? 'Open this page on a laptop to log in.' : 'Scan the QR code with your phone.';
     content = (
       <KeepWorkspace
         onNotify={props.onNotify}
-        onOpenPhone={() => props.onAction('pairing')}
         onPromoted={props.onPromoted}
         phone={props.phone}
       />
     );
   } else if (renderedDialog?.type === 'account') {
-    title = 'Account and devices';
-    description = 'Phone controller, this browser, and honest scratch.';
+    title = 'Account';
+    description = 'Manage where you are logged in.';
     content = (
       <AccountSheet
         onNotify={props.onNotify}
-        onKeep={() => props.onAction('keep-workspace')}
         onSignedOut={props.onSignedOut}
       />
     );
@@ -814,8 +812,8 @@ export function AppOverlays(props: AppOverlaysProps) {
     description = 'Make Marks feel right without making it heavier.';
     content = <PreferencesDialog theme={props.theme} preferences={props.preferences} onTheme={props.onTheme} onPreferences={props.onPreferences} />;
   } else if (renderedDialog?.type === 'pairing-inspect') {
-    title = 'Phone confirmation';
-    description = 'Inspect, first phone, or approve. The secret stays in the fragment.';
+    title = 'Log In';
+    description = 'Scan the QR code or enter the login code from your other device.';
     content = <PairingInspect state="waiting" onNotify={props.onNotify} />;
   } else if (renderedDialog?.type === 'command-palette') {
     title = 'What do you want to do?';

@@ -1,4 +1,5 @@
-// Mobile browser UI proof against a live marks-server: a real phone
+// Anonymous login and mobile browser UI proof against a live marks-server: a
+// desktop first proves the QR flow, then a real phone
 // profile (touch, mobile viewport, device scale factor, mobile user agent)
 // lands in the document-first phone experience, reaches the editor through
 // the mobile ribbon, and types by touch; narrow widths never overflow
@@ -225,7 +226,7 @@ async function assertTappable(locator, label, viewportWidth) {
   );
   assert(
     box.x >= 0 && box.x + box.width <= viewportWidth,
-    `${label} sits inside the ${viewportWidth}px viewport`,
+    `${label} spans x=${box.x}..${box.x + box.width} outside the ${viewportWidth}px viewport`,
   );
   console.log(`  ok   ${label} is a ${Math.round(box.width)}x${Math.round(box.height)}px touch target`);
   return box;
@@ -254,11 +255,17 @@ async function reachEditorByTouch(page, viewportWidth, failure) {
   assert.equal(await page.locator('.home-surface').count(), 0, 'anonymous service entry never exposes workspace home');
   assert.match(page.url(), /\/d\/document_/, 'anonymous mobile entry receives a unique document slug');
 
-  // Import remains the first ribbon object while the document itself opens
-  // as the rendered, editable Markdown introduction.
-  const importTab = page.getByRole('tab', { name: 'Import', exact: true });
-  assert.equal(await importTab.getAttribute('aria-selected'), 'true', 'Import is selected on mobile first paint');
-  await assertTappable(importTab, 'initial Import ribbon tab', viewportWidth);
+  // Templates and login lead the ribbon while the document itself opens as
+  // the rendered, editable Markdown introduction.
+  const templateTab = page.getByRole('tab', { name: 'Start from template', exact: true });
+  assert.equal(await templateTab.getAttribute('aria-selected'), 'true', 'Start from template is selected on mobile first paint');
+  await assertTappable(templateTab, 'initial Start from template ribbon tab', viewportWidth);
+  const ribbonLabels = await page.locator('.phone-ribbon-tabs [role="tab"]').allTextContents();
+  assert.deepEqual(
+    ribbonLabels.slice(0, 2).map((label) => label.trim()),
+    ['Start from template', 'Log In'],
+    'anonymous mobile ribbon starts with templates and login',
+  );
   const hero = await page.evaluate(() => {
     const app = document.querySelector('.app');
     const heading = document.querySelector('.marks-preview h1');
@@ -275,6 +282,18 @@ async function reachEditorByTouch(page, viewportWidth, failure) {
   console.log('  ok   anonymous slug first paints the rendered Markdown hero and comparison table');
 
   const viewTab = page.getByRole('tab', { name: 'View', exact: true });
+  // At the 320px support floor, the required Templates + Log In leaders leave
+  // View just beyond the horizontally scrollable tab viewport. Reveal it the
+  // same way a horizontal ribbon gesture would before testing the touch path.
+  await viewTab.evaluate((tab) => {
+    const strip = tab.parentElement;
+    if (!strip) return;
+    strip.scrollLeft = Math.max(
+      0,
+      tab.offsetLeft - Math.floor((strip.clientWidth - tab.clientWidth) / 2),
+    );
+  });
+  await page.waitForTimeout(50);
   await assertTappable(viewTab, 'View ribbon tab', viewportWidth);
   await viewTab.tap();
   const editorCommand = page.locator('.phone-ribbon [data-command-id="view.editor"]');
@@ -282,6 +301,45 @@ async function reachEditorByTouch(page, viewportWidth, failure) {
   await editorCommand.tap();
   await page.locator('.cm-content').first().waitFor({ timeout: 30_000 });
   console.log('  ok   touch navigation reaches the editor');
+}
+
+async function proveDesktopLogin(browser, pageErrors) {
+  const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await desktop.newPage();
+  page.setDefaultTimeout(30_000);
+  page.setDefaultNavigationTimeout(30_000);
+  const failure = rejectOnPageFailure(page, 'desktop login', pageErrors);
+  const created = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' && new URL(response.url()).pathname === '/v1/documents',
+    { timeout: 30_000 },
+  );
+  void created.catch(() => undefined);
+  await navigate(page, `${origin}/`, failure);
+  await assertServiceMode(page, 'desktop login');
+  const createdResponse = await Promise.race([created, failure, fatalFailure]);
+  assert.equal(
+    createdResponse.status(),
+    201,
+    `anonymous desktop bootstrap returned ${createdResponse.status()} from /v1/documents`,
+  );
+  await page.locator('.ribbon-body').waitFor({ timeout: 30_000 });
+  const ribbonLabels = await page.locator('.ribbon-tabs [role="tab"]').allTextContents();
+  assert.deepEqual(
+    ribbonLabels.slice(0, 2).map((label) => label.trim()),
+    ['Start from template', 'Log In'],
+    'anonymous desktop ribbon starts with templates and login',
+  );
+  await page.getByRole('tab', { name: 'Log In', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.waitFor({ timeout: 10_000 });
+  assert.equal(await dialog.getByRole('heading').innerText(), 'Log In');
+  assert.equal(await dialog.locator('.qr-mark').count(), 1, 'desktop login renders the QR code');
+  assert.match(await dialog.innerText(), /Scan with your phone/i);
+  console.log('  ok   second-position desktop Log In opens the QR flow');
+  await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+  await dialog.waitFor({ state: 'detached', timeout: 10_000 });
+  await desktop.close();
 }
 
 async function runProof() {
@@ -294,6 +352,8 @@ async function runProof() {
   });
   const pageErrors = [];
   try {
+    await proveDesktopLogin(browser, pageErrors);
+
     // A current Android phone profile: touch, mobile UA, high DPR.
     const phone = await browser.newContext({ ...devices['Pixel 7'] });
     const page = await phone.newPage();
@@ -338,34 +398,28 @@ async function runProof() {
     ]);
     assert.equal(linkedPage.url(), sharedUrl, 'a copied slug opens the same public page');
     assert.equal(
-      await linkedPage.getByRole('tab', { name: 'Import', exact: true }).getAttribute('aria-selected'),
+      await linkedPage.getByRole('tab', { name: 'Start from template', exact: true }).getAttribute('aria-selected'),
       'true',
-      'a cold direct mobile slug keeps Import selected while opening in Preview',
+      'a cold direct mobile slug keeps Start from template selected while opening in Preview',
     );
-    console.log('  ok   a different anonymous phone cold-opens the copied slug in Preview with Import selected');
+    console.log('  ok   a different anonymous phone cold-opens the copied slug in Preview with Start from template selected');
     await linkedPhone.close();
 
     const loginPrompt = page.locator('.phone-identity');
     assert.match(await loginPrompt.innerText(), /Open this page on a laptop to log in/i);
-    await loginPrompt.tap();
+    const loginControl = page.getByRole('tab', { name: 'Log In', exact: true });
+    await assertTappable(loginControl, 'second-position Log In ribbon control', page.viewportSize().width);
+    await loginControl.tap();
     const loginDialog = page.getByRole('dialog');
     await loginDialog.waitFor({ timeout: 10_000 });
     assert.match(await loginDialog.innerText(), /Open this page on a laptop/i);
-    const soloDisclosure = loginDialog.locator('details.keep-solo-disclosure');
-    const soloLogin = soloDisclosure.locator('button', { hasText: 'Log in on this phone only' });
-    assert.equal(await soloDisclosure.count(), 1, 'solo-phone login remains available in one disclosure');
-    assert.equal(await soloLogin.count(), 1, 'solo-phone login button remains present');
-    assert.equal(
-      await soloLogin.isVisible(),
-      false,
-      'solo phone login stays buried in a collapsed disclosure',
+    assert.equal(await loginDialog.locator('details.keep-solo-disclosure').count(), 0, 'mobile login renders no phone-only disclosure');
+    assert.doesNotMatch(
+      await loginDialog.innerText(),
+      /phone only|only this phone|continue with only/i,
+      'mobile login does not advertise phone-only registration',
     );
-    const soloSummary = soloDisclosure.locator('summary');
-    await assertTappable(soloSummary, 'solo-phone login disclosure', page.viewportSize().width);
-    await soloSummary.tap();
-    await soloLogin.waitFor({ state: 'visible', timeout: 5_000 });
-    await assertTappable(soloLogin, 'revealed solo-phone login button', page.viewportSize().width);
-    console.log('  ok   logged-out mobile login is laptop-first and buries solo-phone login');
+    console.log('  ok   logged-out mobile login is laptop-first with no phone-only registration UI');
     await loginDialog.getByRole('button', { name: 'Close', exact: true }).click();
 
     await page.locator('.cm-content').tap();

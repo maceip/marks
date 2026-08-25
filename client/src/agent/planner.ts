@@ -78,7 +78,7 @@ const PATTERNS: Pattern[] = [
   { commandId: 'document.export-markdown', expressions: [/\b(?:download|export).*(?:markdown|\.md|source)\b/i], reason: 'Export the Markdown source.' },
   { commandId: 'document.print', expressions: [/\b(?:print|save as pdf)\b/i], reason: 'Open the print/PDF surface.' },
   { commandId: 'document.share', expressions: [/\b(?:open|show|manage|create).*(?:share|access|viewer link)\b/i, /\bshare (?:this|the) document\b/i], reason: 'Open document access controls.' },
-  { commandId: 'identity.pairing', expressions: [/\b(?:pair|link|confirm).*(?:phone|device)\b/i, /\bqr code\b/i], reason: 'Open phone confirmation.' },
+  { commandId: 'identity.pairing', expressions: [/\b(?:pair|link|confirm).*(?:phone|device)\b/i, /\bqr code\b/i], reason: 'Open login approval.' },
   { commandId: 'document.delete', expressions: [/\b(?:delete|trash|remove) (?:this|the) document\b/i], reason: 'Move the document to recoverable trash.' },
   { commandId: 'edit.find', expressions: [/\b(?:find|search for)\b/i], reason: 'Open source search.' },
 ];

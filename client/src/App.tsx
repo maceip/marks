@@ -717,7 +717,7 @@ export function App() {
           if (UI_DATA_MODE === 'service' && session?.capabilities().role === 'scratch') {
             openDialog({ type: 'keep-workspace' });
             notify(
-              'Log in first',
+              'Log In First',
               'This public page can be edited anonymously, but named review history belongs to an account.',
               'neutral',
             );
@@ -774,7 +774,7 @@ export function App() {
           break;
         case 'pairing':
           if (UI_DATA_MODE === 'service') navigate({ name: 'link' });
-          else notify('Local-only build', 'Phone confirmation requires the Rust identity service.', 'neutral');
+          else notify('Local-only build', 'Login approval requires the Rust identity service.', 'neutral');
           break;
         case 'logout':
           if (UI_DATA_MODE === 'service' && serviceCaller?.kind === 'session') {
@@ -794,7 +794,7 @@ export function App() {
                     setServiceCallerResolved(true);
                     setServiceCallerError('Marks could not reach the document service in time.');
                   });
-                notify('Signed out', 'This tab is anonymous again. Public page URLs still work.', 'success');
+                notify('Logged Out', 'This browser is anonymous again. Public page URLs still work.', 'success');
                 void documents.refresh();
               })
               .catch(() => notify(SERVICE_ERROR_COPY[403].title, SERVICE_ERROR_COPY[403].detail, 'danger'));
@@ -902,7 +902,7 @@ export function App() {
         : route.name === 'design-system'
           ? 'Design system · marks'
         : route.name === 'link'
-          ? 'Phone confirmation · marks'
+          ? 'Log In · marks'
           : route.name === 'document'
             ? `${title} · marks`
             : 'marks — collaborative writing at thought speed';
@@ -1062,7 +1062,7 @@ export function App() {
           </Suspense>
         )}
         {!openingPage && <TopBar
-          title={route.name === 'benchmark' ? 'Engine benchmark' : route.name === 'link' ? 'Phone confirmation' : title}
+          title={route.name === 'benchmark' ? 'Engine benchmark' : route.name === 'link' ? 'Log In' : title}
           docId={docId}
           route={route.name}
           documentReady={Boolean(session && hydrated && session.capabilities().edit)}
@@ -1102,7 +1102,7 @@ export function App() {
             <Benchmark onBack={() => navigate({ name: 'home' })} />
           </Suspense>
         ) : route.name === 'link' ? (
-          <Suspense fallback={<div className="empty-state">Opening phone confirmation…</div>}>
+          <Suspense fallback={<div className="empty-state">Opening Log In…</div>}>
             <LinkPage
               pairing={pairing}
               onNotify={notify}

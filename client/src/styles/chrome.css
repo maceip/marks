@@ -758,6 +758,7 @@
   font-weight: 650;
   scroll-snap-align: start;
 }
+.phone-ribbon-tabs > button[data-ribbon-tab='import'] { flex-basis: 108px; }
 .phone-ribbon-tabs > button.active,
 .phone-ribbon-tabs > button[aria-selected='true'] { border-top-color: var(--color-action); color: var(--color-action); }
 .phone-ribbon-tabs > button.contextual { color: var(--color-brand-positive); }

@@ -14,7 +14,8 @@ import type {
 import { EMPTY_PARAMETERS } from './types.ts';
 
 const TAB_LABELS: Record<RibbonTabId, string> = {
-  import: 'Import',
+  import: 'Start from template',
+  login: 'Log In',
   file: 'File',
   home: 'Home',
   insert: 'Insert',
@@ -29,6 +30,7 @@ const TAB_LABELS: Record<RibbonTabId, string> = {
 
 const TAB_ORDER: RibbonTabId[] = [
   'import',
+  'login',
   'file',
   'home',
   'insert',
@@ -41,7 +43,7 @@ const TAB_ORDER: RibbonTabId[] = [
   'shape',
 ];
 
-const ESSENTIAL_TABS = new Set<RibbonTabId>(['import', 'file', 'home', 'insert', 'review', 'view']);
+const ESSENTIAL_TABS = new Set<RibbonTabId>(['import', 'login', 'file', 'home', 'insert', 'review', 'view']);
 
 export interface ProjectionOptions {
   expanded?: boolean;

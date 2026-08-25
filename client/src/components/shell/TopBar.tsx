@@ -145,15 +145,6 @@ export function TopBar(props: TopBarProps) {
             </span>
           )}
 
-          {props.workspaceKind === 'scratch' && (
-            <button
-              type="button"
-              className="identity-chip"
-              onClick={() => props.onAction('keep-workspace')}
-            >
-              Log In
-            </button>
-          )}
           {props.workspaceKind === 'local' && <span className="identity-chip">Local</span>}
         </div>
 
@@ -235,10 +226,9 @@ export function TopBar(props: TopBarProps) {
             </button>
             {moreOpen && (
               <div className="popover-menu" role="menu">
-                {(!commandCenter ? props.workspaceKind === 'scratch' : available('identity.keep')) && <button type="button" role="menuitem" data-command-id="identity.keep" onClick={() => { setMoreOpen(false); invoke('identity.keep', 'keep-workspace'); }}><Icon path={icons.share} /> Log In</button>}
                 {(!commandCenter ? props.workspaceKind !== 'local' : available('identity.account')) && <button type="button" role="menuitem" data-command-id="identity.account" onClick={() => { setMoreOpen(false); invoke('identity.account', 'account'); }}><Icon path={icons.settings} /> Account</button>}
-                {(!commandCenter ? props.workspaceKind !== 'local' : available('identity.pairing')) && <button type="button" role="menuitem" data-command-id="identity.pairing" onClick={() => { setMoreOpen(false); invoke('identity.pairing', 'pairing'); }}><Icon path={icons.link} /> Phone confirmation</button>}
-                {(!commandCenter ? props.workspaceKind === 'session' : available('identity.sign-out')) && <button type="button" role="menuitem" data-command-id="identity.sign-out" onClick={() => { setMoreOpen(false); invoke('identity.sign-out', 'logout'); }}><Icon path={icons.close} /> Sign out</button>}
+                {(!commandCenter ? props.workspaceKind !== 'local' : available('identity.pairing')) && <button type="button" role="menuitem" data-command-id="identity.pairing" onClick={() => { setMoreOpen(false); invoke('identity.pairing', 'pairing'); }}><Icon path={icons.link} /> Approve Login</button>}
+                {(!commandCenter ? props.workspaceKind === 'session' : available('identity.sign-out')) && <button type="button" role="menuitem" data-command-id="identity.sign-out" onClick={() => { setMoreOpen(false); invoke('identity.sign-out', 'logout'); }}><Icon path={icons.close} /> Log Out</button>}
                 <button type="button" role="menuitem" data-command-id="view.preferences" onClick={() => { setMoreOpen(false); invoke('view.preferences', 'preferences'); }}><Icon path={icons.settings} /> Appearance</button>
                 <button type="button" role="menuitem" data-command-id="review.performance" onClick={() => { setMoreOpen(false); invoke('review.performance', 'benchmark'); }}><Icon path={icons.gauge} /> Performance</button>
                 <button type="button" role="menuitem" data-command-id="workspace.about" onClick={() => { setMoreOpen(false); invoke('workspace.about', 'about'); }}><Icon path={icons.bolt} /> Google Docs for Markdown</button>

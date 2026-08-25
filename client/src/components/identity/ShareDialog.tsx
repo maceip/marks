@@ -57,7 +57,7 @@ export function ShareDialog({ documentId, title, publicPage, capabilities, onNot
     const value = principal.trim();
     if (!value || !serviceOwner) return;
     if (value.includes('@')) {
-      onNotify('That request was not accepted', 'Shares grant a Marks principal ID, not an email address.', 'danger');
+      onNotify('That request was not accepted', 'Enter a Marks account ID, not an email address.', 'danger');
       return;
     }
     setBusy(true);
@@ -82,7 +82,7 @@ export function ShareDialog({ documentId, title, publicPage, capabilities, onNot
     try {
       await (await loadServiceApi()).deleteDocumentShare(documentId, principalId);
       setShares((current) => current.filter((entry) => entry.principalId !== principalId));
-      onNotify('Access revoked', 'Live sockets for that principal are closed immediately.', 'success');
+      onNotify('Access removed', 'That account no longer has access.', 'success');
     } catch (error) {
       notifyError(error, onNotify);
     } finally {
@@ -163,7 +163,7 @@ export function ShareDialog({ documentId, title, publicPage, capabilities, onNot
         <form className="share-invite" onSubmit={(event) => { event.preventDefault(); void grant(); }}>
         <label htmlFor="share-principal">People with access</label>
         <div className="share-input-row">
-          <input id="share-principal" data-autofocus placeholder="Marks principal ID" value={principal} disabled={!serviceOwner || busy} onChange={(event) => setPrincipal(event.target.value)} autoComplete="off" />
+          <input id="share-principal" data-autofocus placeholder="Marks account ID" value={principal} disabled={!serviceOwner || busy} onChange={(event) => setPrincipal(event.target.value)} autoComplete="off" />
           <select aria-label="Access level" value={role} disabled={!serviceOwner || busy} onChange={(event) => setRole(event.target.value as GrantRole)}>
             <option value="editor">{ROLE_COPY.editor.label}</option>
             <option value="commenter">{ROLE_COPY.commenter.label}</option>
@@ -183,7 +183,7 @@ export function ShareDialog({ documentId, title, publicPage, capabilities, onNot
           <div className="access-person" key={entry.principalId}>
             <span className="avatar">{entry.principalId[0]?.toUpperCase()}</span>
             <span><strong>{entry.principalId}</strong><small>{ROLE_COPY[entry.role].detail}</small></span>
-            <button type="button" className="button" disabled={busy} onClick={() => void revoke(entry.principalId)}>Revoke</button>
+            <button type="button" className="button" disabled={busy} onClick={() => void revoke(entry.principalId)}>Remove</button>
           </div>
         ))}
         </div>

@@ -27,7 +27,7 @@ test('phone surface proof enters the editor before measuring ghost geometry', ()
   assert.notEqual(phoneStart, -1);
 
   const previewEntry = phoneFlow.indexOf(
-    'service phone public marketing document opens in Preview with Import selected',
+    'service phone public marketing document opens in Preview with Start from template selected',
   );
   const viewDeck = phoneFlow.indexOf(
     '.phone-ribbon-deck[aria-label="View commands"] [data-command-id="view.editor"]',
@@ -44,7 +44,7 @@ test('phone surface proof enters the editor before measuring ghost geometry', ()
   assert.ok(editWorkspace > selectEditor);
   assert.ok(geometry > editWorkspace);
   assert.ok(SURFACE_CHECK_NAMES.includes(
-    'service phone public marketing document opens in Preview with Import selected',
+    'service phone public marketing document opens in Preview with Start from template selected',
   ));
 });
 
