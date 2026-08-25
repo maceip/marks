@@ -13,7 +13,6 @@ import {
   TabChannel,
   tabChannelName,
 } from '../browser';
-import { runWithTimeout } from '../browser/network.ts';
 import { roomTicketProtocols } from '../auth/room-access';
 import {
   ABOUT_DOCUMENT,
@@ -27,7 +26,7 @@ import {
   checkpointReplicaJournal,
   deleteReplicaJournal,
   JOURNAL_RETAINED_THRESHOLD,
-  readReplicaJournal,
+  openWithReplicaJournal,
   shouldPruneHistory,
   type JournalMutation,
   type ReplicaJournalRecord,
@@ -88,7 +87,6 @@ const EPHEMERAL_TIMEOUT_MS = 30_000;
 const LOCAL_SAVE_DEBOUNCE_MS = 800;
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 8_000;
-const JOURNAL_READ_TIMEOUT_MS = 3_000;
 const CLOSE_DOCUMENT_DELETED = 4404;
 const CLOSE_AUTHORITY_CHANGED = 4401;
 const MAX_VV_QUERY_BYTES = 4_096;
@@ -200,9 +198,16 @@ export class EsbtEngine implements CollabSession {
   private historyMaintenance: Promise<void> | null = null;
 
   static async open(options: SessionOptions): Promise<EsbtEngine> {
-    const engine = new EsbtEngine(options);
-    await engine.start();
-    return engine;
+    return openWithReplicaJournal(options.docId, async (stored) => {
+      const engine = new EsbtEngine(options);
+      try {
+        await engine.start(stored);
+        return engine;
+      } catch (error) {
+        engine.destroy();
+        throw error;
+      }
+    });
   }
 
   constructor({ docId, user, access }: SessionOptions) {
@@ -755,19 +760,10 @@ export class EsbtEngine implements CollabSession {
     return () => this.hydratedListeners.delete(listener);
   }
 
-  private async start(): Promise<void> {
+  private async start(stored: ReplicaJournalRecord | null): Promise<void> {
     const runtime = await loadRuntime();
     if (this.destroyed) return;
 
-    let stored: ReplicaJournalRecord | null = null;
-    try {
-      stored = await runWithTimeout(
-        () => readReplicaJournal(this.docId),
-        JOURNAL_READ_TIMEOUT_MS,
-      );
-    } catch (error) {
-      this.recordStorageError('The offline journal could not be read. Server sync will continue.', error);
-    }
     if (stored && isAboutDocument(this.docId)) {
       let probe: EsbtDocument | null = null;
       try {

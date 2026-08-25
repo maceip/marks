@@ -85,3 +85,26 @@ test('dialog cancellation rejects a finalizer that ignores cancellation', async 
   controller.abort(new DOMException('Dialog closed.', 'AbortError'));
   await assert.rejects(polling, (error: unknown) => error instanceof DOMException && error.name === 'AbortError');
 });
+
+test('one request timeout remains retryable while the pairing ticket is live', async () => {
+  let clock = 0;
+  let calls = 0;
+  const session = { sessionId: 'session_after_retry' };
+  const result = await pollPairingUntilSettled({
+    expiresAtMs: 60_000,
+    signal: new AbortController().signal,
+    now: () => clock,
+    sleep: async (milliseconds) => {
+      clock += milliseconds;
+    },
+    finalize: async () => {
+      calls += 1;
+      if (calls === 1) throw new DOMException('The request timed out.', 'TimeoutError');
+      return session;
+    },
+  });
+
+  assert.equal(result, session);
+  assert.equal(calls, 2);
+  assert.equal(clock, 1_500);
+});

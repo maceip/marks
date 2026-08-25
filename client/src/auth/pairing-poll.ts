@@ -49,14 +49,12 @@ export async function pollPairingUntilSettled<T>(
     if (remaining <= 0) return 'gone';
 
     let result: PairingPollResult<T> = 'pending';
+    const expired = new DOMException('The pairing expired.', 'TimeoutError');
     try {
-      result = await runWithTimeout(options.finalize, remaining, options.signal);
+      result = await runWithTimeout(options.finalize, remaining, options.signal, expired);
     } catch (error) {
       if (options.signal.aborted) throw abortError(options.signal);
-      if (
-        (error instanceof DOMException && error.name === 'TimeoutError') ||
-        now() >= options.expiresAtMs
-      ) {
+      if (error === expired || now() >= options.expiresAtMs) {
         return 'gone';
       }
       // A transient request timeout/offline edge gets one later retry. There

@@ -7,12 +7,15 @@
 import { chromium, devices } from 'playwright';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { once } from 'node:events';
 import { accessSync, constants, cpSync, mkdtempSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  childIsRunning,
+  terminateChildAndCleanup,
+} from './harness/child-lifecycle.mjs';
 import { CHROME_LAUNCH_ARGS, launchEnv } from './harness/env.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -25,40 +28,21 @@ let serverSpawnError = null;
 let stopped = false;
 let stopPromise = null;
 
-const childIsRunning = () => server && server.exitCode === null && server.signalCode === null;
 const wait = (milliseconds) => new Promise((resolveWait) => setTimeout(resolveWait, milliseconds));
-const waitForChildExit = async (milliseconds) => {
-  if (!childIsRunning()) return true;
-  return Promise.race([
-    once(server, 'exit').then(() => true),
-    wait(milliseconds).then(() => false),
-  ]);
-};
 const stop = async () => {
   if (stopPromise) return stopPromise;
   stopped = true;
-  stopPromise = (async () => {
-    let terminated = true;
-    try {
-      if (childIsRunning()) {
-        server.kill('SIGTERM');
-        terminated = await waitForChildExit(3_000);
-      }
-      if (!terminated && childIsRunning()) {
-        server.kill('SIGKILL');
-        terminated = await waitForChildExit(2_000);
-      }
-    } finally {
-      rmSync(work, { recursive: true, force: true });
-    }
-    if (!terminated && childIsRunning()) {
-      throw new Error('marks-server did not terminate after SIGTERM and SIGKILL');
-    }
-  })();
+  stopPromise = terminateChildAndCleanup(
+    server,
+    () => rmSync(work, { recursive: true, force: true }),
+  );
   return stopPromise;
 };
 process.once('exit', () => {
-  if (childIsRunning()) server.kill('SIGKILL');
+  if (childIsRunning(server)) {
+    server.kill('SIGKILL');
+    return;
+  }
   rmSync(work, { recursive: true, force: true });
 });
 

@@ -73,9 +73,10 @@ export async function runWithTimeout<T>(
   operation: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
   signal?: AbortSignal | null,
+  timeoutReason: unknown = new DOMException('The operation timed out.', 'TimeoutError'),
 ): Promise<T> {
   if (signal?.aborted) throw abortReason(signal);
-  if (timeoutMs <= 0) throw new DOMException('The operation timed out.', 'TimeoutError');
+  if (timeoutMs <= 0) throw timeoutReason;
 
   const controller = new AbortController();
   const propagateAbort = () => controller.abort(signal ? abortReason(signal) : undefined);
@@ -87,7 +88,7 @@ export async function runWithTimeout<T>(
   const rejectFromSignal = () => rejectAbort?.(abortReason(controller.signal));
   controller.signal.addEventListener('abort', rejectFromSignal, { once: true });
   const timer = globalThis.setTimeout(
-    () => controller.abort(new DOMException('The operation timed out.', 'TimeoutError')),
+    () => controller.abort(timeoutReason),
     timeoutMs,
   );
 

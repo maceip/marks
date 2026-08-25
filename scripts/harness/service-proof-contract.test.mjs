@@ -84,6 +84,7 @@ test('anonymous and copied-slug failures leave opening shells with a retry surfa
   const api = read('client/src/lib/api.ts');
   const roomAccess = read('client/src/auth/room-access.ts');
   const engine = read('client/src/collab/esbt-engine.ts');
+  const journal = read('client/src/collab/journal.ts');
   const network = read('client/src/browser/network.ts');
   const metadata = read('client/src/hooks/useDocumentMeta.ts');
 
@@ -103,7 +104,8 @@ test('anonymous and copied-slug failures leave opening shells with a retry surfa
     'transport failures render before authoritative unavailable documents',
   );
   assert.match(app, /ensureServiceCaller\(\{ forceProbe: true \}\)[\s\S]*?setServiceCallerError/);
-  assert.match(engine, /runWithTimeout\([\s\S]*?readReplicaJournal/);
+  assert.match(journal, /runWithTimeout\([\s\S]*?read\(docId\)/);
+  assert.match(engine, /openWithReplicaJournal\(options\.docId,[\s\S]*?new EsbtEngine/);
   assert.match(engine, /void deleteReplicaJournal\(this\.docId\)\.catch/);
   assert.doesNotMatch(engine, /await deleteReplicaJournal\(this\.docId\)/);
 });
