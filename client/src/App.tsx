@@ -128,6 +128,7 @@ export function App() {
   const overlayNavigation = posture.overlayNavigation;
   const user = useMemo(loadUser, []);
   const [serviceCaller, setServiceCaller] = useState<ServiceCaller | null>(null);
+  const [serviceCallerResolved, setServiceCallerResolved] = useState(UI_DATA_MODE !== 'service');
   useEffect(() => {
     void getOrCreatePendingDevice().catch(() => undefined);
   }, []);
@@ -138,12 +139,16 @@ export function App() {
       .then(async (caller) => {
         if (cancelled) return;
         setServiceCaller(caller);
+        setServiceCallerResolved(true);
         if (caller.kind === 'scratch') {
           void bindPendingDevice().catch(() => undefined);
         }
       })
       .catch(() => {
-        if (!cancelled) setServiceCaller(null);
+        if (!cancelled) {
+          setServiceCaller(null);
+          setServiceCallerResolved(true);
+        }
       });
     return () => {
       cancelled = true;
@@ -220,8 +225,10 @@ export function App() {
   useEffect(() => localStorage.setItem('marks:mode', mode), [mode]);
 
   useEffect(() => {
-    if (!isAboutDocument(docId) || phone) return;
-    setMode('split');
+    if (!isAboutDocument(docId)) return;
+    // The public entry point should read as a landing page on a phone, not as
+    // raw Markdown. Larger screens keep the product-in-the-product split demo.
+    setMode(phone ? 'preview' : 'split');
   }, [docId, phone]);
 
   useEffect(() => {
@@ -299,6 +306,18 @@ export function App() {
     : serviceCaller?.kind === 'session'
       ? 'session' as const
       : 'scratch' as const;
+
+  useEffect(() => {
+    if (
+      route.name === 'home' &&
+      phone &&
+      UI_DATA_MODE === 'service' &&
+      serviceCallerResolved &&
+      serviceCaller?.kind === 'scratch'
+    ) {
+      navigate({ name: 'document', id: ABOUT_DOCUMENT_ID }, { replace: true });
+    }
+  }, [navigate, phone, route.name, serviceCaller, serviceCallerResolved]);
 
   const notify = useCallback(
     (toastTitle: string, detail?: string, tone: ToastMessage['tone'] = 'neutral') => {

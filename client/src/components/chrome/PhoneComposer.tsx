@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { EditorView } from '@codemirror/view';
 import {
   getPresenceDisplay,
@@ -8,7 +8,8 @@ import {
 } from '../../collab/presence-display';
 import type { CollabSession } from '../../collab/types';
 import { useCommandCenter } from '../../commands/context';
-import type { ProjectedCommand } from '../../commands/types.ts';
+import { ribbonTask } from '../../commands/projection';
+import type { ProjectedCommand, ProjectedRibbonTab, RibbonTabId } from '../../commands/types.ts';
 import type { Posture } from '../../lib/posture';
 import type { UiActionId } from '../../lib/ui-actions';
 import type { ViewMode } from '../shell/TopBar';
@@ -34,99 +35,22 @@ interface PhoneComposerProps {
   temporary?: boolean;
 }
 
-type PhoneSheet = 'insert' | 'review' | 'more' | null;
+const PHONE_TAB_ORDER: RibbonTabId[] = [
+  'home', 'insert', 'review', 'view', 'file', 'draw', 'tools', 'picture', 'table', 'shape',
+];
 
-const FORMAT_IDS = [
-  'format.bold',
-  'format.italic',
-  'format.heading-2',
-  'paragraph.bullets',
-  'paragraph.tasks',
-  'format.inline-code',
-] as const;
-
-const INSERT_IDS = [
-  'insert.picture-file',
-  'insert.picture-url',
-  'insert.link',
-  'insert.table',
-  'insert.shape-rect',
-  'insert.callout-info',
-  'insert.math',
-  'insert.mermaid',
-  'insert.code-block',
-  'review.comments',
-] as const;
-
-const REVIEW_IDS = [
-  'review.document-health',
-  'review.render-diagnostics',
-  'review.accessibility',
-  'review.privacy-exposure',
-  'review.quality-contract',
-  'view.reader-simulation',
-  'review.link-intelligence',
-  'review.citation-ledger',
-  'review.task-decision-ledger',
-  'review.collaboration-console',
-  'document.recovery',
-  'review.version-compare',
-  'tools.front-matter',
-  'document.publish-profile',
-  'tools.structure',
-  'tools.asset-inspector',
-  'tools.paste-intent',
-  'insert.cross-document-block',
-  'wild.intent-horizon',
-  'wild.causal-lightpath',
-  'wild.consequence-lanes',
-  'wild.context-half-life',
-  'wild.counterfactual-shelf',
-] as const;
-
-const MORE_IDS = [
-  'document.new',
-  'identity.keep',
-  'identity.account',
-  'identity.pairing',
-  'identity.sign-out',
-  'document.templates',
-  'document.import',
-  'document.rename',
-  'document.export-markdown',
-  'document.export-bundle',
-  'document.share',
-  'edit.find',
-  'view.outline',
-  'review.history',
-  'workspace.trash',
-  'view.preferences',
-  'document.delete',
-] as const;
-
+/** The phone presentation consumes the exact same projected tabs, groups,
+ * availability, feature flags, and agent-raised state as DesktopRibbon. */
 export function PhoneComposer(props: PhoneComposerProps) {
   const center = useCommandCenter();
-  const [sheet, setSheet] = useState<PhoneSheet>(null);
+  const task = ribbonTask(center.environment);
+  const tabs = useMemo(() => orderTabs(center.ribbon), [center.ribbon]);
+  const [tab, setTab] = useState<RibbonTabId>(() => task === 'inspect' ? 'view' : 'home');
   const [presenceDisplay, setPresenceState] = useState<DocumentPresenceDisplay>(() =>
     getPresenceDisplay(props.mode === 'preview'));
-  const available = useMemo(
-    () => new Map(center.commands('phone').map((command) => [command.id, command])),
-    [center],
-  );
-  const contextual = [...available.values()].filter((command) => command.contextual);
-  const format = FORMAT_IDS.flatMap((id) => available.get(id) ?? []);
-  const insert = INSERT_IDS.flatMap((id) => available.get(id) ?? []);
-  const review = REVIEW_IDS.flatMap((id) => available.get(id) ?? []);
-  const more = MORE_IDS.flatMap((id) => available.get(id) ?? []);
-  const writing = center.environment.mode !== 'preview';
-  const editMode = available.get('view.editor');
-  const previewMode = available.get('view.preview');
-  const tools = available.get('tools.draft');
-  const sheetTitle = sheet === 'insert'
-    ? 'Insert'
-    : sheet === 'review'
-      ? 'Document intelligence'
-      : 'Page';
+  const lastManualTabAt = useRef(0);
+  const previousTask = useRef(task);
+  const selectedTab = tabs.find((candidate) => candidate.id === tab) ?? tabs[0];
 
   useEffect(() => {
     const sync = () => setPresenceState(getPresenceDisplay(props.mode === 'preview'));
@@ -135,150 +59,124 @@ export function PhoneComposer(props: PhoneComposerProps) {
     return () => window.removeEventListener(PRESENCE_DISPLAY_EVENT, sync);
   }, [props.mode]);
 
+  useEffect(() => {
+    if (previousTask.current === task) return;
+    previousTask.current = task;
+    const preferred = task === 'inspect' ? tabs.find((candidate) => candidate.id === 'view') : tabs.find((candidate) => candidate.id === 'home');
+    if (preferred) setTab(preferred.id);
+  }, [tabs, task]);
+
+  useEffect(() => {
+    const contextual = tabs.find((candidate) => candidate.contextual);
+    if (!contextual || Date.now() - lastManualTabAt.current < 2500) return;
+    setTab(contextual.id);
+  }, [center.environment.context, tabs]);
+
+  useEffect(() => {
+    const active = center.runs.findLast((run) =>
+      (run.source === 'agent' || run.source === 'bridge') &&
+      (run.status === 'proposed' || run.status === 'awaiting-approval' || run.status === 'running'));
+    if (!active || Date.now() - lastManualTabAt.current < 4500) return;
+    const destination = tabs.find((candidate) => candidate.groups.some((group) =>
+      group.commands.some((command) => command.id === active.commandId)));
+    if (destination) setTab(destination.id);
+  }, [center.runs, tabs]);
+
   const invoke = (command: ProjectedCommand) => {
-    if (!command.enabled) return;
-    void center.invoke(command.id).then(() => setSheet(null));
+    if (command.enabled) void center.invoke(command.id);
+  };
+  const selectTab = (id: RibbonTabId) => {
+    lastManualTabAt.current = Date.now();
+    setTab(id);
+  };
+  const changePresence = (value: DocumentPresenceDisplay) => {
+    setPresenceDisplay(value);
+    setPresenceState(value);
   };
 
   return (
-    <div className={`phone-composer${props.posture.keyboardOpen ? ' keyboard-open' : ''}`} data-command-context={center.environment.context}>
+    <div className={`phone-composer${props.posture.keyboardOpen ? ' keyboard-open' : ''}`} data-command-context={center.environment.context} data-ribbon-task={task}>
       {props.temporary && (
         <button type="button" className="phone-identity" data-command-id="identity.keep" onClick={() => {
-          const keep = available.get('identity.keep');
+          const keep = tabs.flatMap((item) => item.groups).flatMap((group) => group.commands).find((command) => command.id === 'identity.keep');
           if (keep) invoke(keep);
         }}>
-          <span>Temporary</span>
-          Closing this tab is unrecoverable until you keep it.
+          <span>Not logged in</span>
+          This document will be lost unless you log in.
         </button>
       )}
 
-      {writing && (
-        <div className="phone-format-chips" role="toolbar" aria-label={contextual.length ? `${center.environment.context} tools and quick format` : 'Quick format'}>
-          {contextual.map((command) => (
-            <PhoneChip key={command.id} command={command} contextual onInvoke={invoke} />
-          ))}
-          {format.map((command) => (
-            <PhoneChip key={command.id} command={command} onInvoke={invoke} />
-          ))}
-          {tools && <PhoneChip command={tools} onInvoke={invoke} />}
-          {available.get('input.dictate') && <PhoneChip command={available.get('input.dictate')!} onInvoke={invoke} />}
-        </div>
-      )}
-
-      {sheet && (
-        <div className="phone-sheet-layer">
-          <button type="button" className="phone-sheet-scrim" aria-label="Close sheet" onClick={() => setSheet(null)} />
-          <div className="phone-sheet surface-material-host" role="dialog" aria-label={`${sheetTitle} commands`}>
-            <SurfaceMaterial variant="floating" modifier="emphasized" />
-            <header>
-              <h2>{sheetTitle}</h2>
-              <button type="button" className="icon-button" aria-label="Close" onClick={() => setSheet(null)}>
-                <Glyph name="clear" size={16} interactive={false} />
-              </button>
-            </header>
-            <div className="phone-sheet-grid">
-              {sheet === 'more' && (['exact', 'section', 'off'] as const).map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  aria-pressed={presenceDisplay === value}
-                  onClick={() => {
-                    setPresenceDisplay(value);
-                    setPresenceState(value);
-                    setSheet(null);
-                  }}
-                >
-                  <Glyph name={value === 'off' ? 'clear' : value === 'exact' ? 'find' : 'outline'} size={28} />
-                  <span>Presence: {value}</span>
-                </button>
-              ))}
-              {(sheet === 'insert' ? insert : sheet === 'review' ? review : more).map((command) => (
-                <PhoneSheetCommand key={command.id} command={command} onInvoke={invoke} />
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      <nav className="phone-nav surface-material-host" aria-label="Phone composer">
+      <section className="phone-ribbon surface-material-host" aria-label="Mobile ribbon">
         <SurfaceMaterial variant="chrome" modifier="subtle" />
-        {editMode && (
-          <PhoneNavCommand command={editMode} label="Write" active={writing} onInvoke={invoke} />
-        )}
-        {previewMode && (
-          <PhoneNavCommand command={previewMode} label="Preview" active={!writing} onInvoke={invoke} />
-        )}
-        <button type="button" className={sheet === 'insert' ? 'active' : undefined} onClick={() => setSheet((current) => current === 'insert' ? null : 'insert')}>
-          <Glyph name="plus" size={22} />
-          <span>Insert</span>
-        </button>
-        <button type="button" className={sheet === 'review' ? 'active' : undefined} onClick={() => setSheet((current) => current === 'review' ? null : 'review')}>
-          <Glyph name="gauge" size={22} />
-          <span>Review</span>
-        </button>
-        <button type="button" className={sheet === 'more' ? 'active' : undefined} onClick={() => setSheet((current) => current === 'more' ? null : 'more')}>
-          <Glyph name="more" size={22} />
-          <span>More</span>
-        </button>
-      </nav>
+        <div className="phone-ribbon-deck" role="toolbar" aria-label={`${phoneTabLabel(selectedTab)} commands`}>
+          {selectedTab?.groups.map((group) => (
+            <div className="phone-ribbon-group" key={group.id} aria-label={group.label}>
+              <div className="phone-ribbon-commands">
+                {group.commands.map((command) => <PhoneCommand key={command.id} command={command} onInvoke={invoke} />)}
+              </div>
+              <span className="phone-ribbon-group-label">{group.label}</span>
+            </div>
+          ))}
+          {selectedTab?.id === 'view' && (
+            <div className="phone-ribbon-group" aria-label="Presence">
+              <div className="phone-ribbon-commands">
+                {(['exact', 'section', 'off'] as const).map((value) => (
+                  <button key={value} type="button" className={presenceDisplay === value ? 'active' : undefined} aria-pressed={presenceDisplay === value} onClick={() => changePresence(value)}>
+                    <Glyph name={value === 'off' ? 'clear' : value === 'exact' ? 'find' : 'outline'} size={22} />
+                    <span>{value[0].toUpperCase() + value.slice(1)}</span>
+                  </button>
+                ))}
+              </div>
+              <span className="phone-ribbon-group-label">Presence</span>
+            </div>
+          )}
+        </div>
+
+        <div className="phone-ribbon-tabs" role="tablist" aria-label="Ribbon tasks">
+          {tabs.map((item) => (
+            <button key={item.id} type="button" role="tab" aria-selected={selectedTab?.id === item.id} className={`${selectedTab?.id === item.id ? 'active ' : ''}${item.contextual ? 'contextual ' : ''}${item.agentRaised ? 'agent-raised' : ''}`.trim()} onClick={() => selectTab(item.id)}>
+              <Glyph name={tabGlyph(item.id)} size={19} />
+              <span>{phoneTabLabel(item)}</span>
+              {item.agentRaised && <i className="agent-tab-dot" aria-label="Agent-relevant commands" />}
+            </button>
+          ))}
+          <button type="button" className="phone-ribbon-all" aria-pressed={center.profile.expanded} title={center.profile.expanded ? 'Show essential ribbon tasks' : 'Show every ribbon task and command'} onClick={() => center.setExpanded(!center.profile.expanded)}>
+            <Glyph name={center.profile.expanded ? 'shrink' : 'more'} size={19} />
+            <span>{center.profile.expanded ? 'Essentials' : 'All'}</span>
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
 
-function PhoneChip({ command, contextual, onInvoke }: {
-  command: ProjectedCommand;
-  contextual?: boolean;
-  onInvoke: (command: ProjectedCommand) => void;
-}) {
-  return (
-    <button
-      type="button"
-      className={`${command.pressed ? 'active ' : ''}${contextual ? 'contextual ' : ''}${command.agentRaised ? 'agent-raised' : ''}`.trim() || undefined}
-      data-command-id={command.id}
-      disabled={!command.enabled}
-      title={command.unavailableReason ?? command.description}
-      onMouseDown={(event) => event.preventDefault()}
-      onClick={() => onInvoke(command)}
-    >
-      <Glyph name={command.glyph} size={20} />
-      <span>{command.label.replace('Heading 2', 'Heading').replace('Inline code', 'Code').replace('Draft tools', 'Tools')}</span>
-    </button>
-  );
+function orderTabs(tabs: ProjectedRibbonTab[]): ProjectedRibbonTab[] {
+  return [...tabs].sort((a, b) => PHONE_TAB_ORDER.indexOf(a.id) - PHONE_TAB_ORDER.indexOf(b.id));
 }
 
-function PhoneSheetCommand({ command, onInvoke }: { command: ProjectedCommand; onInvoke: (command: ProjectedCommand) => void }) {
-  return (
-    <button
-      type="button"
-      className={command.agentRaised ? 'agent-raised' : undefined}
-      data-command-id={command.id}
-      disabled={!command.enabled}
-      title={command.unavailableReason ?? command.description}
-      onClick={() => onInvoke(command)}
-    >
-      <Glyph name={command.glyph} size={28} />
-      <span>{command.label}</span>
-      {!command.enabled && command.unavailableReason && <small>{command.unavailableReason}</small>}
-    </button>
-  );
+function phoneTabLabel(tab: ProjectedRibbonTab | undefined): string {
+  if (!tab) return 'Commands';
+  return tab.id === 'file' ? 'More' : tab.label;
 }
 
-function PhoneNavCommand({ command, label, active, onInvoke }: {
-  command: ProjectedCommand;
-  label: string;
-  active: boolean;
-  onInvoke: (command: ProjectedCommand) => void;
-}) {
+function tabGlyph(tab: RibbonTabId) {
+  if (tab === 'home') return 'pencil' as const;
+  if (tab === 'insert') return 'plus' as const;
+  if (tab === 'review') return 'gauge' as const;
+  if (tab === 'view') return 'eye' as const;
+  if (tab === 'file') return 'more' as const;
+  if (tab === 'picture') return 'image' as const;
+  if (tab === 'table') return 'table' as const;
+  if (tab === 'shape') return 'rect' as const;
+  if (tab === 'draw') return 'painter' as const;
+  return 'sparkles' as const;
+}
+
+function PhoneCommand({ command, onInvoke }: { command: ProjectedCommand; onInvoke: (command: ProjectedCommand) => void }) {
   return (
-    <button
-      type="button"
-      className={`${active ? 'active ' : ''}${command.agentRaised ? 'agent-raised' : ''}`.trim() || undefined}
-      data-command-id={command.id}
-      disabled={!command.enabled}
-      onClick={() => onInvoke(command)}
-    >
+    <button type="button" className={`${command.pressed ? 'active ' : ''}${command.contextual ? 'contextual ' : ''}${command.agentRaised ? 'agent-raised' : ''}`.trim()} data-command-id={command.id} disabled={!command.enabled} aria-pressed={command.pressed} title={command.unavailableReason ?? command.description} onMouseDown={(event) => event.preventDefault()} onClick={() => onInvoke(command)}>
       <Glyph name={command.glyph} size={22} />
-      <span>{label}</span>
+      <span>{command.label}</span>
     </button>
   );
 }

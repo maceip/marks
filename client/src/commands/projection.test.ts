@@ -119,6 +119,18 @@ test('new-user composition is narrower and agent relevance can raise a command',
   assert.equal(raised.find((tab) => tab.id === 'tools')?.agentRaised, true);
 });
 
+test('phone ribbon consumes the desktop tab projection, including contextual and agent-raised tasks', () => {
+  const phone = composeRibbon(environment({ shell: 'phone', context: 'image' }), {
+    expanded: true,
+    agentRaised: new Set(['review.document-health']),
+  });
+  assert.equal(phone.some((tab) => tab.id === 'home'), true);
+  assert.equal(phone.some((tab) => tab.id === 'insert'), true);
+  assert.equal(phone.some((tab) => tab.id === 'review' && tab.agentRaised), true);
+  assert.equal(phone.some((tab) => tab.id === 'picture' && tab.contextual), true);
+  assert.equal(phone.flatMap((tab) => tab.groups).flatMap((group) => group.commands).some((command) => command.id === 'picture.medium'), true);
+});
+
 test('agent tools are generated from the same registry and expose availability', () => {
   const tools = toAgentTools(environment({ mode: 'preview' }));
   const bold = tools.find((tool) => tool.commandId === 'format.bold');

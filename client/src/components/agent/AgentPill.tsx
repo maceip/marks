@@ -102,6 +102,7 @@ export function AgentPill({ documentId, linkedSurface = null }: AgentPillProps) 
     .find((receipt) => receipt.source === 'agent' || receipt.source === 'bridge');
   const hostedAvailable = center.environment.workspaceKind === 'session' &&
     capabilities?.enabled === true && capabilities.provider === 'openai';
+  const phoneMinimized = center.environment.shell === 'phone' && !expanded && !busy && pending.length === 0;
 
   const patchStep = useCallback((id: string, patch: Partial<DisplayStep>) => {
     setPlan((current) => current ? {
@@ -513,7 +514,7 @@ export function AgentPill({ documentId, linkedSurface = null }: AgentPillProps) 
 
   return (
     <aside
-      className={`agent-pill surface-material-host${expanded ? ' expanded' : ''}${busy || pending.length ? ' active' : ''}${linkedSurface ? ' inspector-linked' : ''}`}
+      className={`agent-pill surface-material-host${expanded ? ' expanded' : ''}${busy || pending.length ? ' active' : ''}${linkedSurface ? ' inspector-linked' : ''}${phoneMinimized ? ' phone-minimized' : ''}`}
       data-linked-surface={linkedSurface ?? undefined}
       aria-label="Marks command agent"
     >
@@ -641,16 +642,18 @@ export function AgentPill({ documentId, linkedSurface = null }: AgentPillProps) 
           onFocus={() => setExpanded(true)}
           onChange={(event) => setInput(event.target.value)}
         />
-        <select
-          className="agent-provider"
-          aria-label="Agent provider"
-          value={provider}
-          disabled={busy}
-          onChange={(event) => setProvider(event.target.value === 'openai' ? 'openai' : 'local')}
-        >
-          <option value="local">Local</option>
-          {hostedAvailable && <option value="openai">OpenAI</option>}
-        </select>
+        {hostedAvailable ? (
+          <select
+            className="agent-provider"
+            aria-label="Agent provider"
+            value={provider}
+            disabled={busy}
+            onChange={(event) => setProvider(event.target.value === 'openai' ? 'openai' : 'local')}
+          >
+            <option value="local">Local</option>
+            <option value="openai">OpenAI</option>
+          </select>
+        ) : <span className="agent-provider agent-provider-label">Local</span>}
         <button
           type="submit"
           className="agent-submit"
