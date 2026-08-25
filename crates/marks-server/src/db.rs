@@ -602,6 +602,30 @@ const MIGRATIONS: &[(i64, &str)] = &[
     ALTER TABLE auth_challenges ADD COLUMN session_id TEXT;
     ",
     ),
+    (
+        12,
+        "
+    -- Anonymous pages use their opaque document id as a public collaboration
+    -- slug. Every mutation is already journaled durably; these columns make
+    -- the default grant and the seventh-edit persistence milestone explicit.
+    ALTER TABLE documents ADD COLUMN public_edit INTEGER NOT NULL DEFAULT 0
+        CHECK(public_edit IN (0, 1));
+    ALTER TABLE documents ADD COLUMN anonymous_edit_count INTEGER NOT NULL DEFAULT 0
+        CHECK(anonymous_edit_count >= 0);
+    ALTER TABLE documents ADD COLUMN persisted_at INTEGER;
+
+    -- Preserve the intended behavior for pre-migration anonymous pages. A
+    -- claimed page can be recognized by its historical scratch site row.
+    UPDATE documents
+       SET public_edit = 1
+     WHERE scratch_id IS NOT NULL
+        OR EXISTS (
+            SELECT 1 FROM document_sites s
+             WHERE s.document_id = documents.id
+               AND s.authority_kind = 'scratch'
+        );
+    ",
+    ),
 ];
 
 #[cfg(test)]

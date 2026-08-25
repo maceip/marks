@@ -1,4 +1,4 @@
-import { get as idbGet, set as idbSet, update as idbUpdate } from 'idb-keyval';
+import { del as idbDelete, get as idbGet, set as idbSet, update as idbUpdate } from 'idb-keyval';
 import { persistLockName, withPersistLock } from '../browser/persist-lock.ts';
 import type { MutationKind } from './protocol.ts';
 import { JOURNAL_RETAINED_THRESHOLD } from './profile.ts';
@@ -58,6 +58,13 @@ export async function writeReplicaJournal(
 ): Promise<void> {
   await withPersistLock(persistLockName('esbt', docId), async () => {
     await idbSet(journalCacheKey(docId), cloneRecord(record));
+  });
+}
+
+/** Remove one unusable journal without disturbing any other local document. */
+export async function deleteReplicaJournal(docId: string): Promise<void> {
+  await withPersistLock(persistLockName('esbt', docId), async () => {
+    await idbDelete(journalCacheKey(docId));
   });
 }
 

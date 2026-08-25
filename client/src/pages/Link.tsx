@@ -32,7 +32,7 @@ export function LinkPage({ pairing, onNotify, onKeep }: LinkPageProps) {
         <PairingInspect state={state} pairing={pairing} onNotify={onNotify} />
         <div className="dialog-actions">
           <button type="button" className="button" onClick={onKeep}>
-            This tab is still temporary
+            Log in this tab instead
           </button>
         </div>
       </section>

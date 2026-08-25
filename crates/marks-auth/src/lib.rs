@@ -113,8 +113,9 @@ pub use session::{
 };
 pub use ticket::{
     DOCUMENT_TICKET_TTL_MS, DocumentTicketError, DocumentTicketRecord, ScratchDocumentTicketRecord,
-    issue_document_ticket, issue_scratch_document_ticket, redeem_document_ticket,
-    redeem_scratch_document_ticket, ticket_secret_hash,
+    issue_document_ticket, issue_public_document_ticket, issue_public_scratch_document_ticket,
+    issue_scratch_document_ticket, redeem_document_ticket, redeem_public_document_ticket,
+    redeem_public_scratch_document_ticket, redeem_scratch_document_ticket, ticket_secret_hash,
 };
 pub use words::{
     PAIRING_WORD_COUNT, generate_pairing_words, normalize_pairing_words, pairing_word_code_hash,

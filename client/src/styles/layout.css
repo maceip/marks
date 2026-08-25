@@ -7,6 +7,42 @@
   isolation: isolate;
 }
 
+.document-drop-target {
+  position: fixed;
+  inset: 18px;
+  z-index: 180;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  border: 2px dashed color-mix(in srgb, var(--color-action) 70%, white);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--color-bg-surface) 88%, var(--color-action-soft));
+  box-shadow: 0 28px 80px rgb(8 24 61 / 28%), inset 0 0 0 1px rgb(255 255 255 / 70%);
+  color: var(--color-fg-default);
+  pointer-events: none;
+}
+
+.document-drop-target > span {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  margin-bottom: 4px;
+  border-radius: 16px;
+  background: var(--color-action-soft);
+}
+
+.document-drop-target strong {
+  font-size: clamp(18px, 3vw, 28px);
+  letter-spacing: -0.025em;
+}
+
+.document-drop-target small {
+  color: var(--color-fg-muted);
+  font-size: 13px;
+}
+
 .app.with-sidebar {
   grid-template-columns: var(--layout-sidebar-width) minmax(0, 1fr);
 }

@@ -14,6 +14,7 @@ import type {
 import { EMPTY_PARAMETERS } from './types.ts';
 
 const TAB_LABELS: Record<RibbonTabId, string> = {
+  import: 'Import',
   file: 'File',
   home: 'Home',
   insert: 'Insert',
@@ -27,6 +28,7 @@ const TAB_LABELS: Record<RibbonTabId, string> = {
 };
 
 const TAB_ORDER: RibbonTabId[] = [
+  'import',
   'file',
   'home',
   'insert',
@@ -39,7 +41,7 @@ const TAB_ORDER: RibbonTabId[] = [
   'shape',
 ];
 
-const ESSENTIAL_TABS = new Set<RibbonTabId>(['file', 'home', 'insert', 'review', 'view']);
+const ESSENTIAL_TABS = new Set<RibbonTabId>(['import', 'file', 'home', 'insert', 'review', 'view']);
 
 export interface ProjectionOptions {
   expanded?: boolean;
@@ -130,9 +132,9 @@ function capabilityReason(capability: NonNullable<CommandDefinition['capability'
 }
 
 function workspaceReason(command: CommandDefinition, environment: CommandEnvironment): string {
-  if (environment.workspaceKind === 'scratch') return 'Keep this temporary workspace first.';
+  if (environment.workspaceKind === 'scratch') return 'Log in before managing named access or account-only history.';
   if (environment.workspaceKind === 'local') return 'This control requires the Marks identity service.';
-  if (command.workspaceKinds?.includes('scratch')) return 'This command only applies to a temporary workspace.';
+  if (command.workspaceKinds?.includes('scratch')) return 'This command only applies before you log in.';
   return 'This command is not available in the current workspace.';
 }
 

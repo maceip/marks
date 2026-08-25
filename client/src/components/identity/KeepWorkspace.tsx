@@ -16,7 +16,6 @@ import {
   SELF_KEEP_DEVICE_LINE,
   SELF_KEEP_HONEST_LINE,
   SELF_KEEP_LOCAL_LINE,
-  SELF_KEEP_OTHER_DEVICE_LINE,
   SELF_KEEP_PHONE_LINE,
 } from '../../lib/identity-copy';
 import { pairingLandingPath } from '../../lib/pairing-link';
@@ -41,16 +40,16 @@ function copyForFailure(error: unknown) {
 
 export function KeepWorkspace({ onNotify, onOpenPhone, onPromoted, phone = false }: KeepWorkspaceProps) {
   const service = UI_DATA_MODE === 'service';
-  // Reopening the dialog on an already-promoted tab shows the kept state
-  // instead of a keep button that can only fail closed.
+  // Reopening the dialog on an already-promoted tab shows the logged-in state
+  // instead of an action that can only fail closed.
   const [alreadyKept] = useState(() => service && getActiveCaller()?.kind === 'session');
   const [ticket, setTicket] = useState<PairingTicket | null>(null);
   const [status, setStatus] = useState<'idle' | 'minting' | 'waiting' | 'kept' | 'failed'>(
     alreadyKept ? 'kept' : 'idle',
   );
   const [keeping, setKeeping] = useState(false);
-  // On a phone there is nothing to scan this QR with; the pairing rail stays
-  // one tap away instead of being the only door.
+  // On a phone there is nothing to scan this QR with. The preferred path is
+  // opening the public page on a laptop; solo-phone bootstrap stays disclosed.
   const [pairingOpen, setPairingOpen] = useState(!phone && !alreadyKept);
   const onNotifyRef = useRef(onNotify);
   const onPromotedRef = useRef(onPromoted);
@@ -79,7 +78,7 @@ export function KeepWorkspace({ onNotify, onOpenPhone, onPromoted, phone = false
             }
             setStatus('kept');
             if (poll) window.clearInterval(poll);
-            onNotifyRef.current('Workspace kept', 'This tab can now see and save your documents on other devices.', 'success');
+            onNotifyRef.current('Logged in', 'This browser is linked and can open your account documents.', 'success');
             onPromotedRef.current?.();
           });
         }, 1500);
@@ -107,10 +106,10 @@ export function KeepWorkspace({ onNotify, onOpenPhone, onPromoted, phone = false
       setPairingOpen(false);
       setStatus('kept');
       onNotify(
-        'Workspace kept',
+        'Logged in',
         phone
-          ? 'This phone now holds the account key. Open Keep workspace on another device to link it.'
-          : 'This device now holds the account key. Open Keep workspace on another device to link it.',
+          ? 'This phone now holds a solo account key. Link a laptop soon so the account does not depend on one phone.'
+          : 'This device now holds the account key. Choose Log In on another device to link it.',
         'success',
       );
       onPromotedRef.current?.();
@@ -122,7 +121,7 @@ export function KeepWorkspace({ onNotify, onOpenPhone, onPromoted, phone = false
     }
   };
 
-  const kept = status === 'kept';
+  const loggedIn = status === 'kept';
   const landing = ticket ? pairingUrlFromTicket(ticket) : pairingLandingPath(location.origin);
 
   const copyValue = async (value: string, title: string, detail: string) => {
@@ -137,39 +136,54 @@ export function KeepWorkspace({ onNotify, onOpenPhone, onPromoted, phone = false
   return (
     <div className="identity-dialog">
       <p className="identity-lede">
-        {kept
-          ? 'This workspace is kept. Documents follow your account key and open on every device you link.'
+        {loggedIn
+          ? 'You are logged in. Account documents open on every device you link.'
           : phone
             ? SELF_KEEP_PHONE_LINE
             : SCRATCH_UPGRADE_LINE}
       </p>
-      {!kept && <p className="identity-note">{SCRATCH_HONEST_LINE}</p>}
+      {!loggedIn && <p className="identity-note">{SCRATCH_HONEST_LINE}</p>}
 
-      {phone && !kept && (
-        <div className="keep-solo">
-          <button type="button" className="button primary" disabled={keeping} onClick={() => void keepHere()}>
-            <Icon path={icons.check} /> Keep on this phone
+      {phone && !loggedIn && (
+        <div className="mobile-login-path">
+          <div className="keep-stage laptop-login-stage">
+            <Icon path={icons.document} size={36} />
+            <div>
+              <strong>Open this page on a laptop</strong>
+              <small>The page URL is already public. On the laptop, choose Log In and use the phone-link flow to join your account.</small>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="button primary"
+            onClick={() => void copyValue(
+              `${location.origin}${location.pathname}${location.search}`,
+              'Laptop link copied',
+              'Paste it into a browser on your laptop, then choose Log In.',
+            )}
+          >
+            <Icon path={icons.link} /> Copy page link for laptop
           </button>
-          <small>{SELF_KEEP_HONEST_LINE}</small>
-          <small>{SELF_KEEP_OTHER_DEVICE_LINE}</small>
-          {!pairingOpen && (
-            <button type="button" className="button" onClick={() => setPairingOpen(true)}>
-              <Icon path={icons.link} /> Link another device instead
+          <details className="keep-solo keep-solo-disclosure">
+            <summary>Continue with only this phone</summary>
+            <small>{SELF_KEEP_HONEST_LINE}</small>
+            <button type="button" className="button" disabled={keeping} onClick={() => void keepHere()}>
+              <Icon path={icons.check} /> Log in on this phone only
             </button>
-          )}
+          </details>
         </div>
       )}
 
-      {kept && (
+      {loggedIn && (
         <div className="keep-stage">
           <div>
-            <strong>This workspace is kept</strong>
-            <small>Documents follow the account key on this device. Link more devices from Keep workspace on those devices.</small>
+            <strong>You are logged in</strong>
+            <small>Documents follow the account key on this device. Choose Log In on another device to link it.</small>
           </div>
         </div>
       )}
 
-      {!kept && pairingOpen && (
+      {!loggedIn && pairingOpen && (
         <>
           <div className="keep-stage">
             <QrMark value={landing} label="QR for the Marks pairing ticket" />
@@ -210,7 +224,7 @@ export function KeepWorkspace({ onNotify, onOpenPhone, onPromoted, phone = false
             </p>
           )}
           {service && status === 'failed' && (
-            <p className="identity-note">The pairing expired or failed. Open Keep workspace again for a fresh code.</p>
+            <p className="identity-note">The pairing expired or failed. Open Log In again for a fresh code.</p>
           )}
 
           <div className="dialog-actions">
@@ -247,13 +261,13 @@ export function KeepWorkspace({ onNotify, onOpenPhone, onPromoted, phone = false
         </>
       )}
 
-      {!phone && !kept && (
+      {!phone && !loggedIn && (
         <div className="keep-solo">
           <small>
             {SELF_KEEP_DEVICE_LINE} {SELF_KEEP_HONEST_LINE}
           </small>
           <button type="button" className="button" disabled={keeping} onClick={() => void keepHere()}>
-            Keep on this device only
+            Log in on this device only
           </button>
         </div>
       )}

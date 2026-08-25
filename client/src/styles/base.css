@@ -75,6 +75,18 @@ a {
   border: 0 !important;
 }
 
+/* Keep the native chooser addressable for browsers and automation while the
+   ribbon owns the visible import controls. A non-zero box is required by some
+   browser engines before they will emit a filechooser event. */
+.document-import-input {
+  position: fixed;
+  inset: 0 auto auto 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  opacity: 0;
+}
+
 /* Scrollbars that do not fight the theme. */
 * {
   scrollbar-width: thin;

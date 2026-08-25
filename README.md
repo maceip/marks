@@ -104,10 +104,16 @@ people to expect:
 - **Offline editing**, with local persistence, multi-tab replica sync, and automatic resync
 - **Voice input** where the browser exposes SpeechRecognition
 - **Document-scoped copy / paste / select-all / right-click**, including HTML→markdown paste
+- **Public anonymous collaboration by opaque page slug** — every service-mode
+  anonymous page is saved immediately, joins without sharing settings, and
+  records a persistence milestone after its seventh committed edit
+- **Import-first ribbon** with Notes app, Meeting, and GitHub README templates,
+  protected web-page→Markdown import, and drop/picker conversion for PDF, Word,
+  and table-only Excel files
 - **Light/dark themes, compact density, reduced glass and reduced motion**, with
   explicit phone, foldable, tablet, and desktop postures
-- **Export** to `.md`; the Rust server will add revocable,
-  permission-checked share links
+- **Export** to `.md`, public anonymous page URLs, and revocable,
+  permission-checked account share links
 
 ## Architecture
 

@@ -5,8 +5,9 @@
  * This is the production-path browser proof: artifact identity, scratch
  * admission, two isolated browser replicas, per-peer undo, preview writeback,
  * durable server commit, reload recovery, optional offline journal/reconnect,
- * and Markdown import/export. Pair its receipt with `live_service` for native
- * peers on the same document.
+ * public-slug admission, threshold persistence, drag/drop import/export, and
+ * Markdown conversion. Pair its receipt with `live_service` for native peers
+ * on the same document.
  *
  * Examples:
  *   MARKS_URL=http://127.0.0.1:3000 node scripts/ci-service-ui.mjs
@@ -223,6 +224,25 @@ try {
       response.request().method() === 'GET' && pathnameOf(response.url()) === '/v1/documents',
     { timeout: 30_000 },
   );
+  const created = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' && pathnameOf(response.url()) === '/v1/documents',
+    { timeout: 30_000 },
+  );
+  // Register before navigation. Anonymous first paint creates a unique public
+  // page and mounts its room without requiring a New-document click.
+  const snapshotWait = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'GET' &&
+      /\/v1\/scratch\/documents\/[^/]+\/snapshot/.test(pathnameOf(response.url())),
+    { timeout: 30_000 },
+  );
+  const ticketWait = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      /\/v1\/scratch\/documents\/[^/]+\/session$/.test(pathnameOf(response.url())),
+    { timeout: 30_000 },
+  );
   await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
   const artifactResponse = await page.request.get(`${BASE}/v1/artifact`);
   const artifact = await artifactResponse.json();
@@ -242,36 +262,24 @@ try {
 
   const mode = await page.evaluate(() => document.documentElement.dataset.marksMode ?? '');
   check('documentElement is the service-mode build', mode === 'service', `data-marks-mode=${mode || 'missing'}`);
-  await page.waitForSelector('.home-actions .button.primary, .new-doc .button.primary', {
-    timeout: 30_000,
-  });
-
-  const created = page.waitForResponse(
-    (response) =>
-      response.request().method() === 'POST' && pathnameOf(response.url()) === '/v1/documents',
-    { timeout: 30_000 },
-  );
-  // Register before the click: the Wasm session admits (binds site) then
-  // fetches the snapshot, and either request can fire as soon as the
-  // editor route mounts.
-  const snapshotWait = page.waitForResponse(
-    (response) =>
-      response.request().method() === 'GET' &&
-      /\/v1\/scratch\/documents\/[^/]+\/snapshot/.test(pathnameOf(response.url())),
-    { timeout: 30_000 },
-  );
-  const ticketWait = page.waitForResponse(
-    (response) =>
-      response.request().method() === 'POST' &&
-      /\/v1\/scratch\/documents\/[^/]+\/session$/.test(pathnameOf(response.url())),
-    { timeout: 30_000 },
-  );
-  await page.locator('.home-actions .button.primary, .new-doc .button.primary').first().click();
   const createdResponse = await created;
-  check('New document POSTs /v1/documents', createdResponse.status() === 201, `status ${createdResponse.status()}`);
+  check('anonymous root creates a unique page through /v1/documents', createdResponse.status() === 201, `status ${createdResponse.status()}`);
   const createdBody = await createdResponse.json();
   const documentId = createdBody?.document?.id;
   check('create returns a document id', typeof documentId === 'string' && documentId.startsWith('document_'), String(documentId));
+  check(
+    'anonymous page is public by its opaque slug on creation',
+    createdBody?.document?.public === true &&
+      createdBody?.document?.public_role === 'editor' &&
+      createdBody?.document?.slug === documentId,
+    JSON.stringify(createdBody?.document),
+  );
+  check(
+    'anonymous slug is initialized with the editable marketing Markdown',
+    createdBody?.document?.title === 'Google Docs for Markdown' &&
+      createdBody?.document?.chars > 2_000,
+    `${String(createdBody?.document?.title)} chars=${String(createdBody?.document?.chars)}`,
+  );
 
   await page.waitForURL((url) => url.pathname === `/d/${documentId}`, { timeout: 30_000 });
   check('router opens the server-created document', page.url().includes(`/d/${documentId}`));
@@ -298,6 +306,29 @@ try {
   );
 
   await page.waitForSelector('.cm-content', { timeout: 30_000 });
+  await page.waitForFunction(
+    () => document.querySelector('.cm-content')?.textContent?.includes('Google Docs for Markdown') &&
+      document.querySelector('.marks-preview')?.textContent?.includes('Typical Markdown'),
+    undefined,
+    { timeout: 30_000 },
+  );
+  const initialExport = await page.request.get(`${BASE}/v1/documents/${documentId}/export`, {
+    headers: {
+      Authorization: `MarksScratch ${credential.scratchId}.${credential.capability}`,
+    },
+  });
+  const initialMarkdown = await initialExport.text();
+  check(
+    'editable introduction is durable before the first user edit',
+    initialExport.ok() &&
+      initialMarkdown.includes('# Google Docs for Markdown') &&
+      initialMarkdown.includes('Delete this entire introduction'),
+  );
+  check(
+    'new public slug renders the Markdown marketing page inside the real workspace',
+    (await page.locator('.marks-preview').innerText()).includes('Typical Markdown') &&
+      (await page.locator('.app').getAttribute('data-marketing')) === 'true',
+  );
   const committedText = `Cross-browser ${args.browser} proof 🧭`;
   const fixture = SERVICE_FIXTURE(args.browser);
   check(
@@ -305,13 +336,18 @@ try {
     await page.locator('.cm-content').getAttribute('contenteditable') === 'true',
   );
   await page.locator('.cm-content').click();
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+a' : 'Control+a');
   await page.keyboard.insertText(fixture);
   await page.waitForFunction(
     (expected) => document.querySelector('.cm-content')?.textContent?.includes(expected),
     committedText,
     { timeout: 30_000 },
   );
-  check('editor accepts the local mutation', true, committedText);
+  check(
+    'user can delete and replace the entire marketing starter',
+    !(await page.locator('.cm-content').innerText()).includes('Google Docs for Markdown'),
+    committedText,
+  );
   await page.waitForFunction(
     async ({ documentId, credential, expected }) => {
       const response = await fetch(`/v1/documents/${documentId}/export`, {
@@ -325,6 +361,34 @@ try {
     { timeout: 30_000 },
   );
   check('editor mutation receives a durable server-visible commit', true, committedText);
+
+  // Keep the edits separate so the room observes more than six anonymous
+  // commits, then require the document metadata to expose the persistence
+  // transition rather than inferring it from a still-open browser.
+  for (let edit = 0; edit < 7; edit += 1) {
+    await page.locator('.cm-content').click();
+    await page.keyboard.press('End');
+    await page.keyboard.insertText(String(edit));
+    await page.waitForTimeout(80);
+  }
+  await page.waitForFunction(
+    async ({ documentId, credential }) => {
+      const response = await fetch(`/v1/documents/${documentId}`, {
+        headers: {
+          Authorization: `MarksScratch ${credential.scratchId}.${credential.capability}`,
+        },
+      }).catch(() => null);
+      if (!response?.ok) return false;
+      const body = await response.json();
+      return body.document?.public === true &&
+        body.document?.anonymous_edits > 6 &&
+        body.document?.persisted === true &&
+        Number.isFinite(body.document?.persisted_at);
+    },
+    { documentId, credential },
+    { timeout: 30_000 },
+  );
+  check('more than six anonymous edits mark the public page persisted', true);
 
   await page.waitForSelector('.marks-preview input[type=checkbox]', { timeout: 30_000 });
   check(
@@ -396,18 +460,11 @@ try {
   );
   check('current service editor scrolling moves the preview', previewScroll > 0, String(previewScroll));
 
-  // The scratch capability is the current temporary-workspace authority. Give
-  // the same explicit bearer to an isolated browser profile, then require that
-  // profile to mint its own one-use room ticket. Separate BrowserContexts do
-  // not share IndexedDB or BroadcastChannel, so convergence must cross the
-  // production Rust service rather than a same-profile shortcut.
+  // Open the slug in a completely isolated anonymous profile without copying
+  // the owner's scratch capability. Public-by-URL collaboration must mint a
+  // different scratch identity and its own one-use room ticket. Separate
+  // BrowserContexts also rule out IndexedDB or BroadcastChannel shortcuts.
   const peerContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  await peerContext.addInitScript(
-    ({ storageKey, scratchCredential }) => {
-      sessionStorage.setItem(storageKey, JSON.stringify(scratchCredential));
-    },
-    { storageKey: SCRATCH_STORAGE_KEY, scratchCredential: credential },
-  );
   const peerPage = await peerContext.newPage();
   observePage(peerPage, 'peer');
   const peerSnapshotWait = peerPage.waitForResponse(
@@ -424,10 +481,17 @@ try {
   );
   await peerPage.goto(`${BASE}/d/${documentId}`, { waitUntil: 'domcontentloaded' });
   const [peerSnapshot, peerTicket] = await Promise.all([peerSnapshotWait, peerTicketWait]);
+  const peerCredential = await peerPage.evaluate((storageKey) => {
+    const raw = sessionStorage.getItem(storageKey);
+    return raw ? JSON.parse(raw) : null;
+  }, SCRATCH_STORAGE_KEY);
   check(
-    'second isolated browser is admitted by current scratch authority',
-    peerSnapshot.ok() && peerTicket.ok(),
-    `snapshot ${peerSnapshot.status()} ticket ${peerTicket.status()}`,
+    'copy-pasted slug admits a different anonymous editor without sharing settings',
+    peerSnapshot.ok() &&
+      peerTicket.ok() &&
+      Boolean(peerCredential?.scratchId) &&
+      peerCredential.scratchId !== credential.scratchId,
+    `snapshot ${peerSnapshot.status()} ticket ${peerTicket.status()} peer ${peerCredential?.scratchId ?? 'missing'}`,
   );
   await peerPage.waitForSelector('.cm-content', { timeout: 30_000 });
   await peerPage.waitForFunction(
@@ -558,16 +622,41 @@ try {
     check('offline edit reconnects and commits', true, offlineText);
   }
 
-  const importedMarkdown = `# Imported on ${args.browser}\n\nPortable UTF-16: 🧪\n`;
+  const importedMarkdown = `# Imported on ${args.browser}\n\nPortable UTF-16: 🧪`;
+  const convertedImport = page.waitForResponse(
+    (response) => response.request().method() === 'POST' && pathnameOf(response.url()) === '/v1/import/file',
+    { timeout: 30_000 },
+  );
   const importedResponse = page.waitForResponse(
     (response) => response.request().method() === 'POST' && pathnameOf(response.url()) === '/v1/documents',
     { timeout: 30_000 },
   );
-  await page.locator('input[accept*=".md"]').setInputFiles({
+  const draggedFile = {
     name: `browser-${args.browser}.md`,
     mimeType: 'text/markdown',
-    buffer: Buffer.from(importedMarkdown),
-  });
+    markdown: importedMarkdown,
+  };
+  await page.evaluate(({ name, mimeType, markdown }) => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([markdown], name, { type: mimeType }));
+    document.querySelector('.app')?.dispatchEvent(new DragEvent('dragenter', {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: transfer,
+    }));
+  }, draggedFile);
+  await page.waitForSelector('.document-drop-target', { timeout: 10_000 });
+  check('supported document drag shows the Markdown import target', true);
+  await page.evaluate(({ name, mimeType, markdown }) => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([markdown], name, { type: mimeType }));
+    document.querySelector('.app')?.dispatchEvent(new DragEvent('drop', {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: transfer,
+    }));
+  }, draggedFile);
+  const converted = await convertedImport;
   const imported = await importedResponse;
   const importedBody = await imported.json();
   const importedId = importedBody?.document?.id;
@@ -578,7 +667,11 @@ try {
     `Imported on ${args.browser}`,
     { timeout: 30_000 },
   );
-  check('Markdown import creates one populated document', imported.status() === 201, String(importedId));
+  check(
+    'document drop converts and creates one populated public page',
+    converted.ok() && imported.status() === 201 && importedBody?.document?.public === true,
+    `${converted.status()} / ${imported.status()} / ${String(importedId)}`,
+  );
 
   const downloadEvent = page.waitForEvent('download', { timeout: 30_000 });
   await page.locator('.titlebar-download').click();

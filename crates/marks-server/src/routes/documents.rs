@@ -17,6 +17,7 @@ use marks_auth::{
     AuthenticatedSession, DocumentAction, DocumentId, DocumentOwner, DocumentRole, EsbtSiteId,
     LinkGrantRecord, PrincipalId, ScratchId, TicketId, authorize_document_action,
     authorize_link_grant_role, bearer_secret_hash, encode_bearer_secret, issue_document_ticket,
+    issue_public_document_ticket, issue_public_scratch_document_ticket,
     issue_scratch_document_ticket, owner_acl_row, redeem_link_grant,
     require_deleted_document_owner, require_principal_document, require_scratch_document,
     resolve_document_role,
@@ -50,6 +51,7 @@ pub(crate) fn caller(app: &App, headers: &HeaderMap) -> ApiResult<Caller> {
 #[derive(Serialize)]
 struct DocumentMeta {
     id: String,
+    slug: String,
     title: String,
     engine: String,
     chars: u64,
@@ -57,6 +59,11 @@ struct DocumentMeta {
     updated_at: u64,
     deleted_at: Option<u64>,
     purge_at: Option<u64>,
+    public: bool,
+    public_role: Option<&'static str>,
+    anonymous_edits: u64,
+    persisted: bool,
+    persisted_at: Option<u64>,
 }
 
 const TRASH_RETENTION_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
@@ -64,6 +71,7 @@ const TRASH_RETENTION_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
 fn meta(row: &store::DocumentMetaRow) -> DocumentMeta {
     DocumentMeta {
         id: row.record.id.as_str().to_owned(),
+        slug: row.record.id.as_str().to_owned(),
         title: row.title.clone(),
         engine: row.engine.clone(),
         chars: row.chars,
@@ -74,10 +82,23 @@ fn meta(row: &store::DocumentMetaRow) -> DocumentMeta {
             .record
             .deleted_at_ms
             .map(|deleted| deleted.saturating_add(TRASH_RETENTION_MS)),
+        public: row.public_edit,
+        public_role: row.public_edit.then_some("editor"),
+        anonymous_edits: row.anonymous_edit_count,
+        persisted: row.persisted_at_ms.is_some(),
+        persisted_at: row.persisted_at_ms,
     }
 }
 
 /// Resolve the caller's role on a live document, failing closed to 404.
+pub(crate) fn apply_public_editor_floor(role: DocumentRole, public_edit: bool) -> DocumentRole {
+    if public_edit && matches!(role, DocumentRole::Commenter | DocumentRole::Viewer) {
+        DocumentRole::Editor
+    } else {
+        role
+    }
+}
+
 pub(crate) fn resolve_caller_role(
     conn: &Connection,
     caller: &Caller,
@@ -87,13 +108,19 @@ pub(crate) fn resolve_caller_role(
         Caller::Principal(session) => {
             let acl = store::load_acl(conn, &row.record.id)?;
             match resolve_document_role(&row.record, session.principal_id(), &acl) {
-                Ok(role) => Ok(Some(role)),
+                Ok(role) => Ok(Some(apply_public_editor_floor(role, row.public_edit))),
+                Err(_) if row.public_edit => Ok(Some(DocumentRole::Editor)),
                 Err(_) => Err(ApiError::not_found()),
             }
         }
         Caller::Scratch(scratch_id) => {
-            require_scratch_document(&row.record, scratch_id).map_err(|_| ApiError::not_found())?;
-            Ok(None)
+            if require_scratch_document(&row.record, scratch_id).is_ok() {
+                Ok(None)
+            } else if row.public_edit {
+                Ok(Some(DocumentRole::Editor))
+            } else {
+                Err(ApiError::not_found())
+            }
         }
     }
 }
@@ -270,8 +297,8 @@ pub async fn create(
         conn.execute(
             "INSERT INTO documents
                 (id, scratch_id, owner_principal_id, title, title_explicit, engine, chars,
-                 auth_epoch, snapshot, snapshot_revision, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'esbt', ?6, 1, ?7, 0, ?8, ?8)",
+                 auth_epoch, snapshot, snapshot_revision, created_at, updated_at, public_edit)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'esbt', ?6, 1, ?7, 0, ?8, ?8, ?9)",
             params![
                 id,
                 scratch_id,
@@ -280,7 +307,8 @@ pub async fn create(
                 i64::from(title.is_some()),
                 store::ms(chars as u64),
                 snapshot,
-                store::ms(now)
+                store::ms(now),
+                i64::from(matches!(&caller, Caller::Scratch(_))),
             ],
         )?;
         let id = DocumentId::new(id.clone()).map_err(|_| ApiError::internal())?;
@@ -438,8 +466,8 @@ pub async fn duplicate(
         conn.execute(
             "INSERT INTO documents
                 (id, scratch_id, owner_principal_id, title, title_explicit, engine, chars,
-                 auth_epoch, snapshot, snapshot_revision, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'esbt', ?6, 1, ?7, 0, ?8, ?8)",
+                 auth_epoch, snapshot, snapshot_revision, created_at, updated_at, public_edit)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'esbt', ?6, 1, ?7, 0, ?8, ?8, ?9)",
             params![
                 new_document,
                 scratch_id,
@@ -449,6 +477,7 @@ pub async fn duplicate(
                 store::ms(text.encode_utf16().count() as u64),
                 snapshot,
                 store::ms(now),
+                i64::from(matches!(&caller, Caller::Scratch(_))),
             ],
         )?;
         let id = DocumentId::new(new_document.clone()).map_err(|_| ApiError::internal())?;
@@ -778,9 +807,8 @@ pub async fn principal_room_session(
 
     let (site, role) = app.db.tx(|conn| {
         let row = load_live_document(conn, &document_id)?;
-        let acl = store::load_acl(conn, &document_id)?;
-        let role = resolve_document_role(&row.record, cookie.session.principal_id(), &acl)
-            .map_err(|_| ApiError::not_found())?;
+        let role = resolve_caller_role(conn, &Caller::Principal(cookie.session.clone()), &row)?
+            .ok_or_else(ApiError::not_found)?;
         let site = store::allocate_site(
             conn,
             &document_id,
@@ -791,15 +819,27 @@ pub async fn principal_room_session(
             Some(cookie.session.device_id()),
             now,
         )?;
-        let ticket = issue_document_ticket(
-            ticket_id.clone(),
-            &secret,
-            &cookie.session,
-            &row.record,
-            role,
-            site,
-            now,
-        )
+        let ticket = if matches!(row.record.owner, DocumentOwner::Scratch(_)) {
+            issue_public_document_ticket(
+                ticket_id.clone(),
+                &secret,
+                &cookie.session,
+                &row.record,
+                row.public_edit,
+                site,
+                now,
+            )
+        } else {
+            issue_document_ticket(
+                ticket_id.clone(),
+                &secret,
+                &cookie.session,
+                &row.record,
+                role,
+                site,
+                now,
+            )
+        }
         .map_err(|_| ApiError::unauthenticated())?;
         insert_principal_ticket(conn, &ticket)?;
         Ok((site, role))
@@ -828,10 +868,15 @@ pub async fn scratch_room_session(
     let secret = new_secret();
     let ticket_id = TicketId::new(new_id("ticket")).map_err(|_| ApiError::internal())?;
 
-    let site = app.db.tx(|conn| {
+    let (site, role) = app.db.tx(|conn| {
         let row = load_live_document(conn, &document_id)?;
         let record = store::load_scratch(conn, &scratch.authority.scratch_id)?
             .ok_or_else(ApiError::unauthenticated)?;
+        let role = resolve_caller_role(
+            conn,
+            &Caller::Scratch(scratch.authority.scratch_id.clone()),
+            &row,
+        )?;
         let site = store::allocate_site(
             conn,
             &document_id,
@@ -842,23 +887,35 @@ pub async fn scratch_room_session(
             None,
             now,
         )?;
-        let ticket = issue_scratch_document_ticket(
-            ticket_id.clone(),
-            &secret,
-            &record,
-            &row.record,
-            site,
-            now,
-        )
+        let ticket = if role == Some(DocumentRole::Editor) {
+            issue_public_scratch_document_ticket(
+                ticket_id.clone(),
+                &secret,
+                &record,
+                &row.record,
+                row.public_edit,
+                site,
+                now,
+            )
+        } else {
+            issue_scratch_document_ticket(
+                ticket_id.clone(),
+                &secret,
+                &record,
+                &row.record,
+                site,
+                now,
+            )
+        }
         .map_err(|_| ApiError::not_found())?;
         insert_scratch_ticket(conn, &ticket)?;
-        Ok(site)
+        Ok((site, role))
     })?;
     Ok(ticket_response(
         &document_id,
         &ticket_id,
         &secret,
-        None,
+        role,
         site,
         &crate::room::ws::scratch_identity(
             document_id.as_str(),
@@ -1226,4 +1283,29 @@ fn bump_epoch(conn: &Connection, document_id: &DocumentId) -> ApiResult<u64> {
         params![document_id.as_str(), store::ms(now_ms())],
     )?;
     Ok(store::from_ms(epoch))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn public_editor_access_cannot_be_narrowed_by_a_named_acl() {
+        assert_eq!(
+            apply_public_editor_floor(DocumentRole::Viewer, true),
+            DocumentRole::Editor
+        );
+        assert_eq!(
+            apply_public_editor_floor(DocumentRole::Commenter, true),
+            DocumentRole::Editor
+        );
+        assert_eq!(
+            apply_public_editor_floor(DocumentRole::Owner, true),
+            DocumentRole::Owner
+        );
+        assert_eq!(
+            apply_public_editor_floor(DocumentRole::Viewer, false),
+            DocumentRole::Viewer
+        );
+    }
 }

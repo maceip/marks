@@ -17,6 +17,7 @@ export type CommandCapability = keyof Pick<
 >;
 
 export type RibbonTabId =
+  | 'import'
   | 'file'
   | 'home'
   | 'insert'

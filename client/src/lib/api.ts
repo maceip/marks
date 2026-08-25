@@ -4,6 +4,8 @@ import { ServiceError } from './service-errors';
 
 export interface DocumentMeta {
   id: string;
+  /** Opaque, copyable collaboration slug. Service documents use the id itself. */
+  slug?: string;
   title: string;
   /** `esbt` for documents this client can open. Unknown engine tags stay closed. */
   engine: string;
@@ -12,6 +14,11 @@ export interface DocumentMeta {
   updated_at: number;
   deleted_at?: number | null;
   purge_at?: number | null;
+  public?: boolean;
+  public_role?: AccessRole | null;
+  anonymous_edits?: number;
+  persisted?: boolean;
+  persisted_at?: number | null;
 }
 
 export type AccessRole = 'owner' | 'editor' | 'commenter' | 'viewer';
@@ -64,6 +71,13 @@ export interface DocumentAssetDto {
   filename: string;
   mediaType: string;
   bytes: number;
+}
+
+export interface ImportedMarkdownDto {
+  title: string;
+  markdown: string;
+  kind: 'markdown' | 'pdf' | 'word' | 'excel' | 'url';
+  sourceUrl?: string | null;
 }
 
 export async function authenticatedResponse(path: string, init?: RequestInit): Promise<Response> {
@@ -180,6 +194,22 @@ export async function uploadDocumentAsset(
     },
   );
   return (await response.json()) as { asset: DocumentAssetDto };
+}
+
+export async function importDocumentFile(file: File): Promise<ImportedMarkdownDto> {
+  const response = await authenticatedResponse('/v1/import/file', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      'X-Marks-Filename': assetFilename(file.name),
+    },
+    body: file,
+  });
+  return (await response.json()) as ImportedMarkdownDto;
+}
+
+export function importWebPage(url: string): Promise<ImportedMarkdownDto> {
+  return csrfRequest('/v1/import/url', { url });
 }
 
 export async function downloadDocumentBundle(id: string): Promise<Blob> {

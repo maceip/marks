@@ -61,6 +61,7 @@ interface DesktopRibbonProps {
 type KeyTipLayer = 'tabs' | 'commands' | null;
 
 const TAB_PREFERRED: Partial<Record<RibbonTabId, string>> = {
+  import: 'I',
   file: 'F',
   home: 'H',
   insert: 'N',
@@ -75,9 +76,7 @@ const TAB_PREFERRED: Partial<Record<RibbonTabId, string>> = {
 
 export function DesktopRibbon(props: DesktopRibbonProps) {
   const center = useCommandCenter();
-  const [tab, setTab] = useState<RibbonTabId>(() =>
-    ribbonTask(center.environment) === 'inspect' ? 'view' : 'home',
-  );
+  const [tab, setTab] = useState<RibbonTabId>('import');
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [galleryOpen, setGalleryOpen] = useState<string | null>(null);
   const [keyTipLayer, setKeyTipLayer] = useState<KeyTipLayer>(null);

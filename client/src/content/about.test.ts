@@ -16,6 +16,8 @@ describe('about document', () => {
     assert.match(ABOUT_DOCUMENT, /^# Google Docs for Markdown/m);
     assert.match(ABOUT_DOCUMENT, /This page is not a brochure/);
     assert.match(ABOUT_DOCUMENT, /The marketing site is the editor/);
+    assert.match(ABOUT_DOCUMENT, /Delete this entire introduction/);
+    assert.match(ABOUT_DOCUMENT, /ordinary public Marks page/);
   });
 
   it('refreshes empty or retired About Marks copy', () => {
@@ -34,7 +36,7 @@ describe('about document', () => {
     assert.match(ABOUT_DOCUMENT, /```mermaid\s+flowchart LR/);
     assert.match(ABOUT_DOCUMENT, /:::info/);
     assert.match(ABOUT_DOCUMENT, /:::success/);
-    assert.match(ABOUT_DOCUMENT, /- \[x\] Open this page/);
+    assert.match(ABOUT_DOCUMENT, /- \[x\] Open this editable introduction/);
     assert.match(ABOUT_DOCUMENT, /\$\$/);
   });
 

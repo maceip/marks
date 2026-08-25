@@ -986,7 +986,10 @@
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
-@media (max-width: 720px), (max-height: 560px) and (pointer: coarse) {
+/* A short desktop viewport can lift the floating dock over the ribbon. The
+   ribbon is the primary command surface, so remove the redundant dock before
+   it can steal those hit targets. */
+@media (max-width: 720px), (max-height: 560px) {
   .liquid-dock { display: none; }
 }
 @media print {

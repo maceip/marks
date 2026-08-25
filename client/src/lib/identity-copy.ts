@@ -22,32 +22,32 @@ export const ROLE_COPY: Record<DocumentRole, { label: string; detail: string }> 
 };
 
 export const SCRATCH_UPGRADE_LINE =
-  'This workspace is temporary. Scan with your phone to keep it and use it on other devices.';
+  'This page is already saved and public. Log in with your phone to keep owner access and use your account on other devices.';
 
 export const SCRATCH_HONEST_LINE =
-  'Closing this tab before you keep it is unrecoverable. Scratch is a temporary capability, not a named account.';
+  'Anyone with this page URL can edit it. Closing the tab does not erase the page, but it can lose this tab’s owner capability.';
 
 export const SCRATCH_LOCAL_LINE =
   'This build keeps the page in this browser. The phone QR is the pairing shape the service will fill. No invitation is sent.';
 
 /** Single-device keep: the phone-only visitor has nothing to scan with. */
 export const SELF_KEEP_PHONE_LINE =
-  'This workspace is temporary. Keep it on this phone: its key becomes the account key, and this phone approves any device you add later.';
+  'Open this same page on a laptop to log in with a linked account. Phone-only login remains available as a fallback.';
 
 export const SELF_KEEP_DEVICE_LINE =
   'No phone with you? Keep the workspace on this device only. Its key becomes the account key until you link another device.';
 
 export const SELF_KEEP_HONEST_LINE =
-  'One device means one key. Lose this device and its browser data before linking another, and the documents are unrecoverable.';
+  'One device means one account key. Lose it before linking another device and owner access cannot be recovered; public pages remain available at their URLs.';
 
 export const SELF_KEEP_OTHER_DEVICE_LINE =
-  'Already keep documents on another device? Link instead — keeping here starts a separate workspace, and workspaces never merge on their own.';
+  'Already use Marks elsewhere? Open this public page there, then choose Log In so the phone can join that account.';
 
 export const SELF_KEEP_LOCAL_LINE =
   'This build keeps the page in this browser. The service turns this button into a real account key on this device.';
 
 export const SHARE_LOCAL_LINE =
-  'Access is staged in the interface. Scratch cannot share. Owner cannot be granted.';
+  'Anonymous pages already grant editor access to anyone with the opaque page URL. Owner cannot be granted.';
 
 export const SHARE_GRANT_LINE =
   'Grant editor, commenter, or viewer to a Marks principal. Link redeem needs a live session.';
@@ -55,7 +55,7 @@ export const SHARE_GRANT_LINE =
 export const PAIRING_STEPS = [
   {
     title: 'Bind this browser',
-    detail: 'A pending device key is bound once. Generating the key does not keep the workspace.',
+    detail: 'A pending device key is bound once. Generating the key does not log in the workspace.',
   },
   {
     title: 'Mint the pairing',
@@ -82,12 +82,9 @@ export const RETURN_VISIT_STEPS = [
   },
   {
     title: 'Scratch',
-    detail: 'If there is no enrolled key, the tab is a new temporary workspace.',
+    detail: 'If there is no enrolled key, the tab gets a new public page and an anonymous editing capability.',
   },
 ] as const;
-
-export const RECONNECT_LINE =
-  'Reconnect mints a new one-use ticket and keeps this document site. Tickets never go in the URL.';
 
 export const LOGOUT_LOCAL_LINE =
   'There is no live session cookie to revoke on this tab.';

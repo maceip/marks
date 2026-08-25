@@ -24,6 +24,7 @@ import {
   acknowledgePendingMutation,
   appendPendingMutation,
   checkpointReplicaJournal,
+  deleteReplicaJournal,
   JOURNAL_RETAINED_THRESHOLD,
   readReplicaJournal,
   shouldPruneHistory,
@@ -691,7 +692,7 @@ export class EsbtEngine implements CollabSession {
 
   private applyTicketPermissions(ticket: RoomTicket): void {
     const next: DocumentCapabilities['role'] =
-      ticket.authority === 'scratch' ? 'scratch' : ticket.role;
+      ticket.authority === 'scratch' ? (ticket.role ?? 'scratch') : ticket.role;
     this.applyPermissionRole(next);
   }
 
@@ -761,6 +762,33 @@ export class EsbtEngine implements CollabSession {
       stored = await readReplicaJournal(this.docId);
     } catch (error) {
       this.recordStorageError('The offline journal could not be read. Server sync will continue.', error);
+    }
+    if (stored && isAboutDocument(this.docId)) {
+      let probe: EsbtDocument | null = null;
+      try {
+        probe = await EsbtDocument.create({
+          runtime,
+          siteId: marksSiteToEngine(stored.siteId),
+          config: MARKS_DOCUMENT_CONFIG,
+        });
+        if (stored.snapshot.byteLength > 0) probe.applySnapshot(stored.snapshot);
+      } catch (error) {
+        // The built-in introduction has no user-owned source of truth. Old
+        // deployments may have cached an incompatible ESBT artifact under its
+        // fixed key; discard only that cache and reseed the canonical Markdown.
+        stored = null;
+        try {
+          await deleteReplicaJournal(this.docId);
+        } catch (deleteError) {
+          this.recordStorageError(
+            'The outdated welcome-page cache could not be removed. A fresh copy is open for this visit.',
+            deleteError,
+          );
+        }
+        console.warn('marks: discarded an incompatible built-in welcome snapshot', error);
+      } finally {
+        probe?.destroy();
+      }
     }
     if (stored) {
       this.permissionRole = this.access
