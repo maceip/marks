@@ -81,6 +81,7 @@ test('mobile and service proofs fail fast without sharing a mutable client artif
 test('anonymous and copied-slug failures leave opening shells with a retry surface', () => {
   const app = read('client/src/App.tsx');
   const sessionHook = read('client/src/hooks/useSession.ts');
+  const documentsHook = read('client/src/hooks/useDocuments.ts');
   const caller = read('client/src/auth/caller.ts');
   const pendingDevice = read('client/src/auth/pending-device.ts');
   const api = read('client/src/lib/api.ts');
@@ -97,6 +98,11 @@ test('anonymous and copied-slug failures leave opening shells with a retry surfa
   assert.match(network, /await response\.arrayBuffer\(\)/);
   assert.match(network, /Promise\.race\(\[completed, aborted\]\)/);
   assert.match(sessionHook, /setError\(error instanceof Error/);
+  assert.doesNotMatch(
+    documentsHook,
+    /documentRepository\.create\([\s\S]{0,160}?await refresh\(\)/,
+    'a committed anonymous slug must not wait behind a nonessential catalog refresh',
+  );
   assert.match(metadata, /setError\('Marks could not reach the document service in time\.'/);
   assert.match(app, /Page could not open/);
   assert.match(app, /Document connection failed/);

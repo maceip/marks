@@ -92,37 +92,32 @@ export function useDocuments(enabled = true): DocumentsState {
     };
   }, [enabled, refresh]);
 
-  const create = useCallback(async (draft?: LocalDocumentDraft) => {
-    const created = await documentRepository.create(draft);
-    await refresh();
-    return created;
-  }, [refresh]);
+  // Repository mutations emit the subscribed change event themselves. Their
+  // returned object is the committed result and must not be held behind a
+  // secondary catalog refresh: that read is best-effort UI freshness, and a
+  // stalled read after a successful POST must never hide the new slug or turn
+  // a committed mutation into an apparent failure.
+  const create = useCallback(
+    (draft?: LocalDocumentDraft) => documentRepository.create(draft),
+    [],
+  );
 
   const rename = useCallback(
-    async (id: string, title: string) => {
-      const renamed = await documentRepository.rename(id, title);
-      await refresh();
-      return renamed;
-    },
-    [refresh],
+    (id: string, title: string) => documentRepository.rename(id, title),
+    [],
   );
 
   const duplicate = useCallback(
-    async (id: string, markdown?: string) => {
-      const duplicated = await documentRepository.duplicate(id, markdown);
-      await refresh();
-      return duplicated;
-    },
-    [refresh],
+    (id: string, markdown?: string) => documentRepository.duplicate(id, markdown),
+    [],
   );
 
   const remove = useCallback(
     async (id: string) => {
       await documentRepository.remove(id);
       if (documentRepository.mode === 'service') void forgetDocumentMeta(id);
-      await refresh();
     },
-    [refresh],
+    [],
   );
 
   return { documents, loading, error, stale, refresh, create, rename, duplicate, remove };
