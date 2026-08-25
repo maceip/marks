@@ -223,10 +223,14 @@ function classifyPath(path) {
     return { profile: 'full', runtime: true, reason: 'cross-browser-or-protocol-runtime' };
   }
 
-  // The design-system catalog proof is browser-based but Chromium-only, and
-  // the motion contract is a pure Node check; neither needs the complete
-  // three-browser escalation on its own.
-  if (path === 'scripts/check-design-system.mjs') {
+  // The design-system catalog, release-coexistence, and mobile UI proofs
+  // are browser-based but Chromium-only, and the motion contract is a pure
+  // Node check; none needs the complete three-browser escalation alone.
+  if (
+    path === 'scripts/check-design-system.mjs' ||
+    path === 'scripts/check-two-release-coexistence.mjs' ||
+    path === 'scripts/check-mobile-ui.mjs'
+  ) {
     return { profile: 'web-chromium', runtime: false, reason: 'design-system-proof' };
   }
   if (path === 'scripts/check-motion-tokens.mjs') {

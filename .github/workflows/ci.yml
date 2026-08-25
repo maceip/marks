@@ -373,6 +373,17 @@ jobs:
           fi
           bash scripts/run-service-ci.sh "${args[@]}"
 
+      # Both proofs spawn their own isolated server from the debug binary
+      # built above; the two-release proof also performs its own builds
+      # into temporary directories and never touches client/dist.
+      - name: Two-release asset coexistence proof
+        if: matrix.browser == 'chromium'
+        run: npm run check:two-release
+
+      - name: Mobile browser UI checks
+        if: matrix.browser == 'chromium'
+        run: npm run check:mobile-ui
+
       - name: Upload failure evidence
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

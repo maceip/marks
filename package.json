@@ -42,6 +42,8 @@
     "visual:ribbon": "node scripts/visual/ribbon.mjs",
     "inventory:design-system": "node scripts/inventory-design-system.mjs",
     "test:design-system": "npm run build && node scripts/check-design-system.mjs",
+    "check:two-release": "node scripts/check-two-release-coexistence.mjs",
+    "check:mobile-ui": "node scripts/check-mobile-ui.mjs",
     "deploy:secure-build": "bash scripts/deploy-secure-build.sh deploy",
     "rollback:secure-build": "bash scripts/deploy-secure-build.sh rollback",
     "deploy:status": "bash scripts/deploy-secure-build.sh status"

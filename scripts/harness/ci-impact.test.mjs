@@ -238,12 +238,18 @@ test('markdown outside explicit documentation roots keeps runtime coverage', () 
 });
 
 test('the design-system proofs run their own lanes without full escalation', () => {
-  const catalog = classifyPaths(['scripts/check-design-system.mjs']);
-  assert.equal(catalog.profile, 'web-chromium');
-  assert.equal(catalog.runtimeChanged, false);
-  assert.equal(catalog.runWeb, true);
-  assert.equal(catalog.runService, true);
-  assert.deepEqual(catalog.browsers, ['chromium']);
+  for (const path of [
+    'scripts/check-design-system.mjs',
+    'scripts/check-two-release-coexistence.mjs',
+    'scripts/check-mobile-ui.mjs',
+  ]) {
+    const proof = classifyPaths([path]);
+    assert.equal(proof.profile, 'web-chromium', path);
+    assert.equal(proof.runtimeChanged, false, path);
+    assert.equal(proof.runWeb, true, path);
+    assert.equal(proof.runService, true, path);
+    assert.deepEqual(proof.browsers, ['chromium'], path);
+  }
 
   const motion = classifyPaths(['scripts/check-motion-tokens.mjs']);
   assert.equal(motion.profile, 'web-unit');

@@ -246,6 +246,10 @@ run_local_gate() {
   echo "==> design-system browser catalog against the production build"
   (cd "$ROOT" && node scripts/check-design-system.mjs)
 
+  echo "==> two-release asset coexistence and mobile UI proofs"
+  (cd "$ROOT" && npm run check:two-release)
+  (cd "$ROOT" && npm run check:mobile-ui)
+
   (
     cd "$ROOT"
     export MARKS_REQUIRE_RELEASE=1

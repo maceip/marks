@@ -60,6 +60,11 @@ function StateMatrix({ kind = 'button' }: { kind?: 'button' | 'input' | 'pill' }
   );
 }
 
+// The release-coexistence proof builds this lazily loaded chunk twice with
+// different salts so its hashed filename differs across the two builds;
+// the salt must be rendered or the bundler would eliminate it.
+const RELEASE_SALT = import.meta.env.VITE_MARKS_RELEASE_SALT ?? 'dev';
+
 export function DesignSystem({ onBack }: { onBack: () => void }) {
   const [theme, setTheme] = useState<Toggle>('light');
   const [density, setDensity] = useState('comfortable');
@@ -93,7 +98,7 @@ export function DesignSystem({ onBack }: { onBack: () => void }) {
   }, [density, glass, material, motion, theme]);
 
   return (
-    <div className="design-system">
+    <div className="design-system" data-release-salt={RELEASE_SALT}>
       <header className="ds-header">
         <div>
           <span className="ds-eyebrow">Internal catalog</span>
