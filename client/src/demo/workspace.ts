@@ -17,8 +17,15 @@ export interface LocalDocumentDraft {
   title?: string;
   content?: string;
   templateId?: TemplateId;
+  /** Semantic action key used to recover a service create across reloads. */
+  requestScope?: string;
   /** Stable retry key for a service-side atomic create. Ignored in local mode. */
   requestId?: string;
+}
+
+export interface MaterializedDocumentDraft {
+  title?: string;
+  content: string;
 }
 
 const WORKSPACE_KEY = 'marks:ui-workspace:v1';
@@ -353,6 +360,18 @@ function deriveTitle(markdown: string, fallback: string): string {
   return heading?.slice(0, 90) || fallback;
 }
 
+export function materializeDocumentDraft(
+  draft: LocalDocumentDraft = {},
+): MaterializedDocumentDraft {
+  const template = DOCUMENT_TEMPLATES.find((item) => item.id === draft.templateId);
+  const content = draft.content ?? template?.content ?? '';
+  const explicitTitle = draft.title?.trim();
+  return {
+    title: explicitTitle || (template ? deriveTitle(content, template.name) : undefined),
+    content,
+  };
+}
+
 export function writeLocalDocumentText(id: string, markdown: string): void {
   localStorage.setItem(textKey(id), markdown);
   const documents = loadLocalDocuments();
@@ -368,19 +387,18 @@ export function writeLocalDocumentText(id: string, markdown: string): void {
 }
 
 export function createLocalDocument(draft: LocalDocumentDraft = {}): DocumentMeta {
-  const template = DOCUMENT_TEMPLATES.find((item) => item.id === draft.templateId);
-  const content = draft.content ?? template?.content ?? '';
+  const materialized = materializeDocumentDraft(draft);
   const now = Date.now();
   const id = `local-${crypto.randomUUID()}`;
   const document: DocumentMeta = {
     id,
-    title: draft.title?.trim() || deriveTitle(content, template?.name ?? 'Untitled'),
+    title: materialized.title ?? deriveTitle(materialized.content, 'Untitled'),
     engine: 'esbt',
-    chars: content.length,
+    chars: materialized.content.length,
     created_at: now,
     updated_at: now,
   };
-  localStorage.setItem(textKey(id), content);
+  localStorage.setItem(textKey(id), materialized.content);
   saveDocuments([document, ...loadLocalDocuments()]);
   return document;
 }

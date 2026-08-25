@@ -14,7 +14,7 @@ export interface DocumentsState {
   refresh: () => Promise<void>;
   create: (draft?: LocalDocumentDraft) => Promise<DocumentMeta>;
   rename: (id: string, title: string) => Promise<DocumentMeta | null>;
-  duplicate: (id: string, markdown?: string) => Promise<DocumentMeta | null>;
+  duplicate: (id: string, markdown?: string, requestId?: string) => Promise<DocumentMeta | null>;
   remove: (id: string) => Promise<void>;
 }
 
@@ -108,7 +108,8 @@ export function useDocuments(enabled = true): DocumentsState {
   );
 
   const duplicate = useCallback(
-    (id: string, markdown?: string) => documentRepository.duplicate(id, markdown),
+    (id: string, markdown?: string, requestId?: string) =>
+      documentRepository.duplicate(id, markdown, requestId),
     [],
   );
 

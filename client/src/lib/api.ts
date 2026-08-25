@@ -199,8 +199,14 @@ export function renameDocument(id: string, title: string): Promise<{ document: D
   return request(`/v1/documents/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) });
 }
 
-export function duplicateDocument(id: string): Promise<{ document: DocumentMeta }> {
-  return request(`/v1/documents/${id}/duplicate`, { method: 'POST', body: JSON.stringify({}) });
+export function duplicateDocument(
+  id: string,
+  requestId?: string,
+): Promise<{ document: DocumentMeta; replayed?: boolean }> {
+  return request(`/v1/documents/${id}/duplicate`, {
+    method: 'POST',
+    body: JSON.stringify({ requestId }),
+  });
 }
 
 export function deleteDocument(id: string): Promise<{ deleted: boolean }> {

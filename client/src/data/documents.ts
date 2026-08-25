@@ -6,6 +6,7 @@ import {
   getLocalDocument,
   loadLocalDocuments,
   loadLocalTrash,
+  materializeDocumentDraft,
   purgeLocalDocument,
   renameLocalDocument,
   restoreLocalDocument,
@@ -32,7 +33,7 @@ export interface DocumentRepository {
   get(id: string): Promise<DocumentMeta | null>;
   create(draft?: LocalDocumentDraft): Promise<DocumentMeta>;
   rename(id: string, title: string): Promise<DocumentMeta | null>;
-  duplicate(id: string, markdown?: string): Promise<DocumentMeta | null>;
+  duplicate(id: string, markdown?: string, requestId?: string): Promise<DocumentMeta | null>;
   remove(id: string): Promise<void>;
   listTrash(): Promise<DocumentMeta[]>;
   restore(id: string): Promise<DocumentMeta | null>;
@@ -118,9 +119,10 @@ function createDocumentRepository(): DocumentRepository {
       }
     },
     async create(draft) {
+      const materialized = materializeDocumentDraft(draft);
       const { document } = await (await loadServiceApi()).createDocument({
-        title: draft?.title,
-        markdown: draft?.content,
+        title: materialized.title,
+        markdown: materialized.content,
         requestId: draft?.requestId,
       });
       signalDocumentRepositoryChange();
@@ -136,9 +138,9 @@ function createDocumentRepository(): DocumentRepository {
         throw error;
       }
     },
-    async duplicate(id) {
+    async duplicate(id, _markdown, requestId) {
       try {
-        const { document } = await (await loadServiceApi()).duplicateDocument(id);
+        const { document } = await (await loadServiceApi()).duplicateDocument(id, requestId);
         signalDocumentRepositoryChange();
         return document;
       } catch (error) {

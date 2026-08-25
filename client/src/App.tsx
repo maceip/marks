@@ -20,8 +20,11 @@ import { LiquidDock } from './components/shell/LiquidDock';
 import { ABOUT_DOCUMENT_ID, ABOUT_DOCUMENT_TITLE, isAboutDocument } from './content/about';
 import { signalDocumentRepositoryChange } from './data/documents';
 import {
-  anonymousStarterRequestId,
-  confirmAnonymousStarterRequest,
+  confirmDocumentCreateRequest,
+  documentCreateRequestScope,
+  documentDuplicateRequestScope,
+  pendingDocumentCreateRequest,
+  pendingDocumentCreateRequestId,
 } from './browser/create-request';
 import { runWithTimeout, SERVICE_REQUEST_TIMEOUT_MS } from './browser/network.ts';
 import { readPairingHash } from './lib/pairing-link';
@@ -31,7 +34,11 @@ import { SERVICE_ERROR_COPY } from './lib/service-errors';
 import { TopBar, type ViewMode } from './components/shell/TopBar';
 import { ToastRegion, type ToastMessage } from './components/overlays/ToastRegion';
 import { VoiceBar } from './components/overlays/VoiceBar';
-import type { LocalDocumentDraft, TemplateId } from './demo/workspace';
+import {
+  materializeDocumentDraft,
+  type LocalDocumentDraft,
+  type TemplateId,
+} from './demo/workspace';
 import { useBrowserSurface } from './hooks/useBrowserSurface';
 import { useDocumentMeta } from './hooks/useDocumentMeta';
 import { useDocuments } from './hooks/useDocuments';
@@ -461,7 +468,14 @@ export function App() {
   const createDocument = useCallback(async (draft?: LocalDocumentDraft) => {
     try {
       setUiError(null);
-      const created = await documents.create(draft);
+      const createScope = documentCreateRequestScope(draft);
+      const materialized = materializeDocumentDraft(draft);
+      const pending = UI_DATA_MODE === 'service' && !draft?.requestId
+        ? pendingDocumentCreateRequest(createScope, materialized)
+        : null;
+      const requestId = draft?.requestId ?? pending?.requestId;
+      const created = await documents.create({ ...(pending?.draft ?? materialized), requestId });
+      if (pending) confirmDocumentCreateRequest(createScope, pending.requestId);
       setDialog(null);
       openDocument(created.id);
       notify(
@@ -487,23 +501,29 @@ export function App() {
       return;
     }
     initialAnonymousPageStarted.current = true;
-    const requestId = anonymousStarterRequestId();
     void runWithTimeout(
       async (signal) => {
         const { ABOUT_DOCUMENT } = await import('./content/marketing-markdown');
         if (signal.aborted) throw signal.reason;
-        return documents.create({
+        const draft = {
           title: ABOUT_DOCUMENT_TITLE,
           content: ABOUT_DOCUMENT,
-          requestId,
-        });
+          requestScope: 'automatic-anonymous-starter:v1',
+        };
+        const createScope = documentCreateRequestScope(draft);
+        const pending = pendingDocumentCreateRequest(
+          createScope,
+          materializeDocumentDraft(draft),
+        );
+        const created = await documents.create({ ...pending.draft, requestId: pending.requestId });
+        return { created, createScope, requestId: pending.requestId };
       },
       SERVICE_REQUEST_TIMEOUT_MS,
       null,
       new DOMException('The starter page took too long to create.', 'TimeoutError'),
     )
-      .then((created) => {
-        confirmAnonymousStarterRequest(requestId);
+      .then(({ created, createScope, requestId }) => {
+        confirmDocumentCreateRequest(createScope, requestId);
         if (location.pathname === '/') {
           setMode(phone ? 'preview' : 'split');
           setPreparedMarketingPresentation(`${created.id}:${phone ? 'phone' : 'wide'}`);
@@ -554,7 +574,11 @@ export function App() {
     }
     try {
       const imported = await (await loadServiceApi()).importWebPage(url);
-      await createDocument({ title: imported.title, content: imported.markdown });
+      await createDocument({
+        title: imported.title,
+        content: imported.markdown,
+        requestScope: `web-url:${url.trim()}`,
+      });
     } catch (error) {
       notify(
         'URL import failed',
@@ -580,9 +604,14 @@ export function App() {
 
   const duplicateDocument = useCallback(async () => {
     if (!docId) return;
+    const createScope = documentDuplicateRequestScope(docId);
+    const requestId = UI_DATA_MODE === 'service'
+      ? pendingDocumentCreateRequestId(createScope)
+      : undefined;
     try {
-      const duplicate = await documents.duplicate(docId, session?.getText());
+      const duplicate = await documents.duplicate(docId, session?.getText(), requestId);
       if (!duplicate) throw new Error('missing document');
+      if (requestId) confirmDocumentCreateRequest(createScope, requestId);
       openDocument(duplicate.id);
       notify('Document duplicated', 'The copy is independent and ready to edit.', 'success');
     } catch {

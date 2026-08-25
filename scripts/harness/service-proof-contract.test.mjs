@@ -123,11 +123,16 @@ test('anonymous and copied-slug failures leave opening shells with a retry surfa
   assert.match(benchmark, /try \{[\s\S]*?worker = new BenchWorker\(\)/);
   assert.match(workerSupervisor, /try \{[\s\S]*?this\.worker = this\.spawn\(\)[\s\S]*?catch/);
   assert.match(workerSupervisor, /queueMicrotask\(\(\) => this\.options\.onTerminal\(failure\)\)/);
-  assert.match(app, /requestId = anonymousStarterRequestId\(\)/);
-  assert.match(app, /confirmAnonymousStarterRequest\(requestId\)/);
+  assert.match(app, /pendingDocumentCreateRequestId\(createScope\)/);
+  assert.match(app, /pendingDocumentCreateRequest\(createScope, materialized\)/);
+  assert.match(app, /confirmDocumentCreateRequest\(createScope, requestId\)/);
+  assert.match(app, /documentDuplicateRequestScope\(docId\)/);
   assert.match(createRequest, /sessionStorage/);
+  assert.match(createRequest, /JSON\.stringify\(created\)/);
   assert.match(mermaid, /validateMermaidSource\(source\)/);
   assert.match(mermaid, /maxTextSize: MAX_DIAGRAM_BYTES/);
+  assert.match(mermaid, /renderCircuitError/);
+  assert.match(mermaid, /eligible\.slice\(index\)/);
   assert.match(mermaid, /maxEdges: 64/);
   assert.match(mermaid, /MERMAID_RENDER_TIMEOUT_MS/);
 });
