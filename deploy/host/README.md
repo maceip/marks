@@ -114,8 +114,10 @@ directories under a root-hidden per-release workspace; all three are deleted
 after success or failure, and all stale workspaces are purged at the start of
 the next locked deploy. A prior revision therefore cannot persist `.npmrc`,
 `script-shell`, Cargo config, `rustc-wrapper`, registry, or fingerprint state
-into a reverted-good build. Fresh Cargo binaries are imported with no-follow
-descriptors and strict type, owner, mode, link-count, and size checks;
+into a reverted-good build. After Cargo finishes, its normally hard-linked
+release binaries are copied to new single-link inodes in a freshly created
+export directory. Those exports are imported with no-follow descriptors and
+strict type, owner, mode, link-count, and size checks;
 repository-built code is executed only in bounded unprivileged transient
 units as a dedicated locked `marks-build` system identity. `marks-deploy`
 owns ingress only, so build code cannot signal, ptrace, or traverse uploader

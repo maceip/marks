@@ -217,6 +217,15 @@ test('every untrusted build process has a wall-clock and resource bound', () => 
   assert.match(releaseRoot, /"--log-driver=none"/u);
   assert.match(releaseRoot, /"--network=none"/u);
   assert.match(releaseRoot, /cargo build[\s\S]{0,160}--offline/u);
+  assert.match(releaseRoot, /\/usr\/bin\/mkdir -m 0700 \/target\/marks-export/u);
+  assert.match(
+    releaseRoot,
+    /\/usr\/bin\/install -m 0500 \/target\/release\/marks-server[\s\S]{0,80}\/target\/marks-export\/marks-server/u,
+  );
+  assert.match(
+    releaseRoot,
+    /\/usr\/bin\/install -m 0500 \/target\/release\/marks-admin[\s\S]{0,80}\/target\/marks-export\/marks-admin/u,
+  );
   assert.match(releaseRoot, /cargo fetch --locked/u);
   assert.match(releaseRoot, /def validate_fetch_egress_policy\(/u);
   assert.match(releaseRoot, /network\.get\("EnableIPv4"\) is not True/u);

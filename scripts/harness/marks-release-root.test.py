@@ -841,6 +841,21 @@ class ReleaseRootContract(unittest.TestCase):
         self.assertIn("--log-driver=none", docker)
         self.assertIn("--network=none", docker)
         self.assertTrue(any("--offline" in item for item in docker))
+        build_script = next(item for item in docker if "cargo build" in item)
+        self.assertIn(
+            "/usr/bin/mkdir -m 0700 /target/marks-export",
+            build_script,
+        )
+        self.assertIn(
+            "/usr/bin/install -m 0500 /target/release/marks-server "
+            "/target/marks-export/marks-server",
+            build_script,
+        )
+        self.assertIn(
+            "/usr/bin/install -m 0500 /target/release/marks-admin "
+            "/target/marks-export/marks-admin",
+            build_script,
+        )
         self.assertIn("--name", docker)
         self.assertIn(f"--volume={cargo / 'home'}:/cargo", docker)
         self.assertIn(f"--volume={cargo / 'target'}:/target", docker)
@@ -911,12 +926,12 @@ class ReleaseRootContract(unittest.TestCase):
             workspaces.mkdir(parents=True, exist_ok=True)
             os.chmod(workspaces, 0o700)
             cargo = workspaces / f".cargo-{name}"
-            release = cargo / "target" / "release"
-            release.mkdir(parents=True, exist_ok=True)
+            export = cargo / "target" / "marks-export"
+            export.mkdir(parents=True, exist_ok=True)
             os.chmod(cargo, 0o700)
             os.chmod(cargo / "target", 0o700)
-            os.chmod(release, 0o700)
-            source = release / "marks-server"
+            os.chmod(export, 0o700)
+            source = export / "marks-server"
             destination = self.root / f"imported-{name}"
             return cargo, source, destination
 
@@ -943,6 +958,13 @@ class ReleaseRootContract(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "invalid size"):
                 mod.copy_built_binary(cargo, "marks-server", destination)
             source.unlink()
+
+        with self.subTest("hardlink"):
+            cargo, source, destination = prepare("hardlink")
+            source.write_bytes(b"binary")
+            os.link(source, source.with_name("second-link"))
+            with self.assertRaisesRegex(RuntimeError, "multiple filesystem links"):
+                mod.copy_built_binary(cargo, "marks-server", destination)
 
         with self.subTest("wrong-owner"):
             _cargo, source, _destination = prepare("owner")

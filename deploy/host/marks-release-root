@@ -1489,7 +1489,7 @@ def create_cargo_workspace(revision: str) -> Path:
 
 
 def copy_built_binary(cargo: Path, name: str, destination: Path) -> None:
-    """Import one Cargo output through no-follow descriptors and hard bounds."""
+    """Import one fresh Cargo export through no-follow descriptors and hard bounds."""
     if name not in ("marks-server", "marks-admin"):
         fail("unsupported built binary name")
     uid, gid = build_identity()
@@ -1516,17 +1516,17 @@ def copy_built_binary(cargo: Path, name: str, destination: Path) -> None:
         )
         descriptors.append(target_fd)
         validate_directory_descriptor(target_fd, (uid, gid), "Cargo target cache")
-        release_fd = os.open(
-            "release",
+        export_fd = os.open(
+            "marks-export",
             os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
             dir_fd=target_fd,
         )
-        descriptors.append(release_fd)
-        validate_directory_descriptor(release_fd, (uid, gid), "Cargo release directory")
+        descriptors.append(export_fd)
+        validate_directory_descriptor(export_fd, (uid, gid), "Cargo binary export directory")
         binary_fd = os.open(
             name,
             os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
-            dir_fd=release_fd,
+            dir_fd=export_fd,
         )
         descriptors.append(binary_fd)
         before = validate_built_binary_descriptor(binary_fd, (uid, gid), name)
@@ -1691,7 +1691,12 @@ def docker_build(source: Path, cargo: Path, revision: str, build) -> None:
             "--workdir=/work", BUILDER_IMAGE, "/bin/bash", "-ceu",
             "case \"$(rustc --version)\" in 'rustc 1.88.0 '*) ;; *) exit 1;; esac; "
             "cargo build -p marks-server --release --locked --offline --no-default-features "
-            "--bin marks-server --bin marks-admin \"$@\"",
+            "--bin marks-server --bin marks-admin \"$@\"; "
+            "/usr/bin/mkdir -m 0700 /target/marks-export; "
+            "/usr/bin/install -m 0500 /target/release/marks-server "
+            "/target/marks-export/marks-server; "
+            "/usr/bin/install -m 0500 /target/release/marks-admin "
+            "/target/marks-export/marks-admin",
             "marks-product-build",
             *cargo_feature_args,
         ], timeout=DOCKER_RUNTIME_SECONDS, env=fixed_environment())
