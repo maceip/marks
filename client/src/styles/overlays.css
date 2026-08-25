@@ -240,6 +240,8 @@
 .command-results strong { font-size: 12px; }
 .command-results small { color: var(--color-fg-muted); font-size: 10.5px; }
 .command-results > button > span:last-child { grid-auto-flow: column; align-items: center; gap: 8px; }
+.command-results .glyph { --marks-icon-size: 28px; }
+:root[data-shell='phone'] .command-results .glyph { --marks-icon-size: 30px; }
 .command-results em { color: var(--color-fg-subtle); font-size: 9px; font-style: normal; text-transform: uppercase; letter-spacing: .06em; }
 .command-results kbd { color: var(--color-fg-muted); font: 10px var(--font-family-mono); }
 .command-results > p { padding: 24px; color: var(--color-fg-muted); text-align: center; }

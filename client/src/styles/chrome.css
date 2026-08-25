@@ -28,6 +28,13 @@
   pointer-events: auto;
 }
 
+.titlebar .marks-icon { --marks-icon-size: 24px; }
+.quick-access > .icon-button .glyph { --marks-icon-size: 24px; }
+.quick-access-menu .glyph { --marks-icon-size: 20px; }
+.mini-toolbar .glyph { --marks-icon-size: 24px; }
+.draft-tools-modes .glyph { --marks-icon-size: 28px; }
+.liquid-dock .marks-icon { --marks-icon-size: 24px; }
+
 .ribbon-command:active .glyph.marks-icon-live .marks-icon-body,
 .phone-ribbon button:active .glyph.marks-icon-live .marks-icon-body {
   --icon-press: 1;
@@ -136,7 +143,7 @@
   justify-content: center;
   gap: 2px;
   min-width: 50px;
-  height: 48px;
+  height: 52px;
   padding: 2px 5px;
   border: 1px solid color-mix(in srgb, var(--color-brand-primary) 8%, transparent);
   border-radius: 15px;
@@ -151,7 +158,7 @@
 
 .ribbon-command-large {
   min-width: 64px;
-  height: 58px;
+  height: 62px;
 }
 
 .ribbon-command:hover:not(:disabled) {
@@ -497,6 +504,14 @@
   animation: ribbon-deck-in var(--duration-fast) var(--ease-out) both;
 }
 
+/* Keep the floating document actions out of the ribbon grid. The material
+   host gives ordinary direct children relative positioning, which would
+   otherwise consume the command deck's enlarged icon row. */
+.app-ribbon.surface-material-host > .liquid-dock {
+  position: fixed;
+  z-index: 48;
+}
+
 .mini-toolbar button {
   display: grid;
   place-items: center;
@@ -511,7 +526,7 @@
 }
 
 .mini-toolbar button:hover { background: var(--color-action-soft); color: var(--color-action); }
-.mini-toolbar span { color: var(--color-fg-subtle); font-size: 10px; padding-right: 4px; }
+.mini-toolbar span:not(.marks-icon) { color: var(--color-fg-subtle); font-size: 10px; padding-right: 4px; }
 
 .workspace-shell { position: relative; }
 
@@ -605,7 +620,7 @@
 
 :root[data-shell='phone'] .main.route-document {
   grid-template-rows: var(--layout-titlebar-height) minmax(0, 1fr) 0;
-  padding-bottom: calc(118px + env(safe-area-inset-bottom) + var(--keyboard-inset, 0px));
+  padding-bottom: calc(var(--layout-mobile-ribbon-height) + env(safe-area-inset-bottom) + var(--keyboard-inset, 0px));
 }
 
 :root[data-shell='phone'] .app-ribbon.ribbon-document {
@@ -665,7 +680,7 @@
   left: 0;
   z-index: 56;
   display: grid;
-  grid-template-rows: 72px 54px;
+  grid-template-rows: 76px 60px;
   min-height: calc(var(--layout-mobile-ribbon-height) + env(safe-area-inset-bottom));
   padding-bottom: env(safe-area-inset-bottom);
   border-top: 1px solid var(--material-border);
@@ -708,6 +723,7 @@
   scroll-snap-align: start;
 }
 .phone-ribbon-commands { display: flex; align-items: center; gap: 4px; }
+.phone-ribbon-commands .glyph { --marks-icon-size: 34px; }
 .phone-ribbon-commands button {
   display: grid;
   position: relative;
@@ -715,7 +731,7 @@
   align-content: center;
   gap: 1px;
   min-width: 54px;
-  height: 52px;
+  height: 56px;
   padding: 2px 5px;
   border: 1px solid transparent;
   border-radius: 13px;
@@ -724,7 +740,7 @@
   font-size: 8.5px;
   font-weight: 620;
 }
-.phone-ribbon-commands button > span { max-width: 68px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.phone-ribbon-commands button > span:not(.marks-icon) { max-width: 68px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .phone-ribbon-commands button.active { border-color: color-mix(in srgb, var(--color-action) 28%, transparent); background: var(--color-action-soft); color: var(--color-action); }
 .phone-ribbon-commands button.contextual { color: var(--color-brand-positive); }
 .phone-ribbon-commands button:disabled { opacity: .36; }
@@ -740,11 +756,12 @@
   scrollbar-width: none;
   scroll-snap-type: x proximity;
 }
+.phone-ribbon-tabs .glyph { --marks-icon-size: 28px; }
 .phone-ribbon-tabs > button {
   position: relative;
   display: grid;
   flex: 1 0 64px;
-  grid-template-rows: 24px 14px;
+  grid-template-rows: 30px 14px;
   justify-items: center;
   align-items: center;
   gap: 1px;
@@ -766,8 +783,8 @@
 
 .phone-composer.keyboard-open .phone-identity { display: none; }
 .phone-composer.keyboard-open .phone-ribbon {
-  grid-template-rows: 58px;
-  min-height: calc(58px + env(safe-area-inset-bottom));
+  grid-template-rows: 64px;
+  min-height: calc(64px + env(safe-area-inset-bottom));
 }
 .phone-composer.keyboard-open .phone-ribbon-tabs { display: none; }
 .phone-composer.keyboard-open .phone-ribbon-deck { border-bottom: 0; }
@@ -807,6 +824,7 @@
   letter-spacing: 0.01em;
   cursor: pointer;
 }
+.app-rail .glyph { --marks-icon-size: 40px; }
 
 .app-rail button:hover {
   color: var(--color-fg-default);
@@ -830,11 +848,21 @@
 
 :root[data-shell='fold-book'] .main.route-document,
 :root[data-shell='fold-laptop'] .main.route-document {
+  --layout-ribbon-height: 164px;
   position: relative;
   grid-template-rows: var(--layout-ribbon-height) minmax(0, 1fr) var(--layout-statusbar-height);
   padding-bottom: 0;
   padding-left: var(--layout-app-rail-width);
 }
+
+:root[data-shell='fold-book'] .titlebar .marks-icon,
+:root[data-shell='fold-laptop'] .titlebar .marks-icon,
+:root[data-shell='phone'] .titlebar .marks-icon { --marks-icon-size: 28px; }
+
+:root[data-shell='fold-book'] .ribbon-command,
+:root[data-shell='fold-laptop'] .ribbon-command { height: 56px; }
+:root[data-shell='fold-book'] .ribbon-command-large,
+:root[data-shell='fold-laptop'] .ribbon-command-large { height: 66px; }
 
 :root[data-shell='fold-book'] .app-ribbon.ribbon-document,
 :root[data-shell='fold-laptop'] .app-ribbon.ribbon-document {
@@ -881,7 +909,8 @@
   padding-left: 0;
 }
 
-:root[data-density='compact'] .ribbon-command { height: 42px; min-width: 46px; }
+:root[data-density='compact'] .ribbon-command { height: 48px; min-width: 46px; }
+:root[data-density='compact'] .ribbon-command-large { height: 56px; }
 :root[data-glass='reduced'] .phone-ribbon,
 :root[data-glass='reduced'] .mini-toolbar,
 :root[data-glass='reduced'] .app-rail {

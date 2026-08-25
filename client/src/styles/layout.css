@@ -939,7 +939,7 @@
 @keyframes toast-in { from { opacity: 0; transform: translateX(14px) scale(.97); } }
 
 :root[data-density='compact'] {
-  --layout-ribbon-height: 132px;
+  --layout-ribbon-height: 148px;
 }
 
 :root[data-glass='reduced'] .app-ribbon,

@@ -1,9 +1,10 @@
 /* Ribbon pattern. Placement of the app header and workspace remains in layout.css. */
 .ribbon-body {
   --ribbon-tab-height: 29px;
-  --ribbon-command-height: 48px;
+  --ribbon-command-height: 52px;
   --ribbon-group-gap: 5px;
-  --ribbon-icon-size: 22px;
+  --ribbon-icon-size: 32px;
+  --ribbon-large-icon-size: 40px;
   --ribbon-label-size: 8.8px;
   --ribbon-label-weight: 590;
 
@@ -52,7 +53,7 @@
   color: var(--color-fg-muted); box-shadow: 0 8px 18px -15px rgb(10 24 64 / 46%), inset 0 1px var(--material-highlight);
   cursor: pointer; transition: color var(--motion-fast) ease, background var(--motion-fast) ease, border-color var(--motion-fast) ease, box-shadow var(--motion-fast) ease, transform var(--motion-instant) var(--ease-out);
 }
-.ribbon-command-large { min-width: 64px; height: 58px; }
+.ribbon-command-large { min-width: 64px; height: 62px; }
 .ribbon-command:hover:not(:disabled) { border-color: color-mix(in srgb, var(--color-action) 20%, transparent); background: color-mix(in srgb, var(--color-bg-raised) 94%, transparent); color: var(--color-fg-default); box-shadow: 0 7px 16px -11px rgb(10 24 64 / 50%), inset 0 1px var(--material-highlight); }
 .ribbon-command:active:not(:disabled) { transform: translateY(1px); }
 .ribbon-command.active, .ribbon-command[aria-pressed='true'], .ribbon-command[aria-selected='true'] { border-color: color-mix(in srgb, var(--color-action) 28%, transparent); background: color-mix(in srgb, var(--color-action-soft) 90%, transparent); color: var(--color-action); box-shadow: inset 0 1px color-mix(in srgb, white 55%, transparent), 0 8px 18px -14px var(--color-action); }
@@ -60,7 +61,8 @@
 .ribbon-command.danger-command, .ribbon-command[data-danger='true'] { color: var(--color-feedback-danger); }
 .ribbon-command[data-loading='true'] { cursor: wait; }
 .ribbon-command[data-loading='true'] > :not(.button-spinner) { visibility: hidden; }
-.ribbon-command .glyph { width: var(--ribbon-icon-size); height: var(--ribbon-icon-size); }
+.ribbon-command .glyph { --marks-icon-size: var(--ribbon-icon-size); }
+.ribbon-command-large .glyph { --marks-icon-size: var(--ribbon-large-icon-size); }
 .ribbon-command-label { max-width: 68px; overflow: hidden; font-size: var(--ribbon-label-size); font-weight: var(--ribbon-label-weight); line-height: 1; white-space: nowrap; text-overflow: ellipsis; }
 .ribbon-group-label { display: inline-flex; align-items: center; justify-content: center; gap: 4px; align-self: end; color: var(--color-fg-subtle); font: 650 8px/11px var(--font-family-mono); text-align: center; text-transform: uppercase; letter-spacing: .08em; }
 .ribbon-launcher { width: 12px; height: 12px; padding: 0; border: 0; background: transparent; color: var(--color-fg-subtle); font-size: 8px; cursor: pointer; }
@@ -72,9 +74,14 @@
 
 .ribbon-collapse .icon { transform: rotate(-90deg); transition: transform var(--motion-fast) var(--ease-out); }
 .ribbon-collapse.collapsed .icon { transform: rotate(90deg); }
-:root[data-density='compact'] .ribbon-body { --ribbon-tab-height: 26px; --ribbon-command-height: 42px; --ribbon-group-gap: 4px; }
+:root[data-density='compact'] .ribbon-body { --ribbon-tab-height: 26px; --ribbon-command-height: 48px; --ribbon-group-gap: 4px; --ribbon-icon-size: 28px; --ribbon-large-icon-size: 34px; }
 :root[data-density='compact'] .ribbon-command { min-width: 46px; border-radius: 13px; }
+:root[data-density='compact'] .ribbon-command-large { height: 56px; }
 :root[data-density='compact'] .ribbon-command-group { padding-inline: 6px; }
+:root[data-shell='fold-book'] .ribbon-body,
+:root[data-shell='fold-laptop'] .ribbon-body { --ribbon-command-height: 56px; --ribbon-icon-size: 36px; --ribbon-large-icon-size: 44px; }
+:root[data-shell='fold-book'] .ribbon-command-large,
+:root[data-shell='fold-laptop'] .ribbon-command-large { height: 66px; }
 :root[data-glass='reduced'] .ribbon-body { background: var(--color-bg-raised); backdrop-filter: none; }
 
 @media (min-width: 721px) { .ribbon-collapsed .app-ribbon.ribbon-document .ribbon-body { display: none; } }
