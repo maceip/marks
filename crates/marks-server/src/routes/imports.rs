@@ -15,6 +15,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use futures_util::StreamExt;
+use office_oxide::cfb::CfbReader;
 use office_oxide::{Document, DocumentFormat};
 use serde::{Deserialize, Serialize};
 use std::io::{Cursor, Read, Write};
@@ -43,6 +44,21 @@ const MAX_TABLE_ROWS: usize = 10_000;
 const MAX_TABLE_COLUMNS: usize = 256;
 const MAX_TABLE_CELLS: usize = 200_000;
 const MAX_CELL_SCALARS: usize = 4_096;
+#[cfg(unix)]
+const WORKER_ADDRESS_SPACE_BYTES: libc::rlim_t = 512 * 1024 * 1024;
+#[cfg(unix)]
+const WORKER_CPU_SECONDS: libc::rlim_t = 25;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+type RlimitResource = libc::__rlimit_resource_t;
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+type RlimitResource = libc::c_int;
+// macOS does not enforce a usable address-space rlimit for spawned binaries;
+// its data limit is attempted as defense in depth while the BIFF preflight is
+// the allocation guard. Linux production enforces the whole address space.
+#[cfg(target_os = "macos")]
+const WORKER_MEMORY_RESOURCE: RlimitResource = libc::RLIMIT_DATA;
+#[cfg(all(unix, not(target_os = "macos")))]
+const WORKER_MEMORY_RESOURCE: RlimitResource = libc::RLIMIT_AS;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -331,14 +347,17 @@ async fn run_worker(
         .map(Ok)
         .unwrap_or_else(std::env::current_exe)
         .map_err(|_| ApiError::unavailable("import worker unavailable"))?;
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .arg("--import-worker-v1")
         .env_clear()
         .current_dir(std::env::temp_dir())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
+        .kill_on_drop(true);
+    configure_worker_resource_limits(&mut command)?;
+    let mut child = command
         .spawn()
         .map_err(|_| ApiError::unavailable("import worker unavailable"))?;
     let mut stdin = child
@@ -428,6 +447,51 @@ async fn run_worker(
         WorkerResponse::Ok(result) => Ok(Ok(result)),
         WorkerResponse::Error(error) => Ok(Err(error)),
     }
+}
+
+#[cfg(unix)]
+fn configure_worker_resource_limits(command: &mut Command) -> ApiResult<()> {
+    use std::os::unix::process::CommandExt;
+
+    // SAFETY: the closure runs after fork and calls only async-signal-safe
+    // libc resource-limit syscalls. It captures no shared runtime state.
+    unsafe {
+        command.as_std_mut().pre_exec(|| {
+            #[cfg(target_os = "macos")]
+            let _ = lower_soft_resource_limit(WORKER_MEMORY_RESOURCE, WORKER_ADDRESS_SPACE_BYTES);
+            #[cfg(not(target_os = "macos"))]
+            lower_soft_resource_limit(WORKER_MEMORY_RESOURCE, WORKER_ADDRESS_SPACE_BYTES)?;
+            lower_soft_resource_limit(libc::RLIMIT_CPU, WORKER_CPU_SECONDS)
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn configure_worker_resource_limits(_command: &mut Command) -> ApiResult<()> {
+    // Production runs on Unix, where the parser child has OS-enforced limits.
+    // Other targets retain the killable process and absolute parent deadline.
+    Ok(())
+}
+
+#[cfg(unix)]
+fn lower_soft_resource_limit(
+    resource: RlimitResource,
+    ceiling: libc::rlim_t,
+) -> std::io::Result<()> {
+    let mut current = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: both calls receive valid pointers to a stack-owned rlimit.
+    if unsafe { libc::getrlimit(resource, &mut current) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    current.rlim_cur = ceiling.min(current.rlim_max);
+    if unsafe { libc::setrlimit(resource, &current) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// Private child-process entry point. It deliberately initializes neither the
@@ -542,10 +606,13 @@ fn convert_file(
                 office_markdown(bytes, DocumentFormat::Docx, false, max_units)?,
             )
         }
-        "xls" => (
-            "excel",
-            office_markdown(bytes, DocumentFormat::Xls, true, max_units)?,
-        ),
+        "xls" => {
+            preflight_xls(&bytes)?;
+            (
+                "excel",
+                office_markdown(bytes, DocumentFormat::Xls, true, max_units)?,
+            )
+        }
         "xlsx" => {
             preflight_office_zip(&bytes)?;
             (
@@ -563,6 +630,149 @@ fn convert_file(
         kind: kind.to_owned(),
         source_url: None,
     })
+}
+
+/// Reject a BIFF sheet whose sparse coordinates would force office_oxide to
+/// materialize a grid larger than the table contract. This runs before the
+/// third-party parser allocates its `Vec<Vec<CellValue>>`.
+fn preflight_xls(bytes: &[u8]) -> Result<(), ImportFailure> {
+    let mut cfb = CfbReader::new(Cursor::new(bytes)).map_err(|_| ImportFailure::Invalid)?;
+    let workbook = if cfb.has_stream("Workbook") {
+        cfb.open_stream("Workbook")
+    } else if cfb.has_stream("Book") {
+        cfb.open_stream("Book")
+    } else {
+        return Err(ImportFailure::Invalid);
+    }
+    .map_err(|_| ImportFailure::Invalid)?;
+    if workbook.len() as u64 > MAX_OFFICE_UNCOMPRESSED_BYTES {
+        return Err(ImportFailure::TooLarge);
+    }
+    preflight_biff_table(&workbook)
+}
+
+fn preflight_biff_table(workbook: &[u8]) -> Result<(), ImportFailure> {
+    const RT_BOF: u16 = 0x0809;
+    const RT_EOF: u16 = 0x000a;
+    const RT_BOUNDSHEET: u16 = 0x0085;
+    const RT_DIMENSION: u16 = 0x0200;
+    const RT_ROW: u16 = 0x0208;
+    const CELL_RECORDS: &[u16] = &[
+        0x0006, // FORMULA
+        0x00d6, // RSTRING
+        0x00fd, // LABELSST
+        0x0201, // BLANK
+        0x0203, // NUMBER
+        0x0204, // LABEL
+        0x0205, // BOOLERR
+        0x027e, // RK
+    ];
+    const MULTI_CELL_RECORDS: &[u16] = &[0x00bd, 0x00be]; // MULRK, MULBLANK
+
+    let mut position = 0_usize;
+    let mut bound_sheets = 0_usize;
+    let mut parsed_sheets = 0_usize;
+    let mut in_sheet = false;
+    let mut max_row = 0_usize;
+    let mut max_column = 0_usize;
+    let mut saw_cell = false;
+    let mut records = 0_usize;
+
+    while position.saturating_add(4) <= workbook.len() {
+        records = records.saturating_add(1);
+        if records > 500_000 {
+            return Err(ImportFailure::TooLarge);
+        }
+        let record_type = u16::from_le_bytes([workbook[position], workbook[position + 1]]);
+        let length = u16::from_le_bytes([workbook[position + 2], workbook[position + 3]]) as usize;
+        position += 4;
+        let end = position.checked_add(length).ok_or(ImportFailure::Invalid)?;
+        let data = workbook.get(position..end).ok_or(ImportFailure::Invalid)?;
+        position = end;
+
+        if record_type == RT_BOUNDSHEET {
+            bound_sheets = bound_sheets.saturating_add(1);
+            if bound_sheets > MAX_SHEETS {
+                return Err(ImportFailure::TooLarge);
+            }
+            continue;
+        }
+        if record_type == RT_BOF && data.len() >= 4 {
+            let substream = u16::from_le_bytes([data[2], data[3]]);
+            in_sheet = substream == 0x0010;
+            if in_sheet {
+                parsed_sheets = parsed_sheets.saturating_add(1);
+                if parsed_sheets > MAX_SHEETS {
+                    return Err(ImportFailure::TooLarge);
+                }
+                max_row = 0;
+                max_column = 0;
+                saw_cell = false;
+            }
+            continue;
+        }
+        if record_type == RT_EOF {
+            in_sheet = false;
+            continue;
+        }
+        if !in_sheet {
+            continue;
+        }
+
+        if record_type == RT_DIMENSION && data.len() >= 12 {
+            let rows =
+                u32::from_le_bytes(data[4..8].try_into().map_err(|_| ImportFailure::Invalid)?)
+                    as usize;
+            let columns = u16::from_le_bytes(
+                data[10..12]
+                    .try_into()
+                    .map_err(|_| ImportFailure::Invalid)?,
+            ) as usize;
+            validate_biff_extent(rows, columns)?;
+        } else if CELL_RECORDS.contains(&record_type) && data.len() >= 4 {
+            let row = u16::from_le_bytes([data[0], data[1]]) as usize;
+            let column = u16::from_le_bytes([data[2], data[3]]) as usize;
+            saw_cell = true;
+            max_row = max_row.max(row);
+            max_column = max_column.max(column);
+            validate_biff_extent(max_row.saturating_add(1), max_column.saturating_add(1))?;
+        } else if MULTI_CELL_RECORDS.contains(&record_type) && data.len() >= 6 {
+            let row = u16::from_le_bytes([data[0], data[1]]) as usize;
+            let first_column = u16::from_le_bytes([data[2], data[3]]) as usize;
+            let last_column =
+                u16::from_le_bytes([data[data.len() - 2], data[data.len() - 1]]) as usize;
+            if last_column < first_column {
+                return Err(ImportFailure::Invalid);
+            }
+            saw_cell = true;
+            max_row = max_row.max(row);
+            max_column = max_column.max(last_column);
+            validate_biff_extent(max_row.saturating_add(1), max_column.saturating_add(1))?;
+        } else if record_type == RT_ROW && data.len() >= 6 {
+            let row = u16::from_le_bytes([data[0], data[1]]) as usize;
+            let last_column = u16::from_le_bytes([data[4], data[5]]) as usize;
+            if last_column > 0 {
+                saw_cell = true;
+                max_row = max_row.max(row);
+                max_column = max_column.max(last_column - 1);
+                validate_biff_extent(max_row.saturating_add(1), max_column.saturating_add(1))?;
+            }
+        }
+    }
+    if position != workbook.len() || (saw_cell && parsed_sheets == 0) {
+        return Err(ImportFailure::Invalid);
+    }
+    Ok(())
+}
+
+fn validate_biff_extent(rows: usize, columns: usize) -> Result<(), ImportFailure> {
+    if rows > MAX_TABLE_ROWS
+        || columns > MAX_TABLE_COLUMNS
+        || rows.saturating_mul(columns) > MAX_TABLE_CELLS
+    {
+        return Err(ImportFailure::TooLarge);
+    }
+    Ok(())
 }
 
 fn office_markdown(
@@ -910,6 +1120,34 @@ mod tests {
         assert!(imported.markdown.contains("| Item | Amount |"));
         assert!(imported.markdown.contains("| Widget | 1500 |"));
         assert!(!imported.markdown.contains("SUM("));
+    }
+
+    #[test]
+    fn sparse_legacy_xls_coordinates_are_rejected_before_grid_allocation() {
+        fn record(kind: u16, body: &[u8]) -> Vec<u8> {
+            let mut bytes = Vec::with_capacity(body.len() + 4);
+            bytes.extend_from_slice(&kind.to_le_bytes());
+            bytes.extend_from_slice(&(body.len() as u16).to_le_bytes());
+            bytes.extend_from_slice(body);
+            bytes
+        }
+
+        let mut workbook = record(0x0809, &[0x00, 0x06, 0x10, 0x00]);
+        // A single NUMBER at BIFF's maximum row/column used to make the
+        // pinned parser allocate 16,777,216 CellValues before Marks rejected
+        // the resulting table.
+        let mut number = Vec::new();
+        number.extend_from_slice(&u16::MAX.to_le_bytes());
+        number.extend_from_slice(&255_u16.to_le_bytes());
+        number.extend_from_slice(&0_u16.to_le_bytes());
+        number.extend_from_slice(&0_f64.to_le_bytes());
+        workbook.extend(record(0x0203, &number));
+        workbook.extend(record(0x000a, &[]));
+
+        assert!(matches!(
+            preflight_biff_table(&workbook),
+            Err(ImportFailure::TooLarge)
+        ));
     }
 
     #[test]
