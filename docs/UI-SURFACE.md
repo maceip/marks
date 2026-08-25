@@ -49,7 +49,8 @@ Marks is a quiet writing surface with a powerful command layer. The normative vi
 
 | Surface | Entry | Loading rule | Owner |
 | --- | --- | --- | --- |
-| Workspace home | `/` | App shell, local catalog, and home CSS only | `App` + `pages/Home` |
+| Anonymous entry | `/` | In service mode, atomically create a unique public document preloaded with the editable marketing Markdown, then replace the URL with its `/d/document_*` slug | `App` + `content/marketing-markdown.ts` |
+| Local workspace home | `/` | In local/demo mode, app shell, local catalog, and home CSS only | `App` + `pages/Home` |
 | Document | `/d/:id` | Session, CodeMirror, workspace, preview, and review overlays load on demand | `App` + `TopBar` + `components/workspace` |
 | Benchmark | `/bench` | Benchmark view, CSS, and worker load only on this route | `pages/Benchmark` |
 | Design system | `/design-system` | Internal catalog and CSS load only on direct navigation; never linked in production navigation | `design-system/DesignSystem` |
@@ -58,6 +59,12 @@ Marks is a quiet writing surface with a powerful command layer. The normative vi
 The welcome URL exists so a public deployment can keep a stable marketing
 address. The page people read is a Marks document: source, preview, ribbon,
 and the same Markdown that describes the product, accounts, and machinery.
+An unauthenticated visit to the deployed root does not reuse that fixed
+built-in document. It clones the same Markdown into an ordinary public page
+with a unique slug. Phones open the clone in rendered Preview; laptops open
+the source and rendering side by side. Either posture can switch to Editor,
+replace all of the introduction, share the current URL, or trash the page
+using the normal document controls.
 
 Identity chrome is presentation-complete in local mode on desktop, phone, and
 fold: anonymous/public status, Log In with an on-brand QR of `/link`, phone

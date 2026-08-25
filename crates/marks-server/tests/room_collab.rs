@@ -238,6 +238,85 @@ async fn two_peers_converge_offline_delta_and_restart_recovery() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn seeded_public_scratch_document_survives_restart_before_any_edit() {
+    let server = TestServer::spawn(temp_db("room-public-seeded-restart")).await;
+    let http = reqwest::Client::new();
+    let base = server.base.clone();
+    let initial_markdown = "# Google Docs for Markdown\n\nStart writing together immediately.\n";
+
+    let creator = json_of(
+        http.post(format!("{base}/v1/auth/scratch"))
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    let creator_auth = format!(
+        "MarksScratch {}.{}",
+        creator["scratchId"].as_str().unwrap(),
+        creator["capability"].as_str().unwrap()
+    );
+    let created = json_of(
+        http.post(format!("{base}/v1/documents"))
+            .header("Authorization", &creator_auth)
+            .json(&json!({
+                "title": "Google Docs for Markdown",
+                "markdown": initial_markdown,
+            }))
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    let document_id = created["document"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(created["document"]["slug"], document_id);
+    assert_eq!(created["document"]["public"], true);
+    assert_eq!(created["document"]["anonymous_edits"], 0);
+    assert_eq!(created["document"]["persisted"], false);
+
+    let db = server.stop().await;
+    let server = TestServer::spawn(db).await;
+    let base = server.base.clone();
+
+    let visitor = json_of(
+        http.post(format!("{base}/v1/auth/scratch"))
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    let visitor_auth = format!(
+        "MarksScratch {}.{}",
+        visitor["scratchId"].as_str().unwrap(),
+        visitor["capability"].as_str().unwrap()
+    );
+    let visible = http
+        .get(format!("{base}/v1/documents/{document_id}"))
+        .header("Authorization", &visitor_auth)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(visible.status(), 200);
+    let visible = json_of(visible).await;
+    assert_eq!(visible["document"]["slug"], document_id);
+    assert_eq!(visible["document"]["public"], true);
+    assert_eq!(visible["document"]["public_role"], "editor");
+    assert_eq!(visible["document"]["anonymous_edits"], 0);
+    assert_eq!(visible["document"]["persisted"], false);
+
+    let exported = http
+        .get(format!("{base}/v1/documents/{document_id}/export"))
+        .header("Authorization", &visitor_auth)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(exported.status(), 200);
+    assert_eq!(exported.text().await.unwrap(), initial_markdown);
+
+    server.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn anonymous_slug_is_public_and_survives_its_creator_after_seven_edits() {
     let server = TestServer::spawn(temp_db("room-public-anonymous")).await;
     let http = reqwest::Client::new();

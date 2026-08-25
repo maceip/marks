@@ -73,7 +73,7 @@ const browser = await chromium.launch({
 
 try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  const page = await context.newPage();
+  let page = await context.newPage();
 
   await page.goto(`${BASE}/welcome/`, { waitUntil: 'domcontentloaded' });
   await page.waitForURL((url) => url.pathname === '/d/about-marks' || url.pathname === '/welcome/', {
@@ -135,6 +135,57 @@ try {
   );
   check('preview renders the comparison table', body.table);
   check('no leftover empty-state copy', !body.empty.includes('unavailable'));
+
+  // Reproduce the deployed regression: an old ESBT build left an artifact
+  // under the fixed about-marks key that a newer runtime cannot decode.
+  await page.close();
+  page = await context.newPage();
+  await page.goto(`${BASE}/bench`, { waitUntil: 'domcontentloaded' });
+  await page.evaluate(async () => {
+    await new Promise((resolve, reject) => {
+      const request = indexedDB.open('keyval-store');
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const database = request.result;
+        if (!database.objectStoreNames.contains('keyval')) {
+          database.close();
+          reject(new Error('idb-keyval store is missing'));
+          return;
+        }
+        const transaction = database.transaction('keyval', 'readwrite');
+        transaction.onerror = () => reject(transaction.error);
+        transaction.oncomplete = () => {
+          database.close();
+          resolve();
+        };
+        transaction.objectStore('keyval').put(
+          {
+            version: 3,
+            siteId: '2',
+            role: 'local',
+            snapshot: new TextEncoder().encode('not-an-esbt-snapshot'),
+            pending: [],
+            ackedVersion: null,
+            committedRevision: null,
+            lastPruneAt: 0,
+          },
+          'marks:esbt:journal:about-marks',
+        );
+      };
+    });
+  });
+  await page.goto(`${BASE}/welcome/`, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.cm-content')?.textContent?.includes('Google Docs for Markdown') &&
+      document.querySelector('.marks-preview')?.textContent?.includes('Typical Markdown'),
+    null,
+    { timeout: 30_000 },
+  );
+  check(
+    'an incompatible cached welcome snapshot is discarded and reseeded',
+    (await page.locator('.marks-preview').innerText()).includes('Google Docs for Markdown'),
+  );
 
   if (args.screenshot) {
     await page.screenshot({ path: args.screenshot, fullPage: false });

@@ -76,9 +76,7 @@ const TAB_PREFERRED: Partial<Record<RibbonTabId, string>> = {
 
 export function DesktopRibbon(props: DesktopRibbonProps) {
   const center = useCommandCenter();
-  const [tab, setTab] = useState<RibbonTabId>(() =>
-    ribbonTask(center.environment) === 'inspect' ? 'view' : 'import',
-  );
+  const [tab, setTab] = useState<RibbonTabId>('import');
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [galleryOpen, setGalleryOpen] = useState<string | null>(null);
   const [keyTipLayer, setKeyTipLayer] = useState<KeyTipLayer>(null);

@@ -274,6 +274,12 @@ try {
       createdBody?.document?.slug === documentId,
     JSON.stringify(createdBody?.document),
   );
+  check(
+    'anonymous slug is initialized with the editable marketing Markdown',
+    createdBody?.document?.title === 'Google Docs for Markdown' &&
+      createdBody?.document?.chars > 2_000,
+    `${String(createdBody?.document?.title)} chars=${String(createdBody?.document?.chars)}`,
+  );
 
   await page.waitForURL((url) => url.pathname === `/d/${documentId}`, { timeout: 30_000 });
   check('router opens the server-created document', page.url().includes(`/d/${documentId}`));
@@ -300,6 +306,29 @@ try {
   );
 
   await page.waitForSelector('.cm-content', { timeout: 30_000 });
+  await page.waitForFunction(
+    () => document.querySelector('.cm-content')?.textContent?.includes('Google Docs for Markdown') &&
+      document.querySelector('.marks-preview')?.textContent?.includes('Typical Markdown'),
+    undefined,
+    { timeout: 30_000 },
+  );
+  const initialExport = await page.request.get(`${BASE}/v1/documents/${documentId}/export`, {
+    headers: {
+      Authorization: `MarksScratch ${credential.scratchId}.${credential.capability}`,
+    },
+  });
+  const initialMarkdown = await initialExport.text();
+  check(
+    'editable introduction is durable before the first user edit',
+    initialExport.ok() &&
+      initialMarkdown.includes('# Google Docs for Markdown') &&
+      initialMarkdown.includes('Delete this entire introduction'),
+  );
+  check(
+    'new public slug renders the Markdown marketing page inside the real workspace',
+    (await page.locator('.marks-preview').innerText()).includes('Typical Markdown') &&
+      (await page.locator('.app').getAttribute('data-marketing')) === 'true',
+  );
   const committedText = `Cross-browser ${args.browser} proof 🧭`;
   const fixture = SERVICE_FIXTURE(args.browser);
   check(
@@ -307,13 +336,18 @@ try {
     await page.locator('.cm-content').getAttribute('contenteditable') === 'true',
   );
   await page.locator('.cm-content').click();
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+a' : 'Control+a');
   await page.keyboard.insertText(fixture);
   await page.waitForFunction(
     (expected) => document.querySelector('.cm-content')?.textContent?.includes(expected),
     committedText,
     { timeout: 30_000 },
   );
-  check('editor accepts the local mutation', true, committedText);
+  check(
+    'user can delete and replace the entire marketing starter',
+    !(await page.locator('.cm-content').innerText()).includes('Google Docs for Markdown'),
+    committedText,
+  );
   await page.waitForFunction(
     async ({ documentId, credential, expected }) => {
       const response = await fetch(`/v1/documents/${documentId}/export`, {

@@ -8,9 +8,11 @@ import {
   appendPendingMutation,
   appendMutation,
   checkpointReplicaJournal,
+  deleteReplicaJournal,
   readReplicaJournal,
   shouldPruneHistory,
   type ReplicaJournalRecord,
+  writeReplicaJournal,
 } from './journal.ts';
 
 let nextDocument = 1;
@@ -50,6 +52,18 @@ test('journal persists the last authorized offline role', async () => {
   const id = docId();
   await checkpointReplicaJournal(id, record(), () => new Uint8Array([9]));
   assert.equal((await readReplicaJournal(id))?.role, 'editor');
+});
+
+test('one corruptible built-in journal can be removed without touching another document', async () => {
+  const removedId = docId();
+  const retainedId = docId();
+  await writeReplicaJournal(removedId, record());
+  await writeReplicaJournal(retainedId, record());
+
+  await deleteReplicaJournal(removedId);
+
+  assert.equal(await readReplicaJournal(removedId), null);
+  assert.deepEqual([...(await readReplicaJournal(retainedId))!.snapshot], [1]);
 });
 
 test('one mutation id cannot be rebound to different bytes', () => {

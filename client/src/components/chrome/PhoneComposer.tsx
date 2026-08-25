@@ -45,7 +45,7 @@ export function PhoneComposer(props: PhoneComposerProps) {
   const center = useCommandCenter();
   const task = ribbonTask(center.environment);
   const tabs = useMemo(() => orderTabs(center.ribbon), [center.ribbon]);
-  const [tab, setTab] = useState<RibbonTabId>(() => task === 'inspect' ? 'view' : 'import');
+  const [tab, setTab] = useState<RibbonTabId>('import');
   const [presenceDisplay, setPresenceState] = useState<DocumentPresenceDisplay>(() =>
     getPresenceDisplay(props.mode === 'preview'));
   const lastManualTabAt = useRef(0);

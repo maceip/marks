@@ -12,7 +12,7 @@ import { Sidebar } from './components/shell/Sidebar';
 import type { CursorInfo } from './components/workspace/EditorPane';
 import { StatusBar } from './components/workspace/StatusBar';
 import { LiquidDock } from './components/shell/LiquidDock';
-import { ABOUT_DOCUMENT_ID, isAboutDocument } from './content/about';
+import { ABOUT_DOCUMENT_ID, ABOUT_DOCUMENT_TITLE, isAboutDocument } from './content/about';
 import { signalDocumentRepositoryChange } from './data/documents';
 import { Home } from './pages/Home';
 import { readPairingHash } from './lib/pairing-link';
@@ -181,6 +181,7 @@ export function App() {
   const [hudOpen, setHudOpen] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [uiError, setUiError] = useState<string | null>(null);
+  const [preparedMarketingPresentation, setPreparedMarketingPresentation] = useState<string | null>(null);
   const [dragImportActive, setDragImportActive] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [ribbonCollapsed, setRibbonCollapsed] = useState(
@@ -204,6 +205,14 @@ export function App() {
   const documents = useDocuments(route.name !== 'benchmark' && route.name !== 'design-system');
   const docId = route.name === 'document' ? route.id : null;
   const { meta, engine, supported, resolved } = useDocumentMeta(docId);
+  const marketingDocument =
+    isAboutDocument(docId) ||
+    (meta?.id === docId && meta.public === true && meta.title === ABOUT_DOCUMENT_TITLE);
+  const marketingPresentationKey = marketingDocument && docId
+    ? `${docId}:${phone ? 'phone' : 'wide'}`
+    : null;
+  const preparingMarketingPresentation =
+    marketingPresentationKey !== null && preparedMarketingPresentation !== marketingPresentationKey;
   const { session, status, peers, hydrated } = useSession(
     resolved && supported ? docId : null,
     user,
@@ -241,11 +250,17 @@ export function App() {
   useEffect(() => localStorage.setItem('marks:mode', mode), [mode]);
 
   useEffect(() => {
-    if (!isAboutDocument(docId)) return;
-    // The public entry point should read as a landing page on a phone, not as
-    // raw Markdown. Larger screens keep the product-in-the-product split demo.
+    if (!marketingPresentationKey) {
+      setPreparedMarketingPresentation(null);
+      return;
+    }
+    // Both the built-in /welcome document and the anonymous editable clone
+    // mount only after their initial presentation is ready. That keeps Import
+    // selected even on a cold, copy-pasted slug; later user mode changes do not
+    // retrigger this effect.
     setMode(phone ? 'preview' : 'split');
-  }, [docId, phone]);
+    setPreparedMarketingPresentation(marketingPresentationKey);
+  }, [marketingPresentationKey, phone]);
 
   useEffect(() => {
     localStorage.setItem('marks:ribbon-collapsed', String(ribbonCollapsed));
@@ -448,9 +463,15 @@ export function App() {
       return;
     }
     initialAnonymousPageStarted.current = true;
-    void documents.create({ title: 'Untitled' })
+    void import('./content/marketing-markdown')
+      .then(({ ABOUT_DOCUMENT }) => documents.create({
+        title: ABOUT_DOCUMENT_TITLE,
+        content: ABOUT_DOCUMENT,
+      }))
       .then((created) => {
         if (location.pathname === '/') {
+          setMode(phone ? 'preview' : 'split');
+          setPreparedMarketingPresentation(`${created.id}:${phone ? 'phone' : 'wide'}`);
           navigate({ name: 'document', id: created.id }, { replace: true });
         }
       })
@@ -458,7 +479,7 @@ export function App() {
         initialAnonymousPageStarted.current = false;
         setUiError('Marks could not create a public page. Try reloading this tab.');
       });
-  }, [documents.create, navigate, route.name, serviceCaller, serviceCallerResolved]);
+  }, [documents.create, navigate, phone, route.name, serviceCaller, serviceCallerResolved]);
 
   useEffect(() => {
     if (route.name !== 'home') initialAnonymousPageStarted.current = false;
@@ -932,11 +953,19 @@ export function App() {
     );
   }
 
+  const openingAnonymousEntry =
+    UI_DATA_MODE === 'service' &&
+    route.name === 'home' &&
+    (!serviceCallerResolved || (serviceCaller?.kind === 'scratch' && uiError === null));
+  const openingPage =
+    openingAnonymousEntry || (route.name === 'document' && (!resolved || preparingMarketingPresentation));
+
   const appSurface = (
     <div
       className={`app route-${route.name}${sidebarOpen && !focusMode && !posture.foldable ? ' with-sidebar' : ''}${focusMode ? ' focus-mode' : ''}${ribbonCollapsed ? ' ribbon-collapsed' : ''}${practicalSurface ? ' practical-open' : ''}${wildSurface ? ' wild-open' : ''}${dragImportActive ? ' drag-import-active' : ''}`}
       data-shell={posture.shell}
       data-doc={docId ?? undefined}
+      data-marketing={marketingDocument ? 'true' : undefined}
       onDragEnterCapture={(event) => {
         if (!transferMayContainImport(event.dataTransfer)) return;
         dragImportDepth.current += 1;
@@ -968,7 +997,7 @@ export function App() {
           <small>PDF, Word, Excel, or Markdown</small>
         </div>
       )}
-      {sidebarOpen && !focusMode && !posture.foldable && (
+      {!openingPage && sidebarOpen && !focusMode && !posture.foldable && (
         <Sidebar
           documents={documents.documents}
           activeId={docId}
@@ -998,7 +1027,7 @@ export function App() {
             <AppRail />
           </Suspense>
         )}
-        <TopBar
+        {!openingPage && <TopBar
           title={route.name === 'benchmark' ? 'Engine benchmark' : route.name === 'link' ? 'Phone confirmation' : title}
           docId={docId}
           route={route.name}
@@ -1032,7 +1061,7 @@ export function App() {
           onVoice={session?.capabilities().edit ? surface.toggleVoice : undefined}
           voiceActive={surface.voiceStatus === 'listening'}
           voiceSupported={surface.voiceSupported}
-        />
+        />}
 
         {route.name === 'benchmark' ? (
           <Suspense fallback={<div className="empty-state">Loading benchmark…</div>}>
@@ -1046,6 +1075,8 @@ export function App() {
               onKeep={() => openDialog({ type: 'keep-workspace' })}
             />
           </Suspense>
+        ) : openingPage ? (
+          <OpeningShell cached={false} offline={surface.network === 'offline'} />
         ) : docId && resolved && !supported ? (
           <div className="empty-state">
             <div className="empty-card">

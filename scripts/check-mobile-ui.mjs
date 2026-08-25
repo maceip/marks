@@ -59,7 +59,6 @@ const stop = () => {
 };
 process.on('exit', stop);
 
-const HOME_PRIMARY = '.home-actions .button.primary, .new-doc .button.primary';
 const RIBBON = '.phone-ribbon';
 
 async function assertNoHorizontalOverflow(page, label) {
@@ -90,28 +89,47 @@ async function assertTappable(locator, label, viewportWidth) {
 }
 
 async function reachEditorByTouch(page, viewportWidth) {
-  // The phone entry may briefly flash the home surface before settling on
-  // the document-first experience; wait for the stable ribbon state and
-  // fall back to the home flow only when it never arrives.
-  const ribbonSettled = await page
-    .locator(RIBBON)
-    .waitFor({ timeout: 15_000 })
-    .then(() => true)
-    .catch(() => false);
+  // Service mode is document-first: the temporary opening shell must resolve
+  // directly to the unique public page, never to the workspace home.
+  await page.locator(RIBBON).waitFor({ timeout: 30_000 });
   await assertNoHorizontalOverflow(page, `${viewportWidth}px entry`);
-  if (ribbonSettled) {
-    // Document-first phone experience: Import is the initial mobile ribbon
-    // object while the editor itself is already touch-ready below it.
-    const importTab = page.getByRole('tab', { name: 'Import', exact: true });
-    assert.equal(await importTab.getAttribute('aria-selected'), 'true', 'Import is selected on mobile first paint');
-    await assertTappable(importTab, 'initial Import ribbon tab', viewportWidth);
-    await importTab.tap();
-  } else {
-    const action = page.locator(HOME_PRIMARY).first();
-    await assertTappable(action, 'home primary action', viewportWidth);
-    await action.tap();
-    await page.waitForURL((url) => url.pathname.startsWith('/d/document_'), { timeout: 30_000 });
-  }
+  assert.equal(await page.locator('.home-surface').count(), 0, 'anonymous service entry never exposes workspace home');
+  await page.waitForURL((url) => /^\/d\/document_/.test(url.pathname), { timeout: 30_000 });
+  assert.match(page.url(), /\/d\/document_/, 'anonymous mobile entry receives a unique document slug');
+
+  // Import remains the first ribbon object while the document itself opens
+  // as the rendered, editable Markdown introduction.
+  const importTab = page.getByRole('tab', { name: 'Import', exact: true });
+  assert.equal(await importTab.getAttribute('aria-selected'), 'true', 'Import is selected on mobile first paint');
+  await assertTappable(importTab, 'initial Import ribbon tab', viewportWidth);
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.marks-preview')?.textContent?.includes('Google Docs for Markdown') &&
+      document.querySelector('.marks-preview table') != null,
+    undefined,
+    { timeout: 30_000 },
+  );
+  const hero = await page.evaluate(() => {
+    const app = document.querySelector('.app');
+    const heading = document.querySelector('.marks-preview h1');
+    const style = heading ? getComputedStyle(heading) : null;
+    return {
+      marketing: app?.getAttribute('data-marketing'),
+      fontSize: Number.parseFloat(style?.fontSize ?? '0'),
+      borderBottomWidth: style?.borderBottomWidth ?? '',
+    };
+  });
+  assert.equal(hero.marketing, 'true', 'the anonymous clone carries the marketing-page presentation marker');
+  assert(hero.fontSize > 30, `marketing hero heading is ${hero.fontSize}px`);
+  assert.equal(hero.borderBottomWidth, '0px', 'marketing hero heading is borderless');
+  console.log('  ok   anonymous slug first paints the rendered Markdown hero and comparison table');
+
+  const viewTab = page.getByRole('tab', { name: 'View', exact: true });
+  await assertTappable(viewTab, 'View ribbon tab', viewportWidth);
+  await viewTab.tap();
+  const editorCommand = page.locator('.phone-ribbon [data-command-id="view.editor"]');
+  await assertTappable(editorCommand, 'Editor command', viewportWidth);
+  await editorCommand.tap();
   await page.locator('.cm-content').first().waitFor({ timeout: 30_000 });
   console.log('  ok   touch navigation reaches the editor');
 }
@@ -134,6 +152,26 @@ try {
     await page.goto(`${origin}/`, { waitUntil: 'domcontentloaded' });
     await reachEditorByTouch(page, page.viewportSize().width);
 
+    const sharedUrl = page.url();
+    const linkedPhone = await browser.newContext({ ...devices['Pixel 7'] });
+    const linkedPage = await linkedPhone.newPage();
+    linkedPage.on('pageerror', (error) => pageErrors.push(error.stack ?? error.message));
+    await linkedPage.goto(sharedUrl, { waitUntil: 'domcontentloaded' });
+    await linkedPage.locator(RIBBON).waitFor({ timeout: 30_000 });
+    await linkedPage.waitForFunction(
+      () => document.querySelector('.marks-preview')?.textContent?.includes('Google Docs for Markdown'),
+      undefined,
+      { timeout: 30_000 },
+    );
+    assert.equal(linkedPage.url(), sharedUrl, 'a copied slug opens the same public page');
+    assert.equal(
+      await linkedPage.getByRole('tab', { name: 'Import', exact: true }).getAttribute('aria-selected'),
+      'true',
+      'a cold direct mobile slug keeps Import selected while opening in Preview',
+    );
+    console.log('  ok   a different anonymous phone cold-opens the copied slug in Preview with Import selected');
+    await linkedPhone.close();
+
     const loginPrompt = page.locator('.phone-identity');
     assert.match(await loginPrompt.innerText(), /Open this page on a laptop to log in/i);
     await loginPrompt.tap();
@@ -149,13 +187,16 @@ try {
     await loginDialog.getByRole('button', { name: 'Close', exact: true }).click();
 
     await page.locator('.cm-content').tap();
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+a' : 'Control+a');
     await page.keyboard.type('Mobile touch editing works');
     await page.waitForFunction(
-      () => document.querySelector('.cm-content')?.textContent?.includes('Mobile touch editing works'),
+      () =>
+        document.querySelector('.cm-content')?.textContent?.includes('Mobile touch editing works') &&
+        !document.querySelector('.cm-content')?.textContent?.includes('Google Docs for Markdown'),
       undefined,
       { timeout: 30_000 },
     );
-    console.log('  ok   the editor accepts touch-initiated typing');
+    console.log('  ok   the user can delete and replace the entire Markdown introduction');
     await assertNoHorizontalOverflow(page, 'phone editor');
     await phone.close();
 
