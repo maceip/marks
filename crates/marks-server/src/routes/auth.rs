@@ -32,7 +32,7 @@ use marks_auth::{
 use rusqlite::{Connection, params};
 use serde::Deserialize;
 use serde_json::json;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 const PENDING_DEVICE_TTL_MS: u64 = 24 * 60 * 60 * 1000;
@@ -74,14 +74,7 @@ fn rate(
     bucket: &str,
     limit: u32,
 ) -> ApiResult<()> {
-    // Behind a trusted reverse proxy the client address is in Forwarded /
-    // X-Forwarded-For; the direct peer address is the fallback.
-    let ip = headers
-        .get("x-forwarded-for")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(',').next())
-        .map(|value| value.trim().to_owned())
-        .unwrap_or_else(|| addr.ip().to_string());
+    let ip = rate_client_ip(headers, addr);
     if !app
         .rate
         .allow(&format!("{bucket}:{ip}"), limit, 60_000, now_ms())
@@ -89,6 +82,29 @@ fn rate(
         return Err(ApiError::rate_limited());
     }
     Ok(())
+}
+
+/// Production Caddy connects over loopback and overwrites `X-Real-IP`. A
+/// directly reachable client must never select its own rate-limit identity by
+/// spoofing a forwarding header. Even for loopback peers, accept exactly one
+/// strictly parsed IP value; malformed or multi-valued input fails closed to
+/// the socket peer.
+fn rate_client_ip(headers: &HeaderMap, peer: &SocketAddr) -> IpAddr {
+    if !peer.ip().is_loopback() {
+        return peer.ip();
+    }
+    let mut forwarded = headers.get_all("x-real-ip").iter();
+    let Some(value) = forwarded.next() else {
+        return peer.ip();
+    };
+    if forwarded.next().is_some() {
+        return peer.ip();
+    }
+    value
+        .to_str()
+        .ok()
+        .and_then(|value| value.parse::<IpAddr>().ok())
+        .unwrap_or_else(|| peer.ip())
 }
 
 pub struct NewSession {
@@ -1836,4 +1852,51 @@ pub async fn evt_redeem(
             .control(Control::EpochChanged { document_id, epoch });
     }
     login_response(&app, &session, &principal_id, &device_id, registration)
+}
+
+#[cfg(test)]
+mod rate_identity_tests {
+    use super::*;
+
+    fn socket(value: &str) -> SocketAddr {
+        value.parse().unwrap()
+    }
+
+    #[test]
+    fn untrusted_peer_cannot_spoof_a_forwarded_rate_identity() {
+        let peer = socket("198.51.100.27:443");
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", HeaderValue::from_static("203.0.113.9"));
+        headers.insert("x-forwarded-for", HeaderValue::from_static("203.0.113.10"));
+
+        assert_eq!(rate_client_ip(&headers, &peer), peer.ip());
+    }
+
+    #[test]
+    fn loopback_proxy_supplies_one_strict_real_ip() {
+        let peer = socket("127.0.0.1:43117");
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", HeaderValue::from_static("203.0.113.41"));
+
+        assert_eq!(
+            rate_client_ip(&headers, &peer),
+            "203.0.113.41".parse::<IpAddr>().unwrap()
+        );
+    }
+
+    #[test]
+    fn malformed_or_multi_valued_proxy_input_falls_back_to_peer() {
+        let peer = socket("[::1]:43117");
+        let mut malformed = HeaderMap::new();
+        malformed.insert(
+            "x-real-ip",
+            HeaderValue::from_static("203.0.113.41, 203.0.113.42"),
+        );
+        assert_eq!(rate_client_ip(&malformed, &peer), peer.ip());
+
+        let mut multiple = HeaderMap::new();
+        multiple.append("x-real-ip", HeaderValue::from_static("203.0.113.41"));
+        multiple.append("x-real-ip", HeaderValue::from_static("203.0.113.42"));
+        assert_eq!(rate_client_ip(&multiple, &peer), peer.ip());
+    }
 }
