@@ -4,7 +4,6 @@ import { documentIsOpenable } from '../browser/document-support';
 import { aboutDocumentMeta, isAboutDocument } from '../content/about';
 import { runWithTimeout } from '../browser/network.ts';
 import { documentRepository } from '../data/documents';
-import { seedAboutDocumentText } from '../demo/workspace';
 import type { DocumentMeta } from '../lib/api';
 
 export interface DocumentMetaState {
@@ -45,7 +44,6 @@ export function useDocumentMeta(docId: string | null): DocumentMetaState {
     // The public marketing document is built-in Markdown. Do not wait on the
     // catalog or a server row — /welcome must open the editor immediately.
     if (isAboutDocument(docId)) {
-      seedAboutDocumentText();
       const about = aboutDocumentMeta();
       setMeta(about);
       setResolved(true);

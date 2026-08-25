@@ -16,10 +16,10 @@ import { PERSIST_LOCK_TIMEOUT_MS } from '../browser/persist-lock.ts';
 import { TabChannel, tabChannelName } from '../browser/tab-sync.ts';
 import { roomTicketProtocols } from '../auth/room-access.ts';
 import {
-  ABOUT_DOCUMENT,
   aboutMarkdownNeedsRefresh,
   isAboutDocument,
 } from '../content/about.ts';
+import { ABOUT_DOCUMENT } from '../content/marketing-markdown.ts';
 import { readLocalDocumentText, seedAboutDocumentText, writeLocalDocumentText } from '../demo/workspace.ts';
 import {
   acknowledgePendingMutation,

@@ -1,17 +1,19 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-  ABOUT_DOCUMENT,
+  ABOUT_DOCUMENT_CHAR_COUNT,
   ABOUT_DOCUMENT_ID,
   ABOUT_DOCUMENT_TITLE,
   aboutMarkdownNeedsRefresh,
   isAboutDocument,
 } from './about.ts';
+import { ABOUT_DOCUMENT } from './marketing-markdown.ts';
 
 describe('about document', () => {
   it('is a crafted Marks page, not a second website', () => {
     assert.equal(ABOUT_DOCUMENT_ID, 'about-marks');
     assert.equal(ABOUT_DOCUMENT_TITLE, 'Google Docs for Markdown');
+    assert.equal(ABOUT_DOCUMENT_CHAR_COUNT, ABOUT_DOCUMENT.length);
     assert.equal(isAboutDocument(ABOUT_DOCUMENT_ID), true);
     assert.match(ABOUT_DOCUMENT, /^# Google Docs for Markdown/m);
     assert.match(ABOUT_DOCUMENT, /This page is not a brochure/);

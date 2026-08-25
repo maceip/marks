@@ -1,11 +1,14 @@
-import { ABOUT_DOCUMENT } from './marketing-markdown.ts';
-
-export { ABOUT_DOCUMENT } from './marketing-markdown.ts';
-
 /** Canonical built-in route. `/welcome/` opens this page in the real editor. */
 export const ABOUT_DOCUMENT_ID = 'about-marks';
 
 export const ABOUT_DOCUMENT_TITLE = 'Google Docs for Markdown';
+
+/**
+ * Keep catalog metadata light enough for the initial shell. A content test
+ * pins this count to the lazy marketing Markdown module so copy changes cannot
+ * silently make the built-in row stale.
+ */
+export const ABOUT_DOCUMENT_CHAR_COUNT = 3_473;
 
 export function isAboutDocument(id: string | null | undefined): boolean {
   return id === ABOUT_DOCUMENT_ID;
@@ -31,7 +34,7 @@ export function aboutDocumentMeta(now = Date.now()): {
     id: ABOUT_DOCUMENT_ID,
     title: ABOUT_DOCUMENT_TITLE,
     engine: 'esbt',
-    chars: ABOUT_DOCUMENT.length,
+    chars: ABOUT_DOCUMENT_CHAR_COUNT,
     created_at: now,
     updated_at: now,
   };
