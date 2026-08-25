@@ -3,9 +3,9 @@ export const PRODUCT_NAME = 'marks';
 /** User inactivity only hides transient presence; document sync stays live. */
 export const PRESENCE_IDLE_MS = 60_000;
 
-/** Latest deterministic level-9 gzip receipt from `npm run check:ui-budgets`. */
+/** Latest level-9 gzip receipt, rounded so recording it does not perturb itself. */
 export const UI_PERFORMANCE_RECEIPT = {
-  appCriticalKb: '106.08',
+  appCriticalKb: '106.1',
   marketingCriticalKb: '0.55',
 } as const;
 
