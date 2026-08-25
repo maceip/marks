@@ -26,6 +26,7 @@ use tokio::sync::mpsc;
 use tokio_util::io::ReaderStream;
 
 const MAX_ASSETS_PER_DOCUMENT: u64 = 1_000;
+const ASSET_GET_TIMEOUT: Duration = Duration::from_secs(10);
 const BUNDLE_CHUNK_BYTES: usize = 128 * 1024;
 const BUNDLE_CHANNEL_DEPTH: usize = 8;
 /// Asset verification happens before response headers are committed and while
@@ -295,7 +296,8 @@ pub async fn get(
     Path((document, asset)): Path<(String, String)>,
 ) -> ApiResult<Response> {
     let document_id = DocumentId::new(document).map_err(|_| ApiError::not_found())?;
-    let mutation_guard = app.assets.mutation_guard().await;
+    let deadline = tokio::time::Instant::now() + ASSET_GET_TIMEOUT;
+    let mutation_guard = app.assets.mutation_guard_before(deadline).await?;
     let row = app.db.read(|conn| {
         load_live_document(conn, &document_id)?;
         load_asset(conn, &document_id, &asset)
@@ -305,6 +307,7 @@ pub async fn get(
         .open_stream(
             row.hash,
             usize::try_from(row.bytes).map_err(|_| ApiError::internal())?,
+            deadline,
         )
         .await?;
     drop(mutation_guard);

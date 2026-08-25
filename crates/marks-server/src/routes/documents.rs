@@ -26,7 +26,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::Instant;
 
 /// The caller's document authority: a rotating principal session or a live
 /// scratch capability. They are different kinds of authority, never merged.
@@ -68,6 +71,7 @@ struct DocumentMeta {
 }
 
 const TRASH_RETENTION_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
+const PURGE_ASSET_RECLAIM_TIMEOUT: Duration = Duration::from_secs(15);
 
 fn meta(row: &store::DocumentMetaRow) -> DocumentMeta {
     DocumentMeta {
@@ -713,7 +717,8 @@ pub async fn purge(
         guard::require_same_origin(&app, &headers)?;
     }
     let document_id = DocumentId::new(id).map_err(|_| ApiError::not_found())?;
-    let _asset_mutation_guard = app.assets.mutation_guard().await;
+    let reclaim_deadline = Instant::now() + PURGE_ASSET_RECLAIM_TIMEOUT;
+    let _asset_mutation_guard = app.assets.mutation_guard_before(reclaim_deadline).await?;
     let reclaim_assets = app.db.tx(|conn| {
         let row = load_deleted_document(conn, &document_id)?;
         require_recovery_owner(&caller, &row)?;
@@ -774,33 +779,66 @@ pub async fn purge(
         conn.execute("DELETE FROM documents WHERE id = ?1", params![id])?;
         Ok(reclaim)
     })?;
-    for hash in reclaim_assets {
-        let _content_guard = app.assets.content_guard(hash).await;
-        let referenced = app.db.read(|conn| {
-            let referenced = conn.query_row(
-                "SELECT EXISTS(
-                    SELECT 1 FROM document_assets WHERE content_hash = ?1
-                 )",
-                params![hash.as_slice()],
-                |row| row.get::<_, bool>(0),
-            )?;
-            Ok(referenced)
-        });
-        if matches!(referenced.as_ref(), Ok(true)) {
-            continue;
-        }
-        if let Err(error) = &referenced {
-            tracing::warn!(target: "marks_server::assets", ?error, "could not recheck reclaimed asset reference");
-            continue;
-        }
-        if let Err(error) = app.assets.remove(hash).await {
-            // The authorization graph is already gone. A leftover unreferenced
-            // content hash is safe and can be swept; failing the idempotent
-            // purge response here would falsely imply the document survived.
-            tracing::warn!(target: "marks_server::assets", ?error, "could not reclaim orphaned asset bytes");
-        }
+    let reclaim_count = reclaim_assets.len();
+    let reclaimed_all = complete_batch_before_deadline(reclaim_assets, reclaim_deadline, |hash| {
+        let app = app.clone();
+        async move { reclaim_purged_asset(&app, hash).await }
+    })
+    .await;
+    if !reclaimed_all {
+        // The authorization graph is already gone. Leftover unreferenced
+        // content hashes are safe and startup reconciliation will sweep them;
+        // an unhealthy filesystem must not retain the global mutation guard
+        // once the aggregate cleanup budget expires.
+        tracing::warn!(
+            target: "marks_server::assets",
+            reclaim_count,
+            timeout_ms = PURGE_ASSET_RECLAIM_TIMEOUT.as_millis(),
+            "asset reclaim batch timed out"
+        );
     }
     Ok(Json(json!({ "purged": true })).into_response())
+}
+
+async fn reclaim_purged_asset(app: &App, hash: [u8; 32]) {
+    let _content_guard = app.assets.content_guard(hash).await;
+    let referenced = app.db.read(|conn| {
+        let referenced = conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM document_assets WHERE content_hash = ?1
+             )",
+            params![hash.as_slice()],
+            |row| row.get::<_, bool>(0),
+        )?;
+        Ok(referenced)
+    });
+    if matches!(referenced.as_ref(), Ok(true)) {
+        return;
+    }
+    if let Err(error) = &referenced {
+        tracing::warn!(target: "marks_server::assets", ?error, "could not recheck reclaimed asset reference");
+        return;
+    }
+    if let Err(error) = app.assets.remove(hash).await {
+        tracing::warn!(target: "marks_server::assets", ?error, "could not reclaim orphaned asset bytes");
+    }
+}
+
+async fn complete_batch_before_deadline<T, F, Work>(
+    items: impl IntoIterator<Item = T>,
+    deadline: Instant,
+    mut work: F,
+) -> bool
+where
+    F: FnMut(T) -> Work,
+    Work: Future<Output = ()>,
+{
+    for item in items {
+        if tokio::time::timeout_at(deadline, work(item)).await.is_err() {
+            return false;
+        }
+    }
+    true
 }
 
 /// The exact current text: from the live room when resident (the room
@@ -1422,6 +1460,7 @@ fn bump_epoch(conn: &Connection, document_id: &DocumentId) -> ApiResult<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     #[test]
     fn public_editor_access_cannot_be_narrowed_by_a_named_acl() {
@@ -1440,6 +1479,44 @@ mod tests {
         assert_eq!(
             apply_public_editor_floor(DocumentRole::Viewer, false),
             DocumentRole::Viewer
+        );
+    }
+
+    #[tokio::test]
+    async fn purge_reclamation_uses_one_absolute_batch_deadline() {
+        struct DropProof(Arc<AtomicBool>);
+        impl Drop for DropProof {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let completed = tokio::time::timeout(
+            Duration::from_secs(1),
+            complete_batch_before_deadline(
+                0..1_000,
+                Instant::now() + Duration::from_millis(25),
+                |_| {
+                    let attempts = attempts.clone();
+                    let dropped = dropped.clone();
+                    async move {
+                        attempts.fetch_add(1, Ordering::AcqRel);
+                        let _drop_proof = DropProof(dropped);
+                        std::future::pending::<()>().await;
+                    }
+                },
+            ),
+        )
+        .await
+        .expect("aggregate reclaim deadline returned");
+
+        assert!(!completed);
+        assert_eq!(attempts.load(Ordering::Acquire), 1);
+        assert!(
+            dropped.load(Ordering::Acquire),
+            "the in-flight reclaim future was not cancelled"
         );
     }
 }

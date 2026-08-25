@@ -9,6 +9,7 @@ use bytes::Bytes;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
+use std::future::Future;
 use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -16,6 +17,7 @@ use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::{Mutex, OwnedMutexGuard, OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
 const COPY_BUFFER_BYTES: usize = 1024 * 1024;
 const CONTENT_GATE_SHARDS: usize = 64;
@@ -64,6 +66,15 @@ impl AssetStore {
         self.mutation_gate.clone().read_owned().await
     }
 
+    pub async fn mutation_guard_before(
+        &self,
+        deadline: Instant,
+    ) -> ApiResult<OwnedRwLockReadGuard<()>> {
+        tokio::time::timeout_at(deadline, self.mutation_guard())
+            .await
+            .map_err(|_| ApiError::unavailable("asset storage timed out"))
+    }
+
     pub async fn backup_guard(&self) -> OwnedRwLockWriteGuard<()> {
         self.mutation_gate.clone().write_owned().await
     }
@@ -98,21 +109,31 @@ impl AssetStore {
         &self,
         hash: [u8; 32],
         expected_bytes: usize,
+        deadline: Instant,
     ) -> ApiResult<tokio::fs::File> {
         let path = content_path(&self.root, &hash);
-        let file = tokio::fs::File::open(path)
-            .await
-            .map_err(|_| ApiError::internal())?;
-        let metadata = file.metadata().await.map_err(|_| ApiError::internal())?;
-        if !metadata.is_file() || metadata.len() != expected_bytes as u64 {
-            return Err(ApiError::internal());
-        }
-        Ok(file)
+        await_readonly_filesystem(
+            async move {
+                let file = tokio::fs::File::open(path).await?;
+                let metadata = file.metadata().await?;
+                if !metadata.is_file() || metadata.len() != expected_bytes as u64 {
+                    return Err(std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "asset stream metadata mismatch",
+                    ));
+                }
+                Ok(file)
+            },
+            deadline,
+            "open asset stream",
+        )
+        .await
     }
 
     pub async fn remove(&self, hash: [u8; 32]) -> ApiResult<()> {
         let path = content_path(&self.root, &hash);
         let cancellation = Arc::new(AtomicU8::new(REMOVAL_ACTIVE));
+        let _cancel_on_drop = CancelRemovalOnDrop(cancellation.clone());
         let worker_cancellation = cancellation.clone();
         let task = tokio::task::spawn_blocking(move || {
             remove_blocking(&path, worker_cancellation.as_ref())
@@ -242,6 +263,48 @@ impl AssetStore {
             }
         }
         Ok(report)
+    }
+}
+
+struct CancelRemovalOnDrop(Arc<AtomicU8>);
+
+impl Drop for CancelRemovalOnDrop {
+    fn drop(&mut self) {
+        // This also runs when an outer aggregate request deadline drops
+        // `AssetStore::remove` before its own timeout fires.
+        let _ = self.0.compare_exchange(
+            REMOVAL_ACTIVE,
+            REMOVAL_CANCELLED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+}
+
+async fn await_readonly_filesystem<T>(
+    work: impl Future<Output = std::io::Result<T>>,
+    deadline: Instant,
+    operation: &'static str,
+) -> ApiResult<T> {
+    let timeout = deadline.saturating_duration_since(Instant::now());
+    match tokio::time::timeout_at(deadline, work).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(error)) => {
+            tracing::error!(target: "marks_server::assets", operation, %error, "asset filesystem read failed");
+            Err(ApiError::internal())
+        }
+        Err(_) => {
+            // Tokio may have delegated open/metadata to its blocking pool, but
+            // dropping this read-only future is safe: a late completion owns no
+            // mutation guard and cannot change canonical asset state.
+            tracing::warn!(
+                target: "marks_server::assets",
+                operation,
+                timeout_ms = timeout.as_millis(),
+                "asset filesystem read timed out"
+            );
+            Err(ApiError::unavailable("asset storage timed out"))
+        }
     }
 }
 
@@ -723,6 +786,60 @@ mod tests {
         );
         store.verify_content(hash, bytes.len()).unwrap();
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn stalled_readonly_open_releases_mutation_guard_at_deadline() {
+        let root = test_root("open-timeout");
+        let store = Arc::new(AssetStore::open(root.clone()).unwrap());
+        let mutation_guard = store.mutation_guard().await;
+
+        let error = await_readonly_filesystem(
+            std::future::pending::<std::io::Result<()>>(),
+            Instant::now() + Duration::from_millis(25),
+            "test asset open",
+        )
+        .await
+        .expect_err("wedged read-only open must time out");
+        assert_eq!(error.status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
+
+        drop(mutation_guard);
+        let backup_guard = tokio::time::timeout(Duration::from_secs(1), store.backup_guard())
+            .await
+            .expect("asset GET mutation guard released");
+        drop(backup_guard);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn request_deadline_bounds_mutation_guard_acquisition() {
+        let root = test_root("guard-timeout");
+        let store = Arc::new(AssetStore::open(root.clone()).unwrap());
+        let backup_guard = store.backup_guard().await;
+
+        let error = store
+            .mutation_guard_before(Instant::now() + Duration::from_millis(25))
+            .await
+            .expect_err("exclusive backup guard must not strand an asset request");
+        assert_eq!(error.status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
+
+        drop(backup_guard);
+        let mutation_guard = tokio::time::timeout(Duration::from_secs(1), store.mutation_guard())
+            .await
+            .expect("guard remains usable after request timeout");
+        drop(mutation_guard);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dropping_a_remove_future_cancels_only_an_uncommitted_unlink() {
+        let active = Arc::new(AtomicU8::new(REMOVAL_ACTIVE));
+        drop(CancelRemovalOnDrop(active.clone()));
+        assert_eq!(active.load(Ordering::Acquire), REMOVAL_CANCELLED);
+
+        let committed = Arc::new(AtomicU8::new(REMOVAL_COMMITTED));
+        drop(CancelRemovalOnDrop(committed.clone()));
+        assert_eq!(committed.load(Ordering::Acquire), REMOVAL_COMMITTED);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
