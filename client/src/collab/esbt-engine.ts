@@ -9,6 +9,7 @@ import {
 import { EditorView, ViewPlugin, keymap } from '@codemirror/view';
 import {
   readNetworkQuality,
+  SERVICE_REQUEST_TIMEOUT_MS,
   snapshotFetchTimeoutMs,
 } from '../browser/network.ts';
 import { PERSIST_LOCK_TIMEOUT_MS } from '../browser/persist-lock.ts';
@@ -99,6 +100,7 @@ export const SOCKET_HANDSHAKE_TIMEOUT_MS = 10_000;
 export const SOCKET_INITIAL_SYNC_TIMEOUT_MS = 10_000;
 export const SOCKET_COMMIT_TIMEOUT_MS = 15_000;
 export const SOCKET_ERROR_CLOSE_GRACE_MS = 1_000;
+export const AUTHORITY_CHANGE_GRACE_MS = SERVICE_REQUEST_TIMEOUT_MS + RECONNECT_MIN_MS;
 
 const userKey = (siteId: string) => `${siteId}-cm-user`;
 const fromCrdt = Annotation.define<boolean>();
@@ -128,6 +130,8 @@ export class EsbtEngine implements CollabSession {
   private admissionAbort: AbortController | null = null;
   private reconnectDelay = RECONNECT_MIN_MS;
   private reconnectTimer: number | null = null;
+  private authorityChangeGraceDeadline = 0;
+  private authorityChangeGraceTimer: number | null = null;
   private presenceHeartbeat: number | null = null;
   private readonly activity: PresenceActivityController;
   private snapshotReplyTimer: number | null = null;
@@ -958,13 +962,17 @@ export class EsbtEngine implements CollabSession {
         this.admissionAbort !== controller
       ) return;
       this.admissionAbort = null;
+      this.clearAuthorityChangeGrace();
       this.marksSiteId = ticket.siteId;
       this.applyTicketPermissions(ticket);
       this.openSocket(ticket);
     } catch (error) {
       if (this.admissionAbort === controller) this.admissionAbort = null;
       if (this.destroyed || this.storageFatal || controller.signal.aborted) return;
-      if (shouldRetryAdmission(error)) {
+      if (
+        shouldRetryAdmission(error) ||
+        this.authorityChangeGraceDeadline > performance.now()
+      ) {
         this.setStatus('offline');
         this.scheduleReconnect();
       } else {
@@ -1047,6 +1055,7 @@ export class EsbtEngine implements CollabSession {
       // session ticket; deterministic denial enters recovery, while a
       // transient failure stays read-only in the ordinary bounded retry lane.
       this.applyPermissionRole(null);
+      this.beginAuthorityChangeGrace();
       this.connect();
       return;
     }
@@ -1088,6 +1097,49 @@ export class EsbtEngine implements CollabSession {
     this.socketErrorCloseTarget = null;
   }
 
+  private beginAuthorityChangeGrace(
+    graceMs = AUTHORITY_CHANGE_GRACE_MS,
+  ): void {
+    this.clearAuthorityChangeGrace();
+    const duration = Math.max(1, graceMs);
+    this.authorityChangeGraceDeadline = performance.now() + duration;
+    this.authorityChangeGraceTimer = window.setTimeout(
+      () => this.expireAuthorityChangeGrace(),
+      duration,
+    );
+  }
+
+  private expireAuthorityChangeGrace(): void {
+    if (this.authorityChangeGraceDeadline === 0 || this.destroyed || this.storageFatal) return;
+    const remaining = this.authorityChangeGraceDeadline - performance.now();
+    if (remaining > 0) {
+      if (this.authorityChangeGraceTimer !== null) {
+        window.clearTimeout(this.authorityChangeGraceTimer);
+      }
+      this.authorityChangeGraceTimer = window.setTimeout(
+        () => this.expireAuthorityChangeGrace(),
+        remaining,
+      );
+      return;
+    }
+
+    this.clearAuthorityChangeGrace();
+    this.admissionAbort?.abort();
+    this.admissionAbort = null;
+    this.enterTerminalRecovery(
+      CLOSE_AUTHORITY_CHANGED,
+      'Marks could not reauthorize this document before the login or permission change settled. Editing has been stopped so stale authority cannot create unsendable work.',
+    );
+  }
+
+  private clearAuthorityChangeGrace(): void {
+    if (this.authorityChangeGraceTimer !== null) {
+      window.clearTimeout(this.authorityChangeGraceTimer);
+    }
+    this.authorityChangeGraceTimer = null;
+    this.authorityChangeGraceDeadline = 0;
+  }
+
   private armSocketDeadline(socket: WebSocket, timeoutMs: number): void {
     this.clearSocketDeadline();
     if (this.socket !== socket || this.destroyed || this.storageFatal) return;
@@ -1116,12 +1168,27 @@ export class EsbtEngine implements CollabSession {
   private scheduleReconnect(): void {
     if (this.reconnectTimer !== null || this.destroyed || this.storageFatal || !this.access) return;
     const jitter = Math.random() * 0.3 + 0.85;
-    const delay = Math.min(this.reconnectDelay * jitter, RECONNECT_MAX_MS);
+    let delay = Math.min(this.reconnectDelay * jitter, RECONNECT_MAX_MS);
     this.reconnectDelay = Math.min(this.reconnectDelay * 2, RECONNECT_MAX_MS);
+    if (this.authorityChangeGraceDeadline > 0) {
+      const remaining = this.authorityChangeGraceDeadline - performance.now();
+      if (remaining <= 0) {
+        this.expireAuthorityChangeGrace();
+        return;
+      }
+      delay = Math.min(delay, remaining);
+    }
     this.reconnectTimer = window.setTimeout(() => {
       this.reconnectTimer = null;
+      if (
+        this.authorityChangeGraceDeadline > 0 &&
+        performance.now() >= this.authorityChangeGraceDeadline
+      ) {
+        this.expireAuthorityChangeGrace();
+        return;
+      }
       this.connect();
-    }, delay);
+    }, Math.max(1, delay));
   }
 
   private handleOnline = (): void => {
@@ -1599,6 +1666,7 @@ export class EsbtEngine implements CollabSession {
 
     this.admissionAbort?.abort();
     this.admissionAbort = null;
+    this.clearAuthorityChangeGrace();
     this.clearSocketErrorCloseDeadline();
     this.clearSocketDeadline();
     if (this.reconnectTimer !== null) {
@@ -1660,6 +1728,7 @@ export class EsbtEngine implements CollabSession {
       }
       this.admissionAbort?.abort();
       this.admissionAbort = null;
+      this.clearAuthorityChangeGrace();
       this.clearSocketErrorCloseDeadline();
       this.clearSocketDeadline();
       this.serverSynced = false;
@@ -1776,6 +1845,7 @@ export class EsbtEngine implements CollabSession {
     window.removeEventListener('beforeunload', this.handlePageHide);
     this.admissionAbort?.abort();
     this.admissionAbort = null;
+    this.clearAuthorityChangeGrace();
     this.clearSocketErrorCloseDeadline();
     this.clearSocketDeadline();
     if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);

@@ -340,7 +340,7 @@ for (const [code, expected] of [
   });
 }
 
-test('a scratch 4401 can promote through exactly one immediate session admission', async () => {
+test('a scratch 4401 survives claim-before-finalize ordering and then promotes', async () => {
   const promotedTicket = {
     roomUrl: 'ws://example.test/collab/promoted',
     ticketId: 'ticket_promoted123',
@@ -353,7 +353,13 @@ test('a scratch 4401 can promote through exactly one immediate session admission
       displayName: 'Promoted User',
     },
   };
+  const scratchDenial = Object.assign(
+    new Error('room admission was denied (401)'),
+    { retryable: false },
+  );
+  let caller: 'scratch' | 'session' = 'scratch';
   let admissions = 0;
+  let reconnects = 0;
   let openedAuthority: 'session' | 'scratch' | null = null;
   const engine = new EsbtEngine({
     docId: 'scratch-authority-promoted',
@@ -362,6 +368,7 @@ test('a scratch 4401 can promote through exactly one immediate session admission
       fetchSnapshot: async () => new Response(null, { status: 204 }),
       admit: async () => {
         admissions += 1;
+        if (caller === 'scratch') throw scratchDenial;
         return promotedTicket;
       },
     },
@@ -371,11 +378,14 @@ test('a scratch 4401 can promote through exactly one immediate session admission
     socket: WebSocket | null;
     permissionRole: 'scratch' | 'owner' | null;
     onDisconnect(socket: WebSocket, code?: number): void;
+    connect(): void;
     openSocket(ticket: typeof promotedTicket): void;
+    scheduleReconnect(): void;
   };
   state.socket = socket;
   state.permissionRole = 'scratch';
   state.openSocket = (ticket) => { openedAuthority = ticket.authority; };
+  state.scheduleReconnect = () => { reconnects += 1; };
 
   state.onDisconnect(socket, 4401);
 
@@ -383,13 +393,22 @@ test('a scratch 4401 can promote through exactly one immediate session admission
   assert.equal(engine.capabilities().edit, false, 'stale scratch writes freeze before admission settles');
   await delay(0);
   assert.equal(admissions, 1);
+  assert.equal(reconnects, 1, 'the claimed scratch denial remains recoverable during promotion grace');
+  assert.equal(openedAuthority, null);
+  assert.equal(engine.capabilities().edit, false);
+
+  caller = 'session';
+  state.connect();
+  await delay(0);
+
+  assert.equal(admissions, 2);
   assert.equal(openedAuthority, 'session');
   assert.equal(engine.capabilities().role, 'owner');
   assert.equal(engine.capabilities().edit, true);
   engine.destroy();
 });
 
-test('a denied scratch 4401 terminalizes only after one fresh admission', async () => {
+test('a denied scratch 4401 terminalizes when the bounded promotion grace expires', async () => {
   const denial = Object.assign(new Error('room admission was denied (401)'), { retryable: false });
   let admissions = 0;
   const engine = new EsbtEngine({
@@ -408,21 +427,24 @@ test('a denied scratch 4401 terminalizes only after one fresh admission', async 
     socket: WebSocket | null;
     permissionRole: 'scratch' | null;
     onDisconnect(socket: WebSocket, code?: number): void;
+    beginAuthorityChangeGrace(graceMs?: number): void;
     scheduleReconnect(): void;
   };
   let reconnects = 0;
   let notice = '';
   state.socket = socket;
   state.permissionRole = 'scratch';
+  const beginAuthorityChangeGrace = state.beginAuthorityChangeGrace.bind(state);
+  state.beginAuthorityChangeGrace = () => beginAuthorityChangeGrace(5);
   state.scheduleReconnect = () => { reconnects += 1; };
   engine.onError?.((error) => { notice = error.message; });
 
   state.onDisconnect(socket, 4401);
 
   assert.equal(engine.capabilities().edit, false);
-  await delay(0);
+  await delay(20);
   assert.equal(admissions, 1);
-  assert.equal(reconnects, 0);
+  assert.equal(reconnects, 1);
   assert.match(notice, /could not reauthorize/u);
   assert.match(notice, /File → Markdown/u);
   await assert.rejects(engine.whenDurable(), /File → Markdown/u);
