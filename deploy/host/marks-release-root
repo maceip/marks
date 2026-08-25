@@ -421,7 +421,10 @@ def built_schema_receipt(stage: Path):
         [stage / "marks-admin", "schema"],
         step="schema",
         capture_limit=64 * 1024,
-        sandbox_command=["/marks-input/marks-admin", "schema"],
+        # systemd validates argv[0] before applying BindReadOnlyPaths. Start a
+        # fixed host executable, then let env exec the mounted payload inside
+        # the already-created unit namespace.
+        sandbox_command=["/usr/bin/env", "--", "/marks-input/marks-admin", "schema"],
     )
     try:
         receipt = json.loads(output.strip())

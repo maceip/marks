@@ -148,7 +148,10 @@ test('the boundary policy files stay restrictive', () => {
 
 test('root release assembly crosses only bounded unprivileged build boundaries', () => {
   assert.match(releaseRoot, /def run_untrusted_readonly\(/u);
-  assert.match(releaseRoot, /sandbox_command=\["\/marks-input\/marks-admin", "schema"\]/u);
+  assert.match(
+    releaseRoot,
+    /sandbox_command=\["\/usr\/bin\/env", "--", "\/marks-input\/marks-admin", "schema"\]/u,
+  );
   assert.doesNotMatch(releaseRoot, /run\(\[stage \/ "marks-admin", "schema"\]/u);
   assert.match(releaseRoot, /copy_built_binary\(cargo, "marks-server", stage \/ "marks-server"\)/u);
   assert.match(releaseRoot, /copy_built_binary\(cargo, "marks-admin", stage \/ "marks-admin"\)/u);

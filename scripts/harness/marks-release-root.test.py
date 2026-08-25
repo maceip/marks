@@ -487,6 +487,7 @@ class ReleaseRootContract(unittest.TestCase):
         self.assertIn("--property=TasksMax=32", command)
         self.assertIn("--property=NoNewPrivileges=yes", command)
         self.assertIn("--property=CapabilityBoundingSet=", command)
+        self.assertEqual(command[-4:], ["/usr/bin/env", "--", "/marks-input/marks-admin", "schema"])
         self.assertGreater(command.index("/marks-input/marks-admin"), 0)
         self.assertEqual(run_options[0]["capture_limit"], 64 * 1024)
 
