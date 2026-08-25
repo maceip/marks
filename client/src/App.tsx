@@ -19,6 +19,10 @@ import { StatusBar } from './components/workspace/StatusBar';
 import { LiquidDock } from './components/shell/LiquidDock';
 import { ABOUT_DOCUMENT_ID, ABOUT_DOCUMENT_TITLE, isAboutDocument } from './content/about';
 import { signalDocumentRepositoryChange } from './data/documents';
+import {
+  anonymousStarterRequestId,
+  confirmAnonymousStarterRequest,
+} from './browser/create-request';
 import { runWithTimeout, SERVICE_REQUEST_TIMEOUT_MS } from './browser/network.ts';
 import { readPairingHash } from './lib/pairing-link';
 import { readDocumentShareHash } from './lib/share-link';
@@ -483,6 +487,7 @@ export function App() {
       return;
     }
     initialAnonymousPageStarted.current = true;
+    const requestId = anonymousStarterRequestId();
     void runWithTimeout(
       async (signal) => {
         const { ABOUT_DOCUMENT } = await import('./content/marketing-markdown');
@@ -490,6 +495,7 @@ export function App() {
         return documents.create({
           title: ABOUT_DOCUMENT_TITLE,
           content: ABOUT_DOCUMENT,
+          requestId,
         });
       },
       SERVICE_REQUEST_TIMEOUT_MS,
@@ -497,6 +503,7 @@ export function App() {
       new DOMException('The starter page took too long to create.', 'TimeoutError'),
     )
       .then((created) => {
+        confirmAnonymousStarterRequest(requestId);
         if (location.pathname === '/') {
           setMode(phone ? 'preview' : 'split');
           setPreparedMarketingPresentation(`${created.id}:${phone ? 'phone' : 'wide'}`);

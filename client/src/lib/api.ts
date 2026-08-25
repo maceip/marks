@@ -187,7 +187,11 @@ export function getDocument(id: string): Promise<{ document: DocumentMeta; conne
   return request(`/v1/documents/${id}`);
 }
 
-export function createDocument(draft?: { title?: string; markdown?: string }): Promise<{ document: DocumentMeta }> {
+export function createDocument(draft?: {
+  title?: string;
+  markdown?: string;
+  requestId?: string;
+}): Promise<{ document: DocumentMeta; replayed?: boolean }> {
   return request('/v1/documents', { method: 'POST', body: JSON.stringify(draft ?? {}) });
 }
 

@@ -121,6 +121,7 @@ function createDocumentRepository(): DocumentRepository {
       const { document } = await (await loadServiceApi()).createDocument({
         title: draft?.title,
         markdown: draft?.content,
+        requestId: draft?.requestId,
       });
       signalDocumentRepositoryChange();
       return document;

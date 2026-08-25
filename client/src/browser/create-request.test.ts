@@ -1,0 +1,50 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {
+  anonymousStarterRequestId,
+  confirmAnonymousStarterRequest,
+} from './create-request.ts';
+
+class MemoryStorage {
+  private readonly values = new Map<string, string>();
+
+  getItem(key: string): string | null {
+    return this.values.get(key) ?? null;
+  }
+
+  setItem(key: string, value: string): void {
+    this.values.set(key, value);
+  }
+
+  removeItem(key: string): void {
+    this.values.delete(key);
+  }
+}
+
+test('anonymous starter retries keep one request id until a confirmed response', () => {
+  const storage = new MemoryStorage();
+  const first = '11111111-1111-4111-8111-111111111111';
+  const second = '22222222-2222-4222-8222-222222222222';
+  let generated = 0;
+  const makeId = () => {
+    generated += 1;
+    return generated === 1 ? first : second;
+  };
+
+  assert.equal(anonymousStarterRequestId(storage, makeId), first);
+  assert.equal(anonymousStarterRequestId(storage, makeId), first);
+  assert.equal(generated, 1);
+  confirmAnonymousStarterRequest(first, storage);
+  assert.equal(anonymousStarterRequestId(storage, makeId), second);
+});
+
+test('a stale response cannot clear a newer pending create request', () => {
+  const storage = new MemoryStorage();
+  const first = '11111111-1111-4111-8111-111111111111';
+  const second = '22222222-2222-4222-8222-222222222222';
+  assert.equal(anonymousStarterRequestId(storage, () => first), first);
+  confirmAnonymousStarterRequest(first, storage);
+  assert.equal(anonymousStarterRequestId(storage, () => second), second);
+  confirmAnonymousStarterRequest(first, storage);
+  assert.equal(anonymousStarterRequestId(storage, () => first), second);
+});

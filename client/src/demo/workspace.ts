@@ -17,6 +17,8 @@ export interface LocalDocumentDraft {
   title?: string;
   content?: string;
   templateId?: TemplateId;
+  /** Stable retry key for a service-side atomic create. Ignored in local mode. */
+  requestId?: string;
 }
 
 const WORKSPACE_KEY = 'marks:ui-workspace:v1';
