@@ -3,10 +3,12 @@ export { MARKS_DOCUMENT_CONFIG } from '../profile.ts';
 
 export {
   ESBT_COMPONENT_MANIFEST_URL,
+  ESBT_RUNTIME_BOOTSTRAP_TIMEOUT_MS,
   EsbtDocument,
   EsbtError,
   EsbtRuntime,
   isEsbtComponentManifest,
+  loadSharedEsbtRuntime,
   normalizeSiteId,
   verifyComponentArtifact,
 } from './esbt-document.ts';
@@ -18,6 +20,7 @@ export type {
   CreateDocumentOptions,
   DocumentConfigInput,
   EsbtComponentManifest,
+  EsbtRuntimeLoadOptions,
   PresencePositionPair,
   SnapshotReceipt,
   TransactOptions,

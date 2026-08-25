@@ -72,13 +72,13 @@ import {
   ESBT_ERROR,
   EsbtDocument,
   EsbtError,
-  EsbtRuntime,
   MARKS_DOCUMENT_CONFIG,
   engineSiteToMarks,
   exportReconnectPayload,
   isEsbtError,
   isRefusedEdit,
   isSnapshotRefusal,
+  loadSharedEsbtRuntime,
   marksSiteToEngine,
   userMessageForError,
 } from './wasm';
@@ -98,13 +98,6 @@ const fromCrdt = Annotation.define<boolean>();
 const setEditorEditable = StateEffect.define<boolean>();
 const EDITOR_ORIGIN = 'editor';
 const SESSION_ORIGIN = 'session';
-
-let sharedRuntime: Promise<EsbtRuntime> | null = null;
-
-function loadRuntime(): Promise<EsbtRuntime> {
-  sharedRuntime ??= EsbtRuntime.load();
-  return sharedRuntime;
-}
 
 /**
  * Production Marks client for the Rust/Wasm ESBT document.
@@ -761,7 +754,7 @@ export class EsbtEngine implements CollabSession {
   }
 
   private async start(stored: ReplicaJournalRecord | null): Promise<void> {
-    const runtime = await loadRuntime();
+    const runtime = await loadSharedEsbtRuntime();
     if (this.destroyed) return;
 
     if (stored && isAboutDocument(this.docId)) {
