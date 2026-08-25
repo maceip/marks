@@ -36,7 +36,7 @@ interface PhoneComposerProps {
 }
 
 const PHONE_TAB_ORDER: RibbonTabId[] = [
-  'home', 'insert', 'review', 'view', 'file', 'draw', 'tools', 'picture', 'table', 'shape',
+  'import', 'login', 'home', 'insert', 'review', 'view', 'file', 'draw', 'tools', 'picture', 'table', 'shape',
 ];
 
 /** The phone presentation consumes the exact same projected tabs, groups,
@@ -45,7 +45,7 @@ export function PhoneComposer(props: PhoneComposerProps) {
   const center = useCommandCenter();
   const task = ribbonTask(center.environment);
   const tabs = useMemo(() => orderTabs(center.ribbon), [center.ribbon]);
-  const [tab, setTab] = useState<RibbonTabId>(() => task === 'inspect' ? 'view' : 'home');
+  const [tab, setTab] = useState<RibbonTabId>('import');
   const [presenceDisplay, setPresenceState] = useState<DocumentPresenceDisplay>(() =>
     getPresenceDisplay(props.mode === 'preview'));
   const lastManualTabAt = useRef(0);
@@ -88,6 +88,13 @@ export function PhoneComposer(props: PhoneComposerProps) {
   const selectTab = (id: RibbonTabId) => {
     lastManualTabAt.current = Date.now();
     setTab(id);
+    if (id === 'login') {
+      const login = tabs
+        .flatMap((item) => item.groups)
+        .flatMap((group) => group.commands)
+        .find((command) => command.id === 'identity.keep');
+      if (login?.enabled) void center.invoke(login.id);
+    }
   };
   const changePresence = (value: DocumentPresenceDisplay) => {
     setPresenceDisplay(value);
@@ -101,8 +108,8 @@ export function PhoneComposer(props: PhoneComposerProps) {
           const keep = tabs.flatMap((item) => item.groups).flatMap((group) => group.commands).find((command) => command.id === 'identity.keep');
           if (keep) invoke(keep);
         }}>
-          <span>Not logged in</span>
-          This document will be lost unless you log in.
+          <span>Log In</span>
+          Open this page on a laptop to log in. The page is already saved and public.
         </button>
       )}
 
@@ -134,7 +141,7 @@ export function PhoneComposer(props: PhoneComposerProps) {
 
         <div className="phone-ribbon-tabs" role="tablist" aria-label="Ribbon tasks">
           {tabs.map((item) => (
-            <button key={item.id} type="button" role="tab" aria-selected={selectedTab?.id === item.id} className={`${selectedTab?.id === item.id ? 'active ' : ''}${item.contextual ? 'contextual ' : ''}${item.agentRaised ? 'agent-raised' : ''}`.trim()} onClick={() => selectTab(item.id)}>
+            <button key={item.id} type="button" role="tab" data-ribbon-tab={item.id} aria-selected={selectedTab?.id === item.id} className={`${selectedTab?.id === item.id ? 'active ' : ''}${item.contextual ? 'contextual ' : ''}${item.agentRaised ? 'agent-raised' : ''}`.trim()} onClick={() => selectTab(item.id)}>
               <Glyph name={tabGlyph(item.id)} size={19} />
               <span>{phoneTabLabel(item)}</span>
               {item.agentRaised && <i className="agent-tab-dot" aria-label="Agent-relevant commands" />}
@@ -160,6 +167,8 @@ function phoneTabLabel(tab: ProjectedRibbonTab | undefined): string {
 }
 
 function tabGlyph(tab: RibbonTabId) {
+  if (tab === 'import') return 'template' as const;
+  if (tab === 'login') return 'share' as const;
   if (tab === 'home') return 'pencil' as const;
   if (tab === 'insert') return 'plus' as const;
   if (tab === 'review') return 'gauge' as const;

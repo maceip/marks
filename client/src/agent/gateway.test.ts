@@ -4,6 +4,7 @@ import { resetServiceCallerForTests, setActiveCaller } from '../auth/caller.ts';
 import { cacheSession } from '../auth/session-cache.ts';
 import {
   AgentGatewayError,
+  cancelHostedAgentRun,
   createHostedAgentRun,
   parseEventStream,
   streamHostedAgentRun,
@@ -76,6 +77,60 @@ test('hosted run creation sends session CSRF and rejects off-origin event URLs',
   assert.equal(captured?.credentials, 'same-origin');
 });
 
+test('hosted mutations bound a non-cooperative fetch and stalled response body', { timeout: 1_000 }, async () => {
+  const request = {
+    requestId: 'request_1',
+    documentId: 'doc_1',
+    prompt: 'Show preview',
+    tools: [],
+  };
+  await assert.rejects(
+    createHostedAgentRun(request, {
+      timeoutMs: 5,
+      fetch: () => new Promise(() => undefined),
+    }),
+    (error: unknown) => error instanceof AgentGatewayError && error.code === 'network',
+  );
+
+  const stalledBody = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('{"runId":'));
+    },
+  });
+  await assert.rejects(
+    createHostedAgentRun(request, {
+      timeoutMs: 5,
+      fetch: async () => new Response(stalledBody, {
+        status: 202,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    }),
+    (error: unknown) => error instanceof AgentGatewayError && error.code === 'network',
+  );
+});
+
+test('hosted cancellation is bounded and honors caller abort', { timeout: 1_000 }, async () => {
+  await assert.rejects(
+    cancelHostedAgentRun('run_1', {
+      timeoutMs: 5,
+      fetch: () => new Promise(() => undefined),
+    }),
+    (error: unknown) => error instanceof AgentGatewayError && error.code === 'network',
+  );
+
+  const controller = new AbortController();
+  const cancelling = cancelHostedAgentRun('run_1', {
+    timeoutMs: 500,
+    signal: controller.signal,
+    fetch: () => new Promise(() => undefined),
+  });
+  controller.abort(new DOMException('closed', 'AbortError'));
+  await assert.rejects(
+    cancelling,
+    (error: unknown) => error instanceof DOMException && error.name === 'AbortError',
+  );
+});
+
 test('stream resumes after a known event ID and never replays a browser tool call', async () => {
   const response = new Response(stream([
     'id: 7\nevent: tool.call\ndata: {"callId":"call_1","commandId":"format.bold","name":"marks_format_bold","arguments":{},"effect":"write","durability":"document"}\n\n',
@@ -111,3 +166,30 @@ test('SSE parser fails closed on unknown events and nonnumeric IDs', async () =>
   }, AgentGatewayError);
 });
 
+test('SSE parsing abandons a stream that stops producing bytes', { timeout: 1_000 }, async () => {
+  const stalled = new ReadableStream<Uint8Array>({ start() {} });
+  const events = parseEventStream(stalled, undefined, 5);
+  await assert.rejects(
+    events.next(),
+    (error: unknown) => error instanceof DOMException && error.name === 'TimeoutError',
+  );
+});
+
+test('SSE timeout does not await a non-cooperative stream cancel', { timeout: 1_000 }, async () => {
+  let cancels = 0;
+  const stalled = new ReadableStream<Uint8Array>({
+    start() {},
+    cancel() {
+      cancels += 1;
+      return new Promise(() => undefined);
+    },
+  });
+  const events = parseEventStream(stalled, undefined, 5);
+  const started = Date.now();
+  await assert.rejects(
+    events.next(),
+    (error: unknown) => error instanceof DOMException && error.name === 'TimeoutError',
+  );
+  assert.equal(cancels, 1);
+  assert.ok(Date.now() - started < 500);
+});

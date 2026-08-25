@@ -33,7 +33,10 @@ test('the repository exposes only current browser and service proof commands', (
 test('the current service proof owns the migrated two-browser scenarios', () => {
   const serviceProof = read('scripts/ci-service-ui.mjs');
   for (const assertion of [
-    'second isolated browser is admitted by current scratch authority',
+    'anonymous root creates a unique page through /v1/documents',
+    'anonymous page is public by its opaque slug on creation',
+    'more than six anonymous edits mark the public page persisted',
+    'copy-pasted slug admits a different anonymous editor without sharing settings',
     'isolated browser replicas converge through marks-server',
     'current service paints the remote browser caret',
     'presence bar shows both live browser connections',
@@ -42,11 +45,96 @@ test('the current service proof owns the migrated two-browser scenarios', () => 
     'isolated browser peer cold-opens committed content including preview writeback',
     'current service outline reflects admitted Markdown headings',
     'current service editor scrolling moves the preview',
+    'supported document drag shows the Markdown import target',
+    'document drop converts and creates one populated public page',
+    'browser Wasm PDF drop creates a populated public Markdown page',
+    'PDF drop stays in browser Wasm and never uploads to the server',
   ]) {
     assert.match(serviceProof, new RegExp(assertion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
   assert.match(serviceProof, /browser\.newContext/);
-  assert.match(serviceProof, /peerContext\.addInitScript/);
+  assert.doesNotMatch(serviceProof, /peerContext\.addInitScript/);
+});
+
+test('mobile and service proofs fail fast without sharing a mutable client artifact', () => {
+  const mobileProof = read('scripts/check-mobile-ui.mjs');
+  assert.match(mobileProof, /join\(work, 'service-dist'\)/);
+  assert.match(mobileProof, /'build', '--workspace=client'.*'--outDir', staticDir, '--emptyOutDir'/s);
+  assert.match(mobileProof, /VITE_MARKS_DATA_MODE: 'service'/);
+  assert.match(mobileProof, /timeout: 120_000/);
+  assert.match(mobileProof, /fetch\(`\$\{origin\}\/readyz`/);
+  assert.match(mobileProof, /marks-server did not become ready within 15 seconds/);
+  assert.match(mobileProof, /loaded data-marks-mode=\$\{mode\}/);
+  assert.match(mobileProof, /function recordFatal\(error\)/);
+  assert.match(mobileProof, /server\.signalCode/);
+  assert.match(mobileProof, /Math\.min\(1_000, remaining\)/);
+  assert.match(mobileProof, /server\.kill\('SIGKILL'\)/);
+  assert.match(mobileProof, /await stop\(\)/);
+  assert.doesNotMatch(mobileProof, /process\.exit\(/);
+  assert.doesNotMatch(mobileProof, /join\(root, 'client', 'dist'\)/);
+
+  const serviceProof = read('scripts/ci-service-ui.mjs');
+  assert.match(serviceProof, /service proof loaded data-marks-mode=/);
+  assert.match(serviceProof, /rebuild with VITE_MARKS_DATA_MODE=service/);
+});
+
+test('anonymous and copied-slug failures leave opening shells with a retry surface', () => {
+  const app = read('client/src/App.tsx');
+  const sessionHook = read('client/src/hooks/useSession.ts');
+  const documentsHook = read('client/src/hooks/useDocuments.ts');
+  const caller = read('client/src/auth/caller.ts');
+  const pendingDevice = read('client/src/auth/pending-device.ts');
+  const api = read('client/src/lib/api.ts');
+  const roomAccess = read('client/src/auth/room-access.ts');
+  const engine = read('client/src/collab/esbt-engine.ts');
+  const journal = read('client/src/collab/journal.ts');
+  const network = read('client/src/browser/network.ts');
+  const metadata = read('client/src/hooks/useDocumentMeta.ts');
+  const benchmark = read('client/src/pages/Benchmark.tsx');
+  const workerSupervisor = read('client/src/markdown/worker-supervisor.ts');
+  const createRequest = read('client/src/browser/create-request.ts');
+  const mermaid = read('client/src/markdown/mermaid.ts');
+
+  assert.match(caller, /SERVICE_REQUEST_TIMEOUT_MS/);
+  assert.match(pendingDevice, /fetchWithTimeout/);
+  assert.match(api, /IMPORT_REQUEST_TIMEOUT_MS/);
+  assert.match(roomAccess, /fetchWithTimeout/);
+  assert.match(network, /await response\.arrayBuffer\(\)/);
+  assert.match(network, /Promise\.race\(\[completed, aborted\]\)/);
+  assert.match(sessionHook, /setError\(error instanceof Error/);
+  assert.doesNotMatch(
+    documentsHook,
+    /documentRepository\.create\([\s\S]{0,160}?await refresh\(\)/,
+    'a committed anonymous slug must not wait behind a nonessential catalog refresh',
+  );
+  assert.match(metadata, /setError\('Marks could not reach the document service in time\.'/);
+  assert.match(app, /Page could not open/);
+  assert.match(app, /Document connection failed/);
+  assert.match(app, /Try again/);
+  assert.ok(
+    app.indexOf('metadataError || sessionError') < app.indexOf('resolved && !supported'),
+    'transport failures render before authoritative unavailable documents',
+  );
+  assert.match(app, /ensureServiceCaller\(\{ forceProbe: true \}\)[\s\S]*?setServiceCallerError/);
+  assert.match(journal, /runWithTimeout\([\s\S]*?read\(docId\)/);
+  assert.match(engine, /openWithReplicaJournal\(options\.docId,[\s\S]*?new EsbtEngine/);
+  assert.match(engine, /void deleteReplicaJournal\(this\.docId\)\.catch/);
+  assert.doesNotMatch(engine, /await deleteReplicaJournal\(this\.docId\)/);
+  assert.match(benchmark, /try \{[\s\S]*?worker = new BenchWorker\(\)/);
+  assert.match(workerSupervisor, /try \{[\s\S]*?this\.worker = this\.spawn\(\)[\s\S]*?catch/);
+  assert.match(workerSupervisor, /queueMicrotask\(\(\) => this\.options\.onTerminal\(failure\)\)/);
+  assert.match(app, /pendingDocumentCreateRequestId\(createScope\)/);
+  assert.match(app, /pendingDocumentCreateRequest\(createScope, materialized\)/);
+  assert.match(app, /confirmDocumentCreateRequest\(createScope, requestId\)/);
+  assert.match(app, /documentDuplicateRequestScope\(docId\)/);
+  assert.match(createRequest, /sessionStorage/);
+  assert.match(createRequest, /JSON\.stringify\(created\)/);
+  assert.match(mermaid, /validateMermaidSource\(source\)/);
+  assert.match(mermaid, /maxTextSize: MAX_DIAGRAM_BYTES/);
+  assert.match(mermaid, /renderCircuitError/);
+  assert.match(mermaid, /eligible\.slice\(index\)/);
+  assert.match(mermaid, /maxEdges: 64/);
+  assert.match(mermaid, /MERMAID_RENDER_TIMEOUT_MS/);
 });
 
 test('incremental CI is conservative, gated, cached, and keeps full browser coverage', () => {

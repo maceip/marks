@@ -64,6 +64,8 @@ pub enum DocumentTicketError {
     ScratchMismatch,
     #[error("scratch workspace is expired, revoked, or already claimed")]
     ScratchInactive,
+    #[error("public edit access is not active on this document")]
+    PublicAccessInactive,
 }
 
 fn require_live_presented_ticket(
@@ -144,6 +146,53 @@ pub fn redeem_scratch_document_ticket(
     })
 }
 
+/// Redeem a scratch ticket for a public-by-slug editor. The HTTP layer passes
+/// the document's current public-edit bit so the ticket validator still fails
+/// closed if public access is ever withdrawn with an epoch bump.
+pub fn redeem_public_scratch_document_ticket(
+    ticket: &ScratchDocumentTicketRecord,
+    presented_secret: &[u8],
+    scratch: &ScratchRecord,
+    document: &DocumentRecord,
+    public_edit: bool,
+    expected_esbt_site: &EsbtSiteId,
+    now_ms: u64,
+) -> Result<ScratchActor, DocumentTicketError> {
+    require_live_presented_ticket(
+        &ticket.secret_hash,
+        presented_secret,
+        ticket.consumed_at_ms,
+        ticket.revoked_at_ms,
+        ticket.expires_at_ms,
+        now_ms,
+    )?;
+    if ticket.scratch_id != scratch.id {
+        return Err(DocumentTicketError::ScratchMismatch);
+    }
+    require_live_scratch(scratch, now_ms)?;
+    require_live_document(document).map_err(|_| DocumentTicketError::DocumentInactive)?;
+    if !public_edit {
+        return Err(DocumentTicketError::PublicAccessInactive);
+    }
+    if ticket.document_id != document.id {
+        return Err(DocumentTicketError::DocumentMismatch);
+    }
+    if &ticket.esbt_site != expected_esbt_site {
+        return Err(DocumentTicketError::SiteMismatch);
+    }
+    if ticket.authorization_epoch != document.authorization_epoch {
+        return Err(DocumentTicketError::AuthorizationStale);
+    }
+
+    Ok(ScratchActor {
+        scratch_id: ticket.scratch_id.clone(),
+        document_id: ticket.document_id.clone(),
+        esbt_site: ticket.esbt_site,
+        authorization_epoch: ticket.authorization_epoch,
+        identity: crate::RoomIdentity::default(),
+    })
+}
+
 pub fn ticket_secret_hash(secret: &[u8]) -> [u8; 32] {
     bearer_secret_hash(secret)
 }
@@ -196,6 +245,40 @@ pub fn issue_document_ticket(
     })
 }
 
+/// Mint a principal ticket for the default public editor role, including when
+/// the page is still owned by an unclaimed scratch workspace.
+pub fn issue_public_document_ticket(
+    id: TicketId,
+    secret: &[u8],
+    session: &AuthenticatedSession,
+    document: &DocumentRecord,
+    public_edit: bool,
+    esbt_site: EsbtSiteId,
+    now_ms: u64,
+) -> Result<DocumentTicketRecord, DocumentTicketError> {
+    require_live_document(document).map_err(|_| DocumentTicketError::DocumentInactive)?;
+    if !public_edit {
+        return Err(DocumentTicketError::PublicAccessInactive);
+    }
+    if now_ms >= session.expires_at_ms() {
+        return Err(DocumentTicketError::SessionInactive);
+    }
+    Ok(DocumentTicketRecord {
+        id,
+        secret_hash: require_ticket_secret(secret)?,
+        principal_id: session.principal_id().clone(),
+        session_id: session.id().clone(),
+        device_id: session.device_id().clone(),
+        document_id: document.id.clone(),
+        esbt_site: require_client_site(esbt_site)?,
+        role: DocumentRole::Editor,
+        authorization_epoch: document.authorization_epoch,
+        expires_at_ms: now_ms.saturating_add(DOCUMENT_TICKET_TTL_MS),
+        consumed_at_ms: None,
+        revoked_at_ms: None,
+    })
+}
+
 /// Mint a 30-second scratch ticket for a still-unclaimed private document.
 pub fn issue_scratch_document_ticket(
     id: TicketId,
@@ -208,6 +291,35 @@ pub fn issue_scratch_document_ticket(
     require_scratch_document(document, &scratch.id)
         .map_err(|_| DocumentTicketError::DocumentInactive)?;
     require_live_scratch(scratch, now_ms)?;
+    Ok(ScratchDocumentTicketRecord {
+        id,
+        secret_hash: require_ticket_secret(secret)?,
+        scratch_id: scratch.id.clone(),
+        document_id: document.id.clone(),
+        esbt_site: require_client_site(esbt_site)?,
+        authorization_epoch: document.authorization_epoch,
+        expires_at_ms: now_ms.saturating_add(DOCUMENT_TICKET_TTL_MS),
+        consumed_at_ms: None,
+        revoked_at_ms: None,
+    })
+}
+
+/// Mint a scratch ticket for a public-by-slug editor that does not own the
+/// document. Ownership is intentionally not broadened by this capability.
+pub fn issue_public_scratch_document_ticket(
+    id: TicketId,
+    secret: &[u8],
+    scratch: &ScratchRecord,
+    document: &DocumentRecord,
+    public_edit: bool,
+    esbt_site: EsbtSiteId,
+    now_ms: u64,
+) -> Result<ScratchDocumentTicketRecord, DocumentTicketError> {
+    require_live_document(document).map_err(|_| DocumentTicketError::DocumentInactive)?;
+    require_live_scratch(scratch, now_ms)?;
+    if !public_edit {
+        return Err(DocumentTicketError::PublicAccessInactive);
+    }
     Ok(ScratchDocumentTicketRecord {
         id,
         secret_hash: require_ticket_secret(secret)?,
@@ -270,6 +382,61 @@ pub fn redeem_document_ticket(
         document_id: ticket.document_id.clone(),
         esbt_site: ticket.esbt_site,
         role: ticket.role,
+        authorization_epoch: ticket.authorization_epoch,
+        identity: crate::RoomIdentity::default(),
+    })
+}
+
+/// Redeem a principal's public-editor ticket. This is the counterpart to
+/// `issue_public_document_ticket` for scratch-owned public pages; principal-
+/// owned pages continue through the ordinary epoch-bound validator.
+pub fn redeem_public_document_ticket(
+    ticket: &DocumentTicketRecord,
+    presented_secret: &[u8],
+    session: &AuthenticatedSession,
+    document: &DocumentRecord,
+    public_edit: bool,
+    expected_esbt_site: &EsbtSiteId,
+    now_ms: u64,
+) -> Result<Actor, DocumentTicketError> {
+    require_live_presented_ticket(
+        &ticket.secret_hash,
+        presented_secret,
+        ticket.consumed_at_ms,
+        ticket.revoked_at_ms,
+        ticket.expires_at_ms,
+        now_ms,
+    )?;
+    require_live_document(document).map_err(|_| DocumentTicketError::DocumentInactive)?;
+    if !public_edit || ticket.role != DocumentRole::Editor {
+        return Err(DocumentTicketError::PublicAccessInactive);
+    }
+    if now_ms >= session.expires_at_ms() {
+        return Err(DocumentTicketError::SessionInactive);
+    }
+    if &ticket.session_id != session.id()
+        || &ticket.principal_id != session.principal_id()
+        || &ticket.device_id != session.device_id()
+    {
+        return Err(DocumentTicketError::SessionMismatch);
+    }
+    if ticket.document_id != document.id {
+        return Err(DocumentTicketError::DocumentMismatch);
+    }
+    if &ticket.esbt_site != expected_esbt_site {
+        return Err(DocumentTicketError::SiteMismatch);
+    }
+    if ticket.authorization_epoch != document.authorization_epoch {
+        return Err(DocumentTicketError::AuthorizationStale);
+    }
+
+    Ok(Actor {
+        principal_id: ticket.principal_id.clone(),
+        session_id: ticket.session_id.clone(),
+        device_id: ticket.device_id.clone(),
+        document_id: ticket.document_id.clone(),
+        role: ticket.role,
+        esbt_site: ticket.esbt_site,
         authorization_epoch: ticket.authorization_epoch,
         identity: crate::RoomIdentity::default(),
     })

@@ -117,19 +117,25 @@ pub fn require_principal_document(
     }
 }
 
-/// Move a live scratch document onto a principal and bump its authorization
-/// epoch so outstanding scratch tickets and sockets fail closed.
+/// Move a scratch document onto a principal and bump its authorization epoch
+/// so outstanding scratch tickets and sockets fail closed. A tombstone remains
+/// deleted while its recovery ownership follows the promoted workspace; login
+/// must not strand trash behind the now-claimed scratch capability.
 pub fn claim_scratch_document(
     document: &DocumentRecord,
     scratch_id: &ScratchId,
     principal_id: &PrincipalId,
 ) -> Result<DocumentRecord, DocumentError> {
-    require_scratch_document(document, scratch_id)?;
+    match &document.owner {
+        DocumentOwner::Scratch(owner) if owner == scratch_id => {}
+        DocumentOwner::Scratch(_) => return Err(DocumentError::ScratchMismatch),
+        DocumentOwner::Principal(_) => return Err(DocumentError::AlreadyClaimed),
+    }
     Ok(DocumentRecord {
         id: document.id.clone(),
         owner: DocumentOwner::Principal(principal_id.clone()),
         authorization_epoch: document.authorization_epoch.saturating_add(1),
-        deleted_at_ms: None,
+        deleted_at_ms: document.deleted_at_ms,
     })
 }
 
@@ -169,6 +175,20 @@ mod tests {
 
         assert_eq!(claimed.owner, DocumentOwner::Principal(principal));
         assert_eq!(claimed.authorization_epoch, 4);
+    }
+
+    #[test]
+    fn claiming_a_deleted_scratch_document_preserves_its_tombstone() {
+        let scratch = ScratchId::new("scratch_123456").unwrap();
+        let principal = PrincipalId::new("principal_1234").unwrap();
+        let mut deleted = document(DocumentOwner::Scratch(scratch.clone()));
+        deleted.deleted_at_ms = Some(7);
+
+        let claimed = claim_scratch_document(&deleted, &scratch, &principal).unwrap();
+
+        assert_eq!(claimed.owner, DocumentOwner::Principal(principal));
+        assert_eq!(claimed.authorization_epoch, 4);
+        assert_eq!(claimed.deleted_at_ms, Some(7));
     }
 
     #[test]

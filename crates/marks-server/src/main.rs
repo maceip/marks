@@ -1,7 +1,27 @@
 use marks_server::{App, Config, serve};
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--import-worker-v1")) {
+        std::process::exit(marks_server::routes::imports::worker_main());
+    }
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("marks-server runtime error: {error}");
+            std::process::exit(2);
+        }
+    };
+    runtime.block_on(server_main());
+    // `spawn_blocking` cannot cancel an in-progress filesystem syscall. Consume
+    // the runtime with a deadline so a detached backup/export worker cannot
+    // turn an otherwise completed SIGTERM into an unbounded process wait.
+    runtime.shutdown_timeout(marks_server::RUNTIME_SHUTDOWN_TIMEOUT);
+}
+
+async fn server_main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

@@ -775,6 +775,7 @@
   font-weight: 650;
   scroll-snap-align: start;
 }
+.phone-ribbon-tabs > button[data-ribbon-tab='import'] { flex-basis: 108px; }
 .phone-ribbon-tabs > button.active,
 .phone-ribbon-tabs > button[aria-selected='true'] { border-top-color: var(--color-action); color: var(--color-action); }
 .phone-ribbon-tabs > button.contextual { color: var(--color-brand-positive); }
@@ -1015,7 +1016,10 @@
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
-@media (max-width: 720px), (max-height: 560px) and (pointer: coarse) {
+/* A short desktop viewport can lift the floating dock over the ribbon. The
+   ribbon is the primary command surface, so remove the redundant dock before
+   it can steal those hit targets. */
+@media (max-width: 720px), (max-height: 560px) {
   .liquid-dock { display: none; }
 }
 @media print {

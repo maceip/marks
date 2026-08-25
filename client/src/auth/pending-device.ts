@@ -1,4 +1,5 @@
 import { applyServiceCallerHeaders, ensureServiceCaller } from './caller.ts';
+import { fetchWithTimeout, SERVICE_REQUEST_TIMEOUT_MS } from '../browser/network.ts';
 import {
   loadActiveDevice,
   markController,
@@ -25,7 +26,7 @@ export async function getOrCreatePendingDevice(): Promise<StoredDeviceKey> {
   return key;
 }
 
-export async function bindPendingDevice(): Promise<StoredDeviceKey> {
+export async function bindPendingDevice(signal?: AbortSignal): Promise<StoredDeviceKey> {
   const caller = await ensureServiceCaller();
   if (caller.kind !== 'scratch') {
     throw new Error('pending device bind requires scratch authority');
@@ -33,15 +34,20 @@ export async function bindPendingDevice(): Promise<StoredDeviceKey> {
   const key = await getOrCreatePendingDevice();
   const headers = new Headers({ 'Content-Type': 'application/json' });
   applyServiceCallerHeaders(headers, caller);
-  const response = await fetch(`/v1/auth/scratch/${caller.credential.scratchId}/device`, {
-    method: 'PUT',
-    credentials: 'same-origin',
-    headers,
-    body: JSON.stringify({
-      deviceId: key.deviceId,
-      publicKey: encodeBase64Url(key.publicKeyRaw),
-    }),
-  });
+  const response = await fetchWithTimeout(
+    `/v1/auth/scratch/${caller.credential.scratchId}/device`,
+    {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers,
+      body: JSON.stringify({
+        deviceId: key.deviceId,
+        publicKey: encodeBase64Url(key.publicKeyRaw),
+      }),
+      signal,
+    },
+    SERVICE_REQUEST_TIMEOUT_MS,
+  );
   if (!response.ok) {
     throw new Error(`pending device bind failed: ${response.status}`);
   }

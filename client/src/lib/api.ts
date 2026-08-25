@@ -1,9 +1,21 @@
-import { applyServiceCallerHeaders, ensureServiceCaller } from '../auth/caller';
+import {
+  applyServiceCallerHeaders,
+  ensureServiceCaller,
+  type ServiceCaller,
+} from '../auth/caller.ts';
 import { getCachedSession } from '../auth/session-cache.ts';
-import { ServiceError } from './service-errors';
+import {
+  fetchWithTimeout,
+  IMPORT_REQUEST_TIMEOUT_MS,
+  runWithTimeout,
+  SERVICE_REQUEST_TIMEOUT_MS,
+} from '../browser/network.ts';
+import { ServiceError } from './service-errors.ts';
 
 export interface DocumentMeta {
   id: string;
+  /** Opaque, copyable collaboration slug. Service documents use the id itself. */
+  slug?: string;
   title: string;
   /** `esbt` for documents this client can open. Unknown engine tags stay closed. */
   engine: string;
@@ -12,6 +24,11 @@ export interface DocumentMeta {
   updated_at: number;
   deleted_at?: number | null;
   purge_at?: number | null;
+  public?: boolean;
+  public_role?: AccessRole | null;
+  anonymous_edits?: number;
+  persisted?: boolean;
+  persisted_at?: number | null;
 }
 
 export type AccessRole = 'owner' | 'editor' | 'commenter' | 'viewer';
@@ -66,42 +83,93 @@ export interface DocumentAssetDto {
   bytes: number;
 }
 
-export async function authenticatedResponse(path: string, init?: RequestInit): Promise<Response> {
-  let caller = await ensureServiceCaller();
-  const perform = () => {
-    const headers = new Headers(init?.headers);
-    applyServiceCallerHeaders(headers, caller);
-    return fetch(path, { ...init, credentials: 'same-origin', headers });
-  };
-  let response = await perform();
-  if (response.status === 401 && caller.kind === 'scratch') {
-    caller = await ensureServiceCaller({ forceProbe: true });
-    response = await perform();
-  }
-  if (!response.ok) throw new ServiceError(response.status);
-  return response;
+export interface ImportedMarkdownDto {
+  title: string;
+  markdown: string;
+  kind: 'markdown' | 'pdf' | 'word' | 'excel' | 'url';
+  sourceUrl?: string | null;
 }
 
-async function csrfRequest<T>(path: string, body: unknown): Promise<T> {
-  let caller = await ensureServiceCaller();
-  if (caller.kind === 'session' && !getCachedSession()) {
-    caller = await ensureServiceCaller({ forceProbe: true });
-  }
-  const headers = new Headers({ 'Content-Type': 'application/json' });
-  applyServiceCallerHeaders(headers, caller);
-  if (caller.kind === 'session') {
-    const session = getCachedSession();
-    if (!session) throw new ServiceError(401);
-    headers.set('X-Marks-CSRF', session.csrf);
-  }
-  const response = await fetch(path, {
-    method: 'POST',
-    body: JSON.stringify(body),
-    headers,
-    credentials: 'same-origin',
-  });
-  if (!response.ok) throw new ServiceError(response.status);
-  return (await response.json()) as T;
+interface ApiRequestDependencies {
+  ensureCaller?: (options?: { forceProbe?: boolean }) => Promise<ServiceCaller>;
+  fetch?: typeof fetch;
+}
+
+export async function authenticatedResponse(
+  path: string,
+  init?: RequestInit,
+  timeoutMs = SERVICE_REQUEST_TIMEOUT_MS,
+  dependencies: ApiRequestDependencies = {},
+): Promise<Response> {
+  const ensureCaller = dependencies.ensureCaller ?? ensureServiceCaller;
+  return runWithTimeout(
+    async (signal) => {
+      const deadline = Date.now() + timeoutMs;
+      let caller = await ensureCaller();
+      const perform = () => {
+        const headers = new Headers(init?.headers);
+        applyServiceCallerHeaders(headers, caller);
+        return fetchWithTimeout(
+          path,
+          { ...init, signal, credentials: 'same-origin', headers },
+          Math.max(1, deadline - Date.now()),
+          dependencies.fetch ?? globalThis.fetch,
+        );
+      };
+      let response = await perform();
+      if (response.status === 401 && caller.kind === 'scratch') {
+        caller = await ensureCaller({ forceProbe: true });
+        response = await perform();
+      }
+      if (!response.ok) throw new ServiceError(response.status);
+      return response;
+    },
+    timeoutMs,
+    init?.signal,
+    new DOMException('The service request took too long. Try again.', 'TimeoutError'),
+  );
+}
+
+export async function csrfRequest<T>(
+  path: string,
+  body: unknown,
+  timeoutMs = SERVICE_REQUEST_TIMEOUT_MS,
+  dependencies: ApiRequestDependencies = {},
+): Promise<T> {
+  const ensureCaller = dependencies.ensureCaller ?? ensureServiceCaller;
+  return runWithTimeout(
+    async (signal) => {
+      const deadline = Date.now() + timeoutMs;
+      let caller = await ensureCaller();
+      if (caller.kind === 'session' && !getCachedSession()) {
+        caller = await ensureCaller({ forceProbe: true });
+      }
+      const headers = new Headers({ 'Content-Type': 'application/json' });
+      applyServiceCallerHeaders(headers, caller);
+      if (caller.kind === 'session') {
+        const session = getCachedSession();
+        if (!session) throw new ServiceError(401);
+        headers.set('X-Marks-CSRF', session.csrf);
+      }
+      const response = await fetchWithTimeout(
+        path,
+        {
+          method: 'POST',
+          body: JSON.stringify(body),
+          headers,
+          credentials: 'same-origin',
+          signal,
+        },
+        Math.max(1, deadline - Date.now()),
+        dependencies.fetch ?? globalThis.fetch,
+      );
+      if (!response.ok) throw new ServiceError(response.status);
+      return (await response.json()) as T;
+    },
+    timeoutMs,
+    null,
+    new DOMException('The service request took too long. Try again.', 'TimeoutError'),
+  );
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -119,7 +187,11 @@ export function getDocument(id: string): Promise<{ document: DocumentMeta; conne
   return request(`/v1/documents/${id}`);
 }
 
-export function createDocument(draft?: { title?: string; markdown?: string }): Promise<{ document: DocumentMeta }> {
+export function createDocument(draft?: {
+  title?: string;
+  markdown?: string;
+  requestId?: string;
+}): Promise<{ document: DocumentMeta; replayed?: boolean }> {
   return request('/v1/documents', { method: 'POST', body: JSON.stringify(draft ?? {}) });
 }
 
@@ -127,8 +199,14 @@ export function renameDocument(id: string, title: string): Promise<{ document: D
   return request(`/v1/documents/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) });
 }
 
-export function duplicateDocument(id: string): Promise<{ document: DocumentMeta }> {
-  return request(`/v1/documents/${id}/duplicate`, { method: 'POST', body: JSON.stringify({}) });
+export function duplicateDocument(
+  id: string,
+  requestId?: string,
+): Promise<{ document: DocumentMeta; replayed?: boolean }> {
+  return request(`/v1/documents/${id}/duplicate`, {
+    method: 'POST',
+    body: JSON.stringify({ requestId }),
+  });
 }
 
 export function deleteDocument(id: string): Promise<{ deleted: boolean }> {
@@ -178,14 +256,32 @@ export async function uploadDocumentAsset(
       },
       body: file,
     },
+    IMPORT_REQUEST_TIMEOUT_MS,
   );
   return (await response.json()) as { asset: DocumentAssetDto };
+}
+
+export async function importDocumentFile(file: File): Promise<ImportedMarkdownDto> {
+  const response = await authenticatedResponse('/v1/import/file', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      'X-Marks-Filename': assetFilename(file.name),
+    },
+    body: file,
+  }, IMPORT_REQUEST_TIMEOUT_MS);
+  return (await response.json()) as ImportedMarkdownDto;
+}
+
+export function importWebPage(url: string): Promise<ImportedMarkdownDto> {
+  return csrfRequest('/v1/import/url', { url }, IMPORT_REQUEST_TIMEOUT_MS);
 }
 
 export async function downloadDocumentBundle(id: string): Promise<Blob> {
   const response = await authenticatedResponse(
     `/v1/documents/${encodeURIComponent(id)}/export-bundle`,
     { headers: { Accept: 'application/zip' } },
+    IMPORT_REQUEST_TIMEOUT_MS,
   );
   return response.blob();
 }

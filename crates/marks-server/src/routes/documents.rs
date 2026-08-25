@@ -17,14 +17,19 @@ use marks_auth::{
     AuthenticatedSession, DocumentAction, DocumentId, DocumentOwner, DocumentRole, EsbtSiteId,
     LinkGrantRecord, PrincipalId, ScratchId, TicketId, authorize_document_action,
     authorize_link_grant_role, bearer_secret_hash, encode_bearer_secret, issue_document_ticket,
+    issue_public_document_ticket, issue_public_scratch_document_ticket,
     issue_scratch_document_ticket, owner_acl_row, redeem_link_grant,
     require_deleted_document_owner, require_principal_document, require_scratch_document,
     resolve_document_role,
 };
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
+use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::Instant;
 
 /// The caller's document authority: a rotating principal session or a live
 /// scratch capability. They are different kinds of authority, never merged.
@@ -50,6 +55,7 @@ pub(crate) fn caller(app: &App, headers: &HeaderMap) -> ApiResult<Caller> {
 #[derive(Serialize)]
 struct DocumentMeta {
     id: String,
+    slug: String,
     title: String,
     engine: String,
     chars: u64,
@@ -57,13 +63,20 @@ struct DocumentMeta {
     updated_at: u64,
     deleted_at: Option<u64>,
     purge_at: Option<u64>,
+    public: bool,
+    public_role: Option<&'static str>,
+    anonymous_edits: u64,
+    persisted: bool,
+    persisted_at: Option<u64>,
 }
 
 const TRASH_RETENTION_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
+const PURGE_ASSET_RECLAIM_TIMEOUT: Duration = Duration::from_secs(15);
 
 fn meta(row: &store::DocumentMetaRow) -> DocumentMeta {
     DocumentMeta {
         id: row.record.id.as_str().to_owned(),
+        slug: row.record.id.as_str().to_owned(),
         title: row.title.clone(),
         engine: row.engine.clone(),
         chars: row.chars,
@@ -74,10 +87,23 @@ fn meta(row: &store::DocumentMetaRow) -> DocumentMeta {
             .record
             .deleted_at_ms
             .map(|deleted| deleted.saturating_add(TRASH_RETENTION_MS)),
+        public: row.public_edit,
+        public_role: row.public_edit.then_some("editor"),
+        anonymous_edits: row.anonymous_edit_count,
+        persisted: row.persisted_at_ms.is_some(),
+        persisted_at: row.persisted_at_ms,
     }
 }
 
 /// Resolve the caller's role on a live document, failing closed to 404.
+pub(crate) fn apply_public_editor_floor(role: DocumentRole, public_edit: bool) -> DocumentRole {
+    if public_edit && matches!(role, DocumentRole::Commenter | DocumentRole::Viewer) {
+        DocumentRole::Editor
+    } else {
+        role
+    }
+}
+
 pub(crate) fn resolve_caller_role(
     conn: &Connection,
     caller: &Caller,
@@ -87,13 +113,19 @@ pub(crate) fn resolve_caller_role(
         Caller::Principal(session) => {
             let acl = store::load_acl(conn, &row.record.id)?;
             match resolve_document_role(&row.record, session.principal_id(), &acl) {
-                Ok(role) => Ok(Some(role)),
+                Ok(role) => Ok(Some(apply_public_editor_floor(role, row.public_edit))),
+                Err(_) if row.public_edit => Ok(Some(DocumentRole::Editor)),
                 Err(_) => Err(ApiError::not_found()),
             }
         }
         Caller::Scratch(scratch_id) => {
-            require_scratch_document(&row.record, scratch_id).map_err(|_| ApiError::not_found())?;
-            Ok(None)
+            if require_scratch_document(&row.record, scratch_id).is_ok() {
+                Ok(None)
+            } else if row.public_edit {
+                Ok(Some(DocumentRole::Editor))
+            } else {
+                Err(ApiError::not_found())
+            }
         }
     }
 }
@@ -203,6 +235,7 @@ pub async fn trash_list(State(app): State<Arc<App>>, headers: HeaderMap) -> ApiR
 }
 
 #[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateBody {
     pub title: Option<String>,
     /// Optional canonical Markdown used to initialize a document atomically.
@@ -210,6 +243,9 @@ pub struct CreateBody {
     /// would expose a transient blank document to collaborators and make a
     /// failed second request indistinguishable from a blank template.
     pub markdown: Option<String>,
+    /// Authority-scoped retry identity. Reusing it with the exact normalized
+    /// payload returns the original slug; rebinding it is a conflict.
+    pub request_id: Option<String>,
 }
 
 pub async fn create(
@@ -230,6 +266,23 @@ pub async fn create(
     let chars = markdown.encode_utf16().count();
     if chars > app.limits.max_document_units {
         return Err(ApiError::bad_request("document is too large"));
+    }
+    validate_create_request_id(body.request_id.as_deref())?;
+    let request_hash = body
+        .request_id
+        .as_ref()
+        .map(|_| create_request_hash(title, &markdown));
+
+    // The common ambiguous-commit path is a retry after process restart. Do
+    // the durable lookup before reconstructing a potentially large CRDT seed;
+    // the transaction below repeats it to close concurrent-create races.
+    if let (Some(request_id), Some(request_hash)) =
+        (body.request_id.as_deref(), request_hash.as_ref())
+        && let Some(row) = app
+            .db
+            .read(|conn| load_create_replay(conn, &caller, request_id, request_hash))?
+    {
+        return Ok(Json(json!({ "document": meta(&row), "replayed": true })).into_response());
     }
 
     // Construct the initial state before opening the SQLite transaction. The
@@ -262,7 +315,13 @@ pub async fn create(
     };
     let now = now_ms();
     let id = new_id("document");
-    let row = app.db.tx(|conn| {
+    let (row, replayed) = app.db.tx(|conn| {
+        if let (Some(request_id), Some(request_hash)) =
+            (body.request_id.as_deref(), request_hash.as_ref())
+            && let Some(row) = load_create_replay(conn, &caller, request_id, request_hash)?
+        {
+            return Ok((row, true));
+        }
         let (scratch_id, owner_id) = match &caller {
             Caller::Scratch(scratch) => (Some(scratch.as_str()), None),
             Caller::Principal(session) => (None, Some(session.principal_id().as_str())),
@@ -270,8 +329,9 @@ pub async fn create(
         conn.execute(
             "INSERT INTO documents
                 (id, scratch_id, owner_principal_id, title, title_explicit, engine, chars,
-                 auth_epoch, snapshot, snapshot_revision, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'esbt', ?6, 1, ?7, 0, ?8, ?8)",
+                 auth_epoch, snapshot, snapshot_revision, created_at, updated_at, public_edit,
+                 create_request_id, create_request_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'esbt', ?6, 1, ?7, 0, ?8, ?8, ?9, ?10, ?11)",
             params![
                 id,
                 scratch_id,
@@ -280,7 +340,10 @@ pub async fn create(
                 i64::from(title.is_some()),
                 store::ms(chars as u64),
                 snapshot,
-                store::ms(now)
+                store::ms(now),
+                i64::from(matches!(&caller, Caller::Scratch(_))),
+                body.request_id,
+                request_hash.as_ref().map(<[u8; 32]>::as_slice),
             ],
         )?;
         let id = DocumentId::new(id.clone()).map_err(|_| ApiError::internal())?;
@@ -321,9 +384,88 @@ pub async fn create(
                 ],
             )?;
         }
-        load_live_document(conn, &id)
+        Ok((load_live_document(conn, &id)?, false))
     })?;
-    Ok((StatusCode::CREATED, Json(json!({ "document": meta(&row) }))).into_response())
+    let status = if replayed {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    };
+    Ok((
+        status,
+        Json(json!({ "document": meta(&row), "replayed": replayed })),
+    )
+        .into_response())
+}
+
+fn create_request_hash(title: Option<&str>, markdown: &str) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(b"marks-document-create-v1\0");
+    match title {
+        Some(title) => {
+            hash.update([1]);
+            hash.update((title.len() as u64).to_be_bytes());
+            hash.update(title.as_bytes());
+        }
+        None => hash.update([0]),
+    }
+    hash.update((markdown.len() as u64).to_be_bytes());
+    hash.update(markdown.as_bytes());
+    hash.finalize().into()
+}
+
+fn duplicate_request_hash(document_id: &DocumentId) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(b"marks-document-duplicate-v1\0");
+    hash.update(document_id.as_str().as_bytes());
+    hash.finalize().into()
+}
+
+fn validate_create_request_id(request_id: Option<&str>) -> ApiResult<()> {
+    if request_id.is_some_and(|request_id| {
+        request_id.is_empty()
+            || request_id.len() > 128
+            || !request_id.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+            })
+    }) {
+        return Err(ApiError::bad_request("invalid request id"));
+    }
+    Ok(())
+}
+
+fn load_create_replay(
+    conn: &Connection,
+    caller: &Caller,
+    request_id: &str,
+    request_hash: &[u8; 32],
+) -> ApiResult<Option<store::DocumentMetaRow>> {
+    let found: Option<(String, Vec<u8>)> = match caller {
+        Caller::Scratch(scratch) => conn
+            .query_row(
+                "SELECT id, create_request_hash FROM documents
+                 WHERE scratch_id = ?1 AND create_request_id = ?2",
+                params![scratch.as_str(), request_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?,
+        Caller::Principal(session) => conn
+            .query_row(
+                "SELECT id, create_request_hash FROM documents
+                 WHERE owner_principal_id = ?1 AND create_request_id = ?2",
+                params![session.principal_id().as_str(), request_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?,
+    };
+    let Some((id, stored_hash)) = found else {
+        return Ok(None);
+    };
+    if stored_hash.as_slice() != request_hash {
+        return Err(ApiError::conflict());
+    }
+    let id = DocumentId::new(id).map_err(|_| ApiError::internal())?;
+    Ok(Some(load_live_document(conn, &id)?))
 }
 
 pub async fn get(
@@ -338,12 +480,7 @@ pub async fn get(
         resolve_caller_role(conn, &caller, &row)?;
         Ok(row)
     })?;
-    let connections = app
-        .rooms
-        .read(&document_id)
-        .await
-        .map(|read| read.connections)
-        .unwrap_or(0);
+    let connections = app.rooms.connection_count(&document_id).unwrap_or(0);
     Ok(Json(json!({ "document": meta(&row), "connections": connections })).into_response())
 }
 
@@ -400,16 +537,37 @@ fn require_owner(
     }
 }
 
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateBody {
+    pub request_id: Option<String>,
+}
+
 pub async fn duplicate(
     State(app): State<Arc<App>>,
     Path(id): Path<String>,
     headers: HeaderMap,
+    body: Option<Json<DuplicateBody>>,
 ) -> ApiResult<Response> {
     let caller = caller(&app, &headers)?;
     if matches!(caller, Caller::Principal(_)) {
         guard::require_same_origin(&app, &headers)?;
     }
     let document_id = DocumentId::new(id).map_err(|_| ApiError::not_found())?;
+    let body = body.map(|Json(body)| body).unwrap_or_default();
+    validate_create_request_id(body.request_id.as_deref())?;
+    let request_hash = body
+        .request_id
+        .as_ref()
+        .map(|_| duplicate_request_hash(&document_id));
+    if let (Some(request_id), Some(request_hash)) =
+        (body.request_id.as_deref(), request_hash.as_ref())
+        && let Some(row) = app
+            .db
+            .read(|conn| load_create_replay(conn, &caller, request_id, request_hash))?
+    {
+        return Ok(Json(json!({ "document": meta(&row), "replayed": true })).into_response());
+    }
     let text = document_text(&app, &caller, &document_id).await?;
 
     let mut seed = esbt::Document::new(
@@ -428,7 +586,13 @@ pub async fn duplicate(
 
     let now = now_ms();
     let new_document = new_id("document");
-    let row = app.db.tx(|conn| {
+    let (row, replayed) = app.db.tx(|conn| {
+        if let (Some(request_id), Some(request_hash)) =
+            (body.request_id.as_deref(), request_hash.as_ref())
+            && let Some(row) = load_create_replay(conn, &caller, request_id, request_hash)?
+        {
+            return Ok((row, true));
+        }
         let source = load_live_document(conn, &document_id)?;
         resolve_caller_role(conn, &caller, &source)?;
         let (scratch_id, owner_id) = match &caller {
@@ -438,8 +602,9 @@ pub async fn duplicate(
         conn.execute(
             "INSERT INTO documents
                 (id, scratch_id, owner_principal_id, title, title_explicit, engine, chars,
-                 auth_epoch, snapshot, snapshot_revision, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'esbt', ?6, 1, ?7, 0, ?8, ?8)",
+                 auth_epoch, snapshot, snapshot_revision, created_at, updated_at, public_edit,
+                 create_request_id, create_request_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'esbt', ?6, 1, ?7, 0, ?8, ?8, ?9, ?10, ?11)",
             params![
                 new_document,
                 scratch_id,
@@ -449,6 +614,9 @@ pub async fn duplicate(
                 store::ms(text.encode_utf16().count() as u64),
                 snapshot,
                 store::ms(now),
+                i64::from(matches!(&caller, Caller::Scratch(_))),
+                body.request_id,
+                request_hash.as_ref().map(<[u8; 32]>::as_slice),
             ],
         )?;
         let id = DocumentId::new(new_document.clone()).map_err(|_| ApiError::internal())?;
@@ -465,9 +633,18 @@ pub async fn duplicate(
                 ],
             )?;
         }
-        load_live_document(conn, &id)
+        Ok((load_live_document(conn, &id)?, false))
     })?;
-    Ok((StatusCode::CREATED, Json(json!({ "document": meta(&row) }))).into_response())
+    let status = if replayed {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    };
+    Ok((
+        status,
+        Json(json!({ "document": meta(&row), "replayed": replayed })),
+    )
+        .into_response())
 }
 
 pub async fn delete(
@@ -497,11 +674,9 @@ pub async fn delete(
         )?;
         Ok(())
     })?;
-    app.rooms
-        .control(Control::Deleted {
-            document_id: document_id.as_str().to_owned(),
-        })
-        .await;
+    app.rooms.control(Control::Deleted {
+        document_id: document_id.as_str().to_owned(),
+    });
     Ok(Json(json!({ "deleted": true })).into_response())
 }
 
@@ -542,7 +717,8 @@ pub async fn purge(
         guard::require_same_origin(&app, &headers)?;
     }
     let document_id = DocumentId::new(id).map_err(|_| ApiError::not_found())?;
-    let _asset_mutation_guard = app.assets.mutation_guard().await;
+    let reclaim_deadline = Instant::now() + PURGE_ASSET_RECLAIM_TIMEOUT;
+    let _asset_mutation_guard = app.assets.mutation_guard_before(reclaim_deadline).await?;
     let reclaim_assets = app.db.tx(|conn| {
         let row = load_deleted_document(conn, &document_id)?;
         require_recovery_owner(&caller, &row)?;
@@ -603,33 +779,66 @@ pub async fn purge(
         conn.execute("DELETE FROM documents WHERE id = ?1", params![id])?;
         Ok(reclaim)
     })?;
-    for hash in reclaim_assets {
-        let _content_guard = app.assets.content_guard(hash).await;
-        let referenced = app.db.read(|conn| {
-            let referenced = conn.query_row(
-                "SELECT EXISTS(
-                    SELECT 1 FROM document_assets WHERE content_hash = ?1
-                 )",
-                params![hash.as_slice()],
-                |row| row.get::<_, bool>(0),
-            )?;
-            Ok(referenced)
-        });
-        if matches!(referenced.as_ref(), Ok(true)) {
-            continue;
-        }
-        if let Err(error) = &referenced {
-            tracing::warn!(target: "marks_server::assets", ?error, "could not recheck reclaimed asset reference");
-            continue;
-        }
-        if let Err(error) = app.assets.remove(hash).await {
-            // The authorization graph is already gone. A leftover unreferenced
-            // content hash is safe and can be swept; failing the idempotent
-            // purge response here would falsely imply the document survived.
-            tracing::warn!(target: "marks_server::assets", ?error, "could not reclaim orphaned asset bytes");
-        }
+    let reclaim_count = reclaim_assets.len();
+    let reclaimed_all = complete_batch_before_deadline(reclaim_assets, reclaim_deadline, |hash| {
+        let app = app.clone();
+        async move { reclaim_purged_asset(&app, hash).await }
+    })
+    .await;
+    if !reclaimed_all {
+        // The authorization graph is already gone. Leftover unreferenced
+        // content hashes are safe and startup reconciliation will sweep them;
+        // an unhealthy filesystem must not retain the global mutation guard
+        // once the aggregate cleanup budget expires.
+        tracing::warn!(
+            target: "marks_server::assets",
+            reclaim_count,
+            timeout_ms = PURGE_ASSET_RECLAIM_TIMEOUT.as_millis(),
+            "asset reclaim batch timed out"
+        );
     }
     Ok(Json(json!({ "purged": true })).into_response())
+}
+
+async fn reclaim_purged_asset(app: &App, hash: [u8; 32]) {
+    let _content_guard = app.assets.content_guard(hash).await;
+    let referenced = app.db.read(|conn| {
+        let referenced = conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM document_assets WHERE content_hash = ?1
+             )",
+            params![hash.as_slice()],
+            |row| row.get::<_, bool>(0),
+        )?;
+        Ok(referenced)
+    });
+    if matches!(referenced.as_ref(), Ok(true)) {
+        return;
+    }
+    if let Err(error) = &referenced {
+        tracing::warn!(target: "marks_server::assets", ?error, "could not recheck reclaimed asset reference");
+        return;
+    }
+    if let Err(error) = app.assets.remove(hash).await {
+        tracing::warn!(target: "marks_server::assets", ?error, "could not reclaim orphaned asset bytes");
+    }
+}
+
+async fn complete_batch_before_deadline<T, F, Work>(
+    items: impl IntoIterator<Item = T>,
+    deadline: Instant,
+    mut work: F,
+) -> bool
+where
+    F: FnMut(T) -> Work,
+    Work: Future<Output = ()>,
+{
+    for item in items {
+        if tokio::time::timeout_at(deadline, work(item)).await.is_err() {
+            return false;
+        }
+    }
+    true
 }
 
 /// The exact current text: from the live room when resident (the room
@@ -778,9 +987,8 @@ pub async fn principal_room_session(
 
     let (site, role) = app.db.tx(|conn| {
         let row = load_live_document(conn, &document_id)?;
-        let acl = store::load_acl(conn, &document_id)?;
-        let role = resolve_document_role(&row.record, cookie.session.principal_id(), &acl)
-            .map_err(|_| ApiError::not_found())?;
+        let role = resolve_caller_role(conn, &Caller::Principal(cookie.session.clone()), &row)?
+            .ok_or_else(ApiError::not_found)?;
         let site = store::allocate_site(
             conn,
             &document_id,
@@ -791,15 +999,27 @@ pub async fn principal_room_session(
             Some(cookie.session.device_id()),
             now,
         )?;
-        let ticket = issue_document_ticket(
-            ticket_id.clone(),
-            &secret,
-            &cookie.session,
-            &row.record,
-            role,
-            site,
-            now,
-        )
+        let ticket = if matches!(row.record.owner, DocumentOwner::Scratch(_)) {
+            issue_public_document_ticket(
+                ticket_id.clone(),
+                &secret,
+                &cookie.session,
+                &row.record,
+                row.public_edit,
+                site,
+                now,
+            )
+        } else {
+            issue_document_ticket(
+                ticket_id.clone(),
+                &secret,
+                &cookie.session,
+                &row.record,
+                role,
+                site,
+                now,
+            )
+        }
         .map_err(|_| ApiError::unauthenticated())?;
         insert_principal_ticket(conn, &ticket)?;
         Ok((site, role))
@@ -828,10 +1048,15 @@ pub async fn scratch_room_session(
     let secret = new_secret();
     let ticket_id = TicketId::new(new_id("ticket")).map_err(|_| ApiError::internal())?;
 
-    let site = app.db.tx(|conn| {
+    let (site, role) = app.db.tx(|conn| {
         let row = load_live_document(conn, &document_id)?;
         let record = store::load_scratch(conn, &scratch.authority.scratch_id)?
             .ok_or_else(ApiError::unauthenticated)?;
+        let role = resolve_caller_role(
+            conn,
+            &Caller::Scratch(scratch.authority.scratch_id.clone()),
+            &row,
+        )?;
         let site = store::allocate_site(
             conn,
             &document_id,
@@ -842,23 +1067,35 @@ pub async fn scratch_room_session(
             None,
             now,
         )?;
-        let ticket = issue_scratch_document_ticket(
-            ticket_id.clone(),
-            &secret,
-            &record,
-            &row.record,
-            site,
-            now,
-        )
+        let ticket = if role == Some(DocumentRole::Editor) {
+            issue_public_scratch_document_ticket(
+                ticket_id.clone(),
+                &secret,
+                &record,
+                &row.record,
+                row.public_edit,
+                site,
+                now,
+            )
+        } else {
+            issue_scratch_document_ticket(
+                ticket_id.clone(),
+                &secret,
+                &record,
+                &row.record,
+                site,
+                now,
+            )
+        }
         .map_err(|_| ApiError::not_found())?;
         insert_scratch_ticket(conn, &ticket)?;
-        Ok(site)
+        Ok((site, role))
     })?;
     Ok(ticket_response(
         &document_id,
         &ticket_id,
         &secret,
-        None,
+        role,
         site,
         &crate::room::ws::scratch_identity(
             document_id.as_str(),
@@ -967,12 +1204,10 @@ pub async fn share_put(
         )?;
         bump_epoch(conn, &document_id)
     })?;
-    app.rooms
-        .control(Control::EpochChanged {
-            document_id: document_id.as_str().to_owned(),
-            epoch,
-        })
-        .await;
+    app.rooms.control(Control::EpochChanged {
+        document_id: document_id.as_str().to_owned(),
+        epoch,
+    });
     Ok(Json(json!({ "role": store::role_to_str(role) })).into_response())
 }
 
@@ -995,12 +1230,10 @@ pub async fn share_delete(
         )?;
         bump_epoch(conn, &document_id)
     })?;
-    app.rooms
-        .control(Control::EpochChanged {
-            document_id: document_id.as_str().to_owned(),
-            epoch,
-        })
-        .await;
+    app.rooms.control(Control::EpochChanged {
+        document_id: document_id.as_str().to_owned(),
+        epoch,
+    });
     Ok(Json(json!({ "revoked": true })).into_response())
 }
 
@@ -1078,12 +1311,10 @@ pub async fn link_create(
         )?;
         bump_epoch(conn, &document_id)
     })?;
-    app.rooms
-        .control(Control::EpochChanged {
-            document_id: document_id.as_str().to_owned(),
-            epoch,
-        })
-        .await;
+    app.rooms.control(Control::EpochChanged {
+        document_id: document_id.as_str().to_owned(),
+        epoch,
+    });
     Ok(Json(json!({
         "token": Base64UrlUnpadded::encode_string(&token),
         "role": store::role_to_str(role),
@@ -1110,12 +1341,10 @@ pub async fn link_revoke(
         )?;
         bump_epoch(conn, &document_id)
     })?;
-    app.rooms
-        .control(Control::EpochChanged {
-            document_id: document_id.as_str().to_owned(),
-            epoch,
-        })
-        .await;
+    app.rooms.control(Control::EpochChanged {
+        document_id: document_id.as_str().to_owned(),
+        epoch,
+    });
     Ok(Json(json!({ "revoked": true })).into_response())
 }
 
@@ -1226,4 +1455,68 @@ fn bump_epoch(conn: &Connection, document_id: &DocumentId) -> ApiResult<u64> {
         params![document_id.as_str(), store::ms(now_ms())],
     )?;
     Ok(store::from_ms(epoch))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    #[test]
+    fn public_editor_access_cannot_be_narrowed_by_a_named_acl() {
+        assert_eq!(
+            apply_public_editor_floor(DocumentRole::Viewer, true),
+            DocumentRole::Editor
+        );
+        assert_eq!(
+            apply_public_editor_floor(DocumentRole::Commenter, true),
+            DocumentRole::Editor
+        );
+        assert_eq!(
+            apply_public_editor_floor(DocumentRole::Owner, true),
+            DocumentRole::Owner
+        );
+        assert_eq!(
+            apply_public_editor_floor(DocumentRole::Viewer, false),
+            DocumentRole::Viewer
+        );
+    }
+
+    #[tokio::test]
+    async fn purge_reclamation_uses_one_absolute_batch_deadline() {
+        struct DropProof(Arc<AtomicBool>);
+        impl Drop for DropProof {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let completed = tokio::time::timeout(
+            Duration::from_secs(1),
+            complete_batch_before_deadline(
+                0..1_000,
+                Instant::now() + Duration::from_millis(25),
+                |_| {
+                    let attempts = attempts.clone();
+                    let dropped = dropped.clone();
+                    async move {
+                        attempts.fetch_add(1, Ordering::AcqRel);
+                        let _drop_proof = DropProof(dropped);
+                        std::future::pending::<()>().await;
+                    }
+                },
+            ),
+        )
+        .await
+        .expect("aggregate reclaim deadline returned");
+
+        assert!(!completed);
+        assert_eq!(attempts.load(Ordering::Acquire), 1);
+        assert!(
+            dropped.load(Ordering::Acquire),
+            "the in-flight reclaim future was not cancelled"
+        );
+    }
 }

@@ -9,31 +9,33 @@ import {
 import { EditorView, ViewPlugin, keymap } from '@codemirror/view';
 import {
   readNetworkQuality,
+  SERVICE_REQUEST_TIMEOUT_MS,
   snapshotFetchTimeoutMs,
-  TabChannel,
-  tabChannelName,
-} from '../browser';
-import { roomTicketProtocols } from '../auth/room-access';
+} from '../browser/network.ts';
+import { PERSIST_LOCK_TIMEOUT_MS } from '../browser/persist-lock.ts';
+import { TabChannel, tabChannelName } from '../browser/tab-sync.ts';
+import { roomTicketProtocols } from '../auth/room-access.ts';
 import {
-  ABOUT_DOCUMENT,
   aboutMarkdownNeedsRefresh,
   isAboutDocument,
-} from '../content/about';
-import { readLocalDocumentText, seedAboutDocumentText, writeLocalDocumentText } from '../demo/workspace';
+} from '../content/about.ts';
+import { ABOUT_DOCUMENT } from '../content/marketing-markdown.ts';
+import { readLocalDocumentText, seedAboutDocumentText, writeLocalDocumentText } from '../demo/workspace.ts';
 import {
   acknowledgePendingMutation,
   appendPendingMutation,
   checkpointReplicaJournal,
+  deleteReplicaJournal,
   JOURNAL_RETAINED_THRESHOLD,
-  readReplicaJournal,
+  openWithReplicaJournal,
   shouldPruneHistory,
   type JournalMutation,
   type ReplicaJournalRecord,
-} from './journal';
-import { HEARTBEAT_MS, esbtPresence } from './presence';
-import { PresenceActivityController } from './presence-activity-controller';
-import { PresenceStore } from './presence-store';
-import { EDITOR_CHUNK_UNITS } from './profile';
+} from './journal.ts';
+import { HEARTBEAT_MS, esbtPresence } from './presence.ts';
+import { PresenceActivityController } from './presence-activity-controller.ts';
+import { PresenceStore } from './presence-store.ts';
+import { EDITOR_CHUNK_UNITS } from './profile.ts';
 import {
   MSG_EPHEMERAL,
   MSG_PRESENCE_DELTA,
@@ -50,7 +52,7 @@ import {
   frame,
   randomMutationId,
   toBase64Url,
-} from './protocol';
+} from './protocol.ts';
 import type {
   CollabSession,
   ConnectionStatus,
@@ -66,44 +68,45 @@ import type {
   SessionOptions,
   StableTextRange,
   TextEdit,
-} from './types';
+} from './types.ts';
 import {
   ESBT_ERROR,
   EsbtDocument,
   EsbtError,
-  EsbtRuntime,
   MARKS_DOCUMENT_CONFIG,
   engineSiteToMarks,
   exportReconnectPayload,
   isEsbtError,
   isRefusedEdit,
   isSnapshotRefusal,
+  loadSharedEsbtRuntime,
   marksSiteToEngine,
   userMessageForError,
-} from './wasm';
+} from './wasm/index.ts';
 
 const EPHEMERAL_TIMEOUT_MS = 30_000;
 const LOCAL_SAVE_DEBOUNCE_MS = 800;
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 8_000;
-const CLOSE_DOCUMENT_DELETED = 4404;
+const CLOSE_INVALID_PAYLOAD = 4400;
 const CLOSE_AUTHORITY_CHANGED = 4401;
+const CLOSE_FORBIDDEN_WRITE = 4403;
+const CLOSE_DOCUMENT_DELETED = 4404;
 const MAX_VV_QUERY_BYTES = 4_096;
 const UNDO_MERGE_MS = 500;
 const MARKDOWN_CHECKPOINT_MS = 220;
+export const FINAL_CHECKPOINT_RELEASE_MS = PERSIST_LOCK_TIMEOUT_MS + 250;
+export const SOCKET_HANDSHAKE_TIMEOUT_MS = 10_000;
+export const SOCKET_INITIAL_SYNC_TIMEOUT_MS = 10_000;
+export const SOCKET_COMMIT_TIMEOUT_MS = 15_000;
+export const SOCKET_ERROR_CLOSE_GRACE_MS = 1_000;
+export const AUTHORITY_CHANGE_GRACE_MS = SERVICE_REQUEST_TIMEOUT_MS + RECONNECT_MIN_MS;
 
 const userKey = (siteId: string) => `${siteId}-cm-user`;
 const fromCrdt = Annotation.define<boolean>();
 const setEditorEditable = StateEffect.define<boolean>();
 const EDITOR_ORIGIN = 'editor';
 const SESSION_ORIGIN = 'session';
-
-let sharedRuntime: Promise<EsbtRuntime> | null = null;
-
-function loadRuntime(): Promise<EsbtRuntime> {
-  sharedRuntime ??= EsbtRuntime.load();
-  return sharedRuntime;
-}
 
 /**
  * Production Marks client for the Rust/Wasm ESBT document.
@@ -127,6 +130,8 @@ export class EsbtEngine implements CollabSession {
   private admissionAbort: AbortController | null = null;
   private reconnectDelay = RECONNECT_MIN_MS;
   private reconnectTimer: number | null = null;
+  private authorityChangeGraceDeadline = 0;
+  private authorityChangeGraceTimer: number | null = null;
   private presenceHeartbeat: number | null = null;
   private readonly activity: PresenceActivityController;
   private snapshotReplyTimer: number | null = null;
@@ -182,6 +187,10 @@ export class EsbtEngine implements CollabSession {
 
   private saveTimer: number | null = null;
   private markdownTimer: number | null = null;
+  private socketDeadlineTimer: number | null = null;
+  private socketDeadlineTarget: WebSocket | null = null;
+  private socketErrorCloseTimer: number | null = null;
+  private socketErrorCloseTarget: WebSocket | null = null;
   private readonly unsubscribers: Array<() => void> = [];
   private readonly changeListeners = new Set<(change: DocumentChange) => void>();
   private readonly statusListeners = new Set<(status: ConnectionStatus) => void>();
@@ -194,12 +203,21 @@ export class EsbtEngine implements CollabSession {
     timer: number;
   }>();
   private storageError: EngineErrorNotice | null = null;
+  private terminalError: EngineErrorNotice | null = null;
+  private storageFatal = false;
   private historyMaintenance: Promise<void> | null = null;
 
   static async open(options: SessionOptions): Promise<EsbtEngine> {
-    const engine = new EsbtEngine(options);
-    await engine.start();
-    return engine;
+    return openWithReplicaJournal(options.docId, async (stored) => {
+      const engine = new EsbtEngine(options);
+      try {
+        await engine.start(stored);
+        return engine;
+      } catch (error) {
+        engine.destroy();
+        throw error;
+      }
+    });
   }
 
   constructor({ docId, user, access }: SessionOptions) {
@@ -308,7 +326,7 @@ export class EsbtEngine implements CollabSession {
   }
 
   private redo(): boolean {
-    if (!this.doc?.canRedo) return true;
+    if (!this.capabilities().edit || !this.doc?.canRedo) return true;
     this.doc.redo({ origin: 'redo' });
     return true;
   }
@@ -521,7 +539,9 @@ export class EsbtEngine implements CollabSession {
           key: 'Mod-z',
           preventDefault: true,
           run: () => {
-            if (this.doc?.canUndo) this.doc.undo({ origin: 'undo' });
+            if (this.capabilities().edit && this.doc?.canUndo) {
+              this.doc.undo({ origin: 'undo' });
+            }
             return true;
           },
         },
@@ -645,7 +665,16 @@ export class EsbtEngine implements CollabSession {
 
   whenDurable(timeoutMs = 15_000): Promise<void> {
     if (this.isDurable()) return Promise.resolve();
-    if (this.destroyed) return Promise.reject(new Error('document session is closed'));
+    if (this.storageFatal) {
+      return Promise.reject(
+        new Error(this.storageError?.message ?? 'offline storage is unavailable for this document'),
+      );
+    }
+    if (this.destroyed) {
+      return Promise.reject(
+        new Error(this.terminalError?.message ?? 'document session is closed'),
+      );
+    }
     return new Promise<void>((resolve, reject) => {
       const waiter = {
         resolve: () => {
@@ -671,36 +700,57 @@ export class EsbtEngine implements CollabSession {
   }
 
   capabilities(): DocumentCapabilities {
+    let capabilities: DocumentCapabilities;
     switch (this.permissionRole) {
       case 'local':
-        return { role: 'local', edit: true, comment: true, saveVersion: true, manageShares: false };
+        capabilities = { role: 'local', edit: true, comment: true, saveVersion: true, manageShares: false };
+        break;
       case 'scratch':
-        return { role: 'scratch', edit: true, comment: false, saveVersion: false, manageShares: false };
+        capabilities = { role: 'scratch', edit: true, comment: false, saveVersion: false, manageShares: false };
+        break;
       case 'owner':
-        return { role: 'owner', edit: true, comment: true, saveVersion: true, manageShares: true };
+        capabilities = { role: 'owner', edit: true, comment: true, saveVersion: true, manageShares: true };
+        break;
       case 'editor':
-        return { role: 'editor', edit: true, comment: true, saveVersion: true, manageShares: false };
+        capabilities = { role: 'editor', edit: true, comment: true, saveVersion: true, manageShares: false };
+        break;
       case 'commenter':
-        return { role: 'commenter', edit: false, comment: true, saveVersion: false, manageShares: false };
+        capabilities = { role: 'commenter', edit: false, comment: true, saveVersion: false, manageShares: false };
+        break;
       case 'viewer':
-        return { role: 'viewer', edit: false, comment: false, saveVersion: false, manageShares: false };
+        capabilities = { role: 'viewer', edit: false, comment: false, saveVersion: false, manageShares: false };
+        break;
       default:
-        return { role: null, edit: false, comment: false, saveVersion: false, manageShares: false };
+        capabilities = { role: null, edit: false, comment: false, saveVersion: false, manageShares: false };
+        break;
     }
+    return this.storageFatal || this.destroyed
+      ? {
+          ...capabilities,
+          edit: false,
+          comment: false,
+          saveVersion: false,
+          manageShares: false,
+        }
+      : capabilities;
   }
 
   private applyTicketPermissions(ticket: RoomTicket): void {
     const next: DocumentCapabilities['role'] =
-      ticket.authority === 'scratch' ? 'scratch' : ticket.role;
+      ticket.authority === 'scratch' ? (ticket.role ?? 'scratch') : ticket.role;
     this.applyPermissionRole(next);
   }
 
   private applyPermissionRole(next: DocumentCapabilities['role']): void {
     if (next === this.permissionRole) return;
     this.permissionRole = next;
+    this.refreshEditorEditable();
+    if (this.doc) void this.checkpointJournal();
+  }
+
+  private refreshEditorEditable(): void {
     const editable = setEditorEditable.of(this.capabilities().edit);
     for (const view of this.editorViews) view.dispatch({ effects: editable });
-    if (this.doc) void this.checkpointJournal();
   }
 
   peers(): Peer[] {
@@ -738,7 +788,8 @@ export class EsbtEngine implements CollabSession {
 
   onError(listener: (error: EngineErrorNotice) => void): () => void {
     this.errorListeners.add(listener);
-    if (this.storageError) queueMicrotask(() => listener(this.storageError!));
+    const existing = this.terminalError ?? this.storageError;
+    if (existing) queueMicrotask(() => listener(existing));
     return () => this.errorListeners.delete(listener);
   }
 
@@ -752,15 +803,38 @@ export class EsbtEngine implements CollabSession {
     return () => this.hydratedListeners.delete(listener);
   }
 
-  private async start(): Promise<void> {
-    const runtime = await loadRuntime();
+  private async start(stored: ReplicaJournalRecord | null): Promise<void> {
+    const runtime = await loadSharedEsbtRuntime();
     if (this.destroyed) return;
 
-    let stored: ReplicaJournalRecord | null = null;
-    try {
-      stored = await readReplicaJournal(this.docId);
-    } catch (error) {
-      this.recordStorageError('The offline journal could not be read. Server sync will continue.', error);
+    if (stored && isAboutDocument(this.docId)) {
+      let probe: EsbtDocument | null = null;
+      try {
+        probe = await EsbtDocument.create({
+          runtime,
+          siteId: marksSiteToEngine(stored.siteId),
+          config: MARKS_DOCUMENT_CONFIG,
+        });
+        if (stored.snapshot.byteLength > 0) probe.applySnapshot(stored.snapshot);
+      } catch (error) {
+        // The built-in introduction has no user-owned source of truth. Old
+        // deployments may have cached an incompatible ESBT artifact under its
+        // fixed key; discard only that cache and reseed the canonical Markdown.
+        stored = null;
+        // Cleanup is deliberately best-effort. A stale cross-tab Web Lock or
+        // IndexedDB transaction must not hold the built-in welcome page on its
+        // opening shell forever; the canonical in-memory seed can render now.
+        void deleteReplicaJournal(this.docId).catch((deleteError) => {
+          this.recordStorageError(
+            'The outdated welcome-page cache could not be removed. A fresh copy is open for this visit.',
+            deleteError,
+            false,
+          );
+        });
+        console.warn('marks: discarded an incompatible built-in welcome snapshot', error);
+      } finally {
+        probe?.destroy();
+      }
     }
     if (stored) {
       this.permissionRole = this.access
@@ -830,7 +904,7 @@ export class EsbtEngine implements CollabSession {
   }
 
   private async loadServerSnapshot(): Promise<void> {
-    if (!this.access || !this.doc) return;
+    if (!this.access || !this.doc || this.storageFatal) return;
     const quality = readNetworkQuality();
     const hasLocal = this.getText().length > 0 || this.counters.snapshotBytes > 0;
     const timeoutMs = snapshotFetchTimeoutMs(quality, hasLocal);
@@ -854,7 +928,13 @@ export class EsbtEngine implements CollabSession {
   }
 
   private connect(): void {
-    if (!this.access || this.destroyed || this.socket || this.admissionAbort) return;
+    if (
+      !this.access ||
+      this.destroyed ||
+      this.storageFatal ||
+      this.socket ||
+      this.admissionAbort
+    ) return;
     if (this.pendingTicket) {
       this.openSocket(this.pendingTicket);
       this.pendingTicket = null;
@@ -875,20 +955,37 @@ export class EsbtEngine implements CollabSession {
         this.marksSiteId || undefined,
         controller.signal,
       );
-      if (this.destroyed || controller.signal.aborted || this.admissionAbort !== controller) return;
+      if (
+        this.destroyed ||
+        this.storageFatal ||
+        controller.signal.aborted ||
+        this.admissionAbort !== controller
+      ) return;
       this.admissionAbort = null;
+      this.clearAuthorityChangeGrace();
       this.marksSiteId = ticket.siteId;
       this.applyTicketPermissions(ticket);
       this.openSocket(ticket);
     } catch (error) {
       if (this.admissionAbort === controller) this.admissionAbort = null;
-      if (this.destroyed || controller.signal.aborted) return;
-      this.setStatus('offline');
-      if (shouldRetryAdmission(error)) this.scheduleReconnect();
+      if (this.destroyed || this.storageFatal || controller.signal.aborted) return;
+      if (
+        shouldRetryAdmission(error) ||
+        this.authorityChangeGraceDeadline > performance.now()
+      ) {
+        this.setStatus('offline');
+        this.scheduleReconnect();
+      } else {
+        this.enterTerminalRecovery(
+          CLOSE_AUTHORITY_CHANGED,
+          'Marks could not reauthorize this document. Editing has been stopped so stale authority cannot create unsendable work.',
+        );
+      }
     }
   }
 
   private openSocket(ticket: RoomTicket): void {
+    if (this.destroyed || this.storageFatal) return;
     // A presence instance is scoped to exactly one WebSocket lifecycle. This
     // happens before construction so even a failed handshake cannot reuse it.
     this.ephemeral.beginConnectionLifecycle();
@@ -906,48 +1003,196 @@ export class EsbtEngine implements CollabSession {
     socket.binaryType = 'arraybuffer';
     this.socket = socket;
     this.serverSynced = false;
+    this.armSocketDeadline(socket, SOCKET_HANDSHAKE_TIMEOUT_MS);
 
-    socket.addEventListener('message', (event) => this.onMessage(event.data as ArrayBuffer));
+    socket.addEventListener('message', (event) => {
+      if (this.socket === socket) this.onMessage(event.data as ArrayBuffer);
+    });
     socket.addEventListener('open', () => {
+      if (this.socket !== socket) return;
       this.reconnectDelay = RECONNECT_MIN_MS;
+      this.armSocketDeadline(socket, SOCKET_INITIAL_SYNC_TIMEOUT_MS);
       this.send(MSG_PRESENCE_DELTA, this.ephemeral.encodeAll());
     });
     socket.addEventListener('close', (event) => this.onDisconnect(socket, event.code));
-    socket.addEventListener('error', () => this.onDisconnect(socket));
+    socket.addEventListener('error', () => this.onSocketError(socket));
   }
 
   private onDisconnect(socket: WebSocket, code?: number): void {
     if (this.socket !== socket) return;
+    this.clearSocketErrorCloseDeadline(socket);
+    this.clearSocketDeadline(socket);
     this.socket = null;
     this.serverSynced = false;
-    if (this.destroyed) return;
+    if (this.destroyed || this.storageFatal) return;
 
-    this.setStatus('offline');
-    if (code === CLOSE_DOCUMENT_DELETED) {
-      this.destroyed = true;
+    if (code === CLOSE_INVALID_PAYLOAD) {
+      this.enterTerminalRecovery(
+        code,
+        'The collaboration service rejected a pending edit as invalid. Editing has been stopped rather than retrying the same rejected work.',
+      );
       return;
     }
-    if (code === CLOSE_AUTHORITY_CHANGED && this.permissionRole !== 'scratch') {
-      // An ACL/session epoch changed. Keep the replica readable, but do not
-      // admit offline edits under stale authority while a fresh ticket is
-      // being resolved.
+    if (code === CLOSE_FORBIDDEN_WRITE) {
+      this.enterTerminalRecovery(
+        code,
+        'Your edit permission changed before a pending edit could be committed. Editing has been stopped rather than retrying work the service will refuse.',
+      );
+      return;
+    }
+    if (code === CLOSE_DOCUMENT_DELETED) {
+      this.enterTerminalRecovery(
+        code,
+        'This page was deleted in another session. Editing has been stopped because the page can no longer accept changes.',
+      );
+      return;
+    }
+    this.setStatus('offline');
+    if (code === CLOSE_AUTHORITY_CHANGED) {
+      // Promotion, ACL changes, and revocation share the same close code.
+      // Revoke stale writes synchronously, then make one immediate admission
+      // against the live authority. A promoted scratch can return with a
+      // session ticket; deterministic denial enters recovery, while a
+      // transient failure stays read-only in the ordinary bounded retry lane.
       this.applyPermissionRole(null);
+      this.beginAuthorityChangeGrace();
+      this.connect();
+      return;
     }
     this.scheduleReconnect();
   }
 
+  private onSocketError(
+    socket: WebSocket,
+    graceMs = SOCKET_ERROR_CLOSE_GRACE_MS,
+  ): void {
+    if (this.socket !== socket || this.destroyed || this.storageFatal) return;
+    if (this.socketErrorCloseTarget === socket) return;
+
+    this.clearSocketErrorCloseDeadline();
+    this.socketErrorCloseTarget = socket;
+    this.socketErrorCloseTimer = window.setTimeout(() => {
+      if (this.socket !== socket || this.socketErrorCloseTarget !== socket) return;
+      // An idle synchronized socket has no ordinary progress watchdog. If the
+      // browser reports `error` without the required follow-up `close`, detach
+      // it ourselves so the normal retry lane cannot strand indefinitely.
+      this.clearSocketErrorCloseDeadline(socket);
+      this.onDisconnect(socket);
+    }, Math.max(1, graceMs));
+
+    try {
+      socket.close();
+    } catch {
+      this.clearSocketErrorCloseDeadline(socket);
+      this.onDisconnect(socket);
+    }
+  }
+
+  private clearSocketErrorCloseDeadline(socket?: WebSocket): void {
+    if (socket && this.socketErrorCloseTarget !== socket) return;
+    if (this.socketErrorCloseTimer !== null) {
+      window.clearTimeout(this.socketErrorCloseTimer);
+    }
+    this.socketErrorCloseTimer = null;
+    this.socketErrorCloseTarget = null;
+  }
+
+  private beginAuthorityChangeGrace(
+    graceMs = AUTHORITY_CHANGE_GRACE_MS,
+  ): void {
+    this.clearAuthorityChangeGrace();
+    const duration = Math.max(1, graceMs);
+    this.authorityChangeGraceDeadline = performance.now() + duration;
+    this.authorityChangeGraceTimer = window.setTimeout(
+      () => this.expireAuthorityChangeGrace(),
+      duration,
+    );
+  }
+
+  private expireAuthorityChangeGrace(): void {
+    if (this.authorityChangeGraceDeadline === 0 || this.destroyed || this.storageFatal) return;
+    const remaining = this.authorityChangeGraceDeadline - performance.now();
+    if (remaining > 0) {
+      if (this.authorityChangeGraceTimer !== null) {
+        window.clearTimeout(this.authorityChangeGraceTimer);
+      }
+      this.authorityChangeGraceTimer = window.setTimeout(
+        () => this.expireAuthorityChangeGrace(),
+        remaining,
+      );
+      return;
+    }
+
+    this.clearAuthorityChangeGrace();
+    this.admissionAbort?.abort();
+    this.admissionAbort = null;
+    this.enterTerminalRecovery(
+      CLOSE_AUTHORITY_CHANGED,
+      'Marks could not reauthorize this document before the login or permission change settled. Editing has been stopped so stale authority cannot create unsendable work.',
+    );
+  }
+
+  private clearAuthorityChangeGrace(): void {
+    if (this.authorityChangeGraceTimer !== null) {
+      window.clearTimeout(this.authorityChangeGraceTimer);
+    }
+    this.authorityChangeGraceTimer = null;
+    this.authorityChangeGraceDeadline = 0;
+  }
+
+  private armSocketDeadline(socket: WebSocket, timeoutMs: number): void {
+    this.clearSocketDeadline();
+    if (this.socket !== socket || this.destroyed || this.storageFatal) return;
+    this.socketDeadlineTarget = socket;
+    this.socketDeadlineTimer = window.setTimeout(() => {
+      if (this.socket !== socket || this.socketDeadlineTarget !== socket) return;
+      // Neither WebSocket construction nor `close()` is guaranteed to produce
+      // an event when the network stack is wedged. Enter the ordinary retry
+      // path ourselves, then make a best-effort transport close.
+      this.onDisconnect(socket);
+      try {
+        socket.close(1013, 'connection progress timeout');
+      } catch {
+        // The exact socket is already detached and scheduled for retry.
+      }
+    }, timeoutMs);
+  }
+
+  private clearSocketDeadline(socket?: WebSocket): void {
+    if (socket && this.socketDeadlineTarget !== socket) return;
+    if (this.socketDeadlineTimer !== null) window.clearTimeout(this.socketDeadlineTimer);
+    this.socketDeadlineTimer = null;
+    this.socketDeadlineTarget = null;
+  }
+
   private scheduleReconnect(): void {
-    if (this.reconnectTimer !== null || this.destroyed || !this.access) return;
+    if (this.reconnectTimer !== null || this.destroyed || this.storageFatal || !this.access) return;
     const jitter = Math.random() * 0.3 + 0.85;
-    const delay = Math.min(this.reconnectDelay * jitter, RECONNECT_MAX_MS);
+    let delay = Math.min(this.reconnectDelay * jitter, RECONNECT_MAX_MS);
     this.reconnectDelay = Math.min(this.reconnectDelay * 2, RECONNECT_MAX_MS);
+    if (this.authorityChangeGraceDeadline > 0) {
+      const remaining = this.authorityChangeGraceDeadline - performance.now();
+      if (remaining <= 0) {
+        this.expireAuthorityChangeGrace();
+        return;
+      }
+      delay = Math.min(delay, remaining);
+    }
     this.reconnectTimer = window.setTimeout(() => {
       this.reconnectTimer = null;
+      if (
+        this.authorityChangeGraceDeadline > 0 &&
+        performance.now() >= this.authorityChangeGraceDeadline
+      ) {
+        this.expireAuthorityChangeGrace();
+        return;
+      }
       this.connect();
-    }, delay);
+    }, Math.max(1, delay));
   }
 
   private handleOnline = (): void => {
+    if (this.destroyed || this.storageFatal) return;
     this.reconnectDelay = RECONNECT_MIN_MS;
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
@@ -959,6 +1204,22 @@ export class EsbtEngine implements CollabSession {
   private handleOffline = (): void => {
     this.admissionAbort?.abort();
     this.admissionAbort = null;
+    this.clearSocketErrorCloseDeadline();
+    const socket = this.socket;
+    if (socket) {
+      this.clearSocketDeadline(socket);
+      this.socket = null;
+      this.serverSynced = false;
+      try {
+        socket.close();
+      } catch {
+        // The browser is already offline; online recovery constructs a new socket.
+      }
+    }
+    if (this.reconnectTimer !== null) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     if (this.access) this.setStatus('offline');
   };
 
@@ -971,12 +1232,14 @@ export class EsbtEngine implements CollabSession {
     this.flushLocalSave();
     // Emit tombstones while the transport is still available, then close it.
     this.activity.pagehide();
+    this.clearSocketErrorCloseDeadline();
+    this.clearSocketDeadline();
     this.socket?.close();
     this.socket = null;
   };
 
   private importRemote(bytes: Uint8Array): void {
-    if (!this.doc || bytes.byteLength === 0) return;
+    if (!this.doc || this.destroyed || this.storageFatal || bytes.byteLength === 0) return;
     try {
       this.doc.import(bytes);
     } catch (error) {
@@ -993,7 +1256,7 @@ export class EsbtEngine implements CollabSession {
   }
 
   private importFromTab(bytes: Uint8Array, kind: 'update' | 'snapshot'): void {
-    if (this.destroyed || bytes.byteLength === 0) return;
+    if (this.destroyed || this.storageFatal || bytes.byteLength === 0) return;
     try {
       this.doc?.import(bytes);
     } catch (error) {
@@ -1005,10 +1268,10 @@ export class EsbtEngine implements CollabSession {
   }
 
   private scheduleTabSnapshot(): void {
-    if (this.snapshotReplyTimer !== null || this.destroyed || !this.doc) return;
+    if (this.snapshotReplyTimer !== null || this.destroyed || this.storageFatal || !this.doc) return;
     this.snapshotReplyTimer = window.setTimeout(() => {
       this.snapshotReplyTimer = null;
-      if (this.destroyed || !this.doc) return;
+      if (this.destroyed || this.storageFatal || !this.doc) return;
       try {
         this.tabs.sendSnapshot(this.doc.exportFullSnapshot());
       } catch {
@@ -1028,6 +1291,7 @@ export class EsbtEngine implements CollabSession {
   }
 
   private onMessage(raw: ArrayBuffer): void {
+    if (this.destroyed || this.storageFatal) return;
     const data = new Uint8Array(raw);
     if (data.length === 0) return;
     this.counters.received += data.byteLength;
@@ -1059,6 +1323,7 @@ export class EsbtEngine implements CollabSession {
         break;
       case MSG_SYNCED:
         this.serverSynced = true;
+        this.clearSocketDeadline(this.socket ?? undefined);
         this.synchronizeWithServer();
         break;
       case MSG_COMMITTED:
@@ -1070,7 +1335,7 @@ export class EsbtEngine implements CollabSession {
   }
 
   private sendMissingSince(encodedVersion: Uint8Array): void {
-    if (!this.doc) return;
+    if (!this.doc || this.destroyed || this.storageFatal) return;
     if (this.pendingMutations.size > 0) {
       this.sendPendingMutations();
       return;
@@ -1095,7 +1360,7 @@ export class EsbtEngine implements CollabSession {
   }
 
   private synchronizeWithServer(): void {
-    if (!this.serverSynced) return;
+    if (!this.serverSynced || this.destroyed || this.storageFatal) return;
     if (this.pendingMutations.size > 0) {
       this.setStatus('saving');
       this.sendPendingMutations();
@@ -1106,14 +1371,20 @@ export class EsbtEngine implements CollabSession {
   }
 
   private sendPendingMutations(): void {
+    if (this.destroyed || this.storageFatal) return;
     for (const mutation of this.pendingMutations.values()) this.sendMutation(mutation);
   }
 
   private sendMutation(mutation: JournalMutation): void {
+    if (this.destroyed || this.storageFatal) return;
+    const socket = this.socket;
+    if (!socket || socket.readyState !== WebSocket.OPEN || !this.serverSynced) return;
     this.send(MSG_MUTATION, encodeMutation(mutation.id, mutation.kind, mutation.bytes));
+    this.armSocketDeadline(socket, SOCKET_COMMIT_TIMEOUT_MS);
   }
 
   private handleCommitted(payload: Uint8Array): void {
+    if (this.destroyed || this.storageFatal) return;
     let receipt;
     try {
       receipt = decodeCommitted(payload);
@@ -1122,7 +1393,6 @@ export class EsbtEngine implements CollabSession {
       this.socket?.close(1002, 'invalid commit receipt');
       return;
     }
-    this.pendingMutations.delete(receipt.id);
     this.lastAckedVersion = receipt.version;
     this.lastServerVV = receipt.version;
     if (receipt.revision > this.committedRevision) this.committedRevision = receipt.revision;
@@ -1138,29 +1408,48 @@ export class EsbtEngine implements CollabSession {
         () => doc.exportFullSnapshot(),
       )
         .then((record) => {
+          this.pendingMutations.delete(receipt.id);
           this.localSaved = true;
           this.counters.snapshotBytes = record.snapshot.byteLength;
+          if (this.destroyed || this.storageFatal) return;
+          const socket = this.socket;
+          if (socket && this.pendingMutations.size > 0) {
+            this.armSocketDeadline(socket, SOCKET_COMMIT_TIMEOUT_MS);
+          } else {
+            this.clearSocketDeadline(socket ?? undefined);
+          }
+          void this.maybePrune(receipt.version);
+          if (this.pendingMutations.size === 0) this.sendMissingSince(receipt.version);
+          else if (this.serverSynced) this.setStatus('saving');
+          this.resolveDurabilityWaiters();
         })
         .catch((error) => {
           this.localSaved = false;
           this.recordStorageError('The server saved this edit, but its offline checkpoint failed.', error);
         });
     }
-    void this.maybePrune(receipt.version);
-    if (this.pendingMutations.size === 0) this.sendMissingSince(receipt.version);
-    else if (this.serverSynced) this.setStatus('saving');
-    this.resolveDurabilityWaiters();
   }
 
   private send(tag: number, payload: Uint8Array): void {
+    if (this.destroyed || this.storageFatal) return;
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN || payload.byteLength === 0) return;
     const message = frame(tag, payload);
-    socket.send(message);
-    this.counters.sent += message.byteLength;
+    try {
+      socket.send(message);
+      this.counters.sent += message.byteLength;
+    } catch {
+      this.onDisconnect(socket);
+      try {
+        socket.close();
+      } catch {
+        // The exact transport was already detached into the retry path.
+      }
+    }
   }
 
   private scheduleLocalSave(): void {
+    if (this.destroyed || this.storageFatal) return;
     if (this.saveTimer !== null) clearTimeout(this.saveTimer);
     this.saveTimer = window.setTimeout(() => {
       this.saveTimer = null;
@@ -1187,7 +1476,7 @@ export class EsbtEngine implements CollabSession {
     kind: 'update' | 'snapshot',
     broadcastTab: boolean,
   ): Promise<void> {
-    if (!this.doc || bytes.byteLength === 0) return;
+    if (!this.doc || this.destroyed || this.storageFatal || bytes.byteLength === 0) return;
     const mutation: JournalMutation = {
       id: randomMutationId(),
       kind,
@@ -1203,12 +1492,15 @@ export class EsbtEngine implements CollabSession {
     } catch (error) {
       this.localSaved = false;
       this.recordStorageError('This edit could not be written to the offline journal.', error);
+      // The network and other tabs must never observe an edit that this client
+      // could not first make restart-complete in its durable pending tail.
+      return;
     }
 
     // Teardown queues a final checkpoint after every persistence request
     // already made in this isolate. Do not start transport/history work behind
     // that barrier; this pending mutation is itself restart-complete.
-    if (this.destroyed) return;
+    if (this.destroyed || this.storageFatal) return;
 
     if (broadcastTab) {
       if (kind === 'update') this.tabs.sendUpdate(bytes);
@@ -1260,7 +1552,7 @@ export class EsbtEngine implements CollabSession {
   }
 
   private async checkpointJournal(): Promise<void> {
-    if (!this.doc) return;
+    if (!this.doc || this.storageFatal) return;
     const doc = this.doc;
     try {
       const record = await checkpointReplicaJournal(this.docId, this.emptyRecord(), () =>
@@ -1284,7 +1576,7 @@ export class EsbtEngine implements CollabSession {
   private compactDurableLocalHistory(): Promise<void> {
     return this.runHistoryMaintenance(async () => {
       const doc = this.doc;
-      if (!doc || doc.retainedOperations <= JOURNAL_RETAINED_THRESHOLD) return;
+      if (this.storageFatal || !doc || doc.retainedOperations <= JOURNAL_RETAINED_THRESHOLD) return;
       try {
         // First checkpoint the unpruned archive. If the second write loses power,
         // this copy plus the pending tail remains restart-complete.
@@ -1305,7 +1597,7 @@ export class EsbtEngine implements CollabSession {
 
   private maybePrune(ackedVersion: Uint8Array): Promise<void> {
     return this.runHistoryMaintenance(async () => {
-      if (!this.doc) return;
+      if (!this.doc || this.storageFatal) return;
       if (!shouldPruneHistory(this.doc.retainedOperations, this.lastPruneAt)) return;
       if (this.doc.retainedOperations > JOURNAL_RETAINED_THRESHOLD || this.lastPruneAt > 0) {
         try {
@@ -1358,14 +1650,103 @@ export class EsbtEngine implements CollabSession {
     for (const listener of this.errorListeners) listener(notice);
   }
 
-  private recordStorageError(message: string, cause: unknown): void {
+  /**
+   * Definitive server refusals are not ordinary offline states. Keep the
+   * in-memory replica readable for a source export, but revoke every write
+   * capability and stop all transport retry before another edit is accepted.
+   */
+  private enterTerminalRecovery(code: number, reason: string): void {
+    if (this.destroyed || this.storageFatal) return;
+    const message = `${reason} Use File → Markdown to download the text currently on this device before leaving or reloading.`;
+    const notice = { code, message };
+    this.terminalError = notice;
+    this.destroyed = true;
+    this.permissionRole = null;
+    this.serverSynced = false;
+
+    this.admissionAbort?.abort();
+    this.admissionAbort = null;
+    this.clearAuthorityChangeGrace();
+    this.clearSocketErrorCloseDeadline();
+    this.clearSocketDeadline();
+    if (this.reconnectTimer !== null) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.snapshotReplyTimer !== null) {
+      window.clearTimeout(this.snapshotReplyTimer);
+      this.snapshotReplyTimer = null;
+    }
+    if (this.saveTimer !== null) {
+      window.clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    const socket = this.socket;
+    this.socket = null;
+    try {
+      socket?.close();
+    } catch {
+      // The terminal state no longer depends on transport cooperation.
+    }
+
+    this.setStatus('offline');
+    this.refreshEditorEditable();
+    const durabilityError = new Error(message);
+    for (const waiter of this.durabilityWaiters) waiter.reject(durabilityError);
+    this.durabilityWaiters.clear();
+    for (const listener of this.errorListeners) listener(notice);
+
+    // Persist the authority revocation and the current replica behind any edit
+    // already queued in the journal. Export itself reads the live replica and
+    // never waits for this best-effort recovery checkpoint.
+    if (this.doc) void this.checkpointJournal();
+  }
+
+  private recordStorageError(message: string, cause: unknown, fatal = true): void {
     console.error(`[marks] ${message}`, cause);
-    this.storageError = { code: -1, message };
+    if (this.storageFatal) return;
+
+    const userMessage = fatal
+      ? `${message} Editing has been disabled to protect this page. Reload before making more changes.`
+      : message;
+    this.storageError = { code: -1, message: userMessage };
+    if (fatal) {
+      this.storageFatal = true;
+      this.localSaved = false;
+      this.refreshEditorEditable();
+      if (this.saveTimer !== null) {
+        window.clearTimeout(this.saveTimer);
+        this.saveTimer = null;
+      }
+      if (this.markdownTimer !== null) {
+        window.clearTimeout(this.markdownTimer);
+        this.markdownTimer = null;
+      }
+      if (this.reconnectTimer !== null) {
+        window.clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+      this.admissionAbort?.abort();
+      this.admissionAbort = null;
+      this.clearAuthorityChangeGrace();
+      this.clearSocketErrorCloseDeadline();
+      this.clearSocketDeadline();
+      this.serverSynced = false;
+      const socket = this.socket;
+      this.socket = null;
+      socket?.close();
+      this.setStatus('offline');
+      const durabilityError = new Error(userMessage, { cause });
+      for (const waiter of this.durabilityWaiters) waiter.reject(durabilityError);
+      this.durabilityWaiters.clear();
+    }
     for (const listener of this.errorListeners) listener(this.storageError);
   }
 
   private setStatus(status: ConnectionStatus): void {
-    if (!this.access) {
+    if (this.storageFatal) {
+      status = 'offline';
+    } else if (!this.access) {
       if (this.currentStatus === 'connected') return;
       status = 'connected';
     }
@@ -1376,7 +1757,9 @@ export class EsbtEngine implements CollabSession {
   }
 
   private isDurable(): boolean {
-    if (this.pendingMutations.size !== 0 || !this.localSaved) return false;
+    if (this.destroyed || this.storageFatal || this.pendingMutations.size !== 0 || !this.localSaved) {
+      return false;
+    }
     return !this.access || (this.serverSynced && this.currentStatus === 'connected');
   }
 
@@ -1462,6 +1845,9 @@ export class EsbtEngine implements CollabSession {
     window.removeEventListener('beforeunload', this.handlePageHide);
     this.admissionAbort?.abort();
     this.admissionAbort = null;
+    this.clearAuthorityChangeGrace();
+    this.clearSocketErrorCloseDeadline();
+    this.clearSocketDeadline();
     if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
     if (this.snapshotReplyTimer !== null) clearTimeout(this.snapshotReplyTimer);
     if (this.presenceHeartbeat !== null) clearInterval(this.presenceHeartbeat);
@@ -1473,17 +1859,40 @@ export class EsbtEngine implements CollabSession {
     this.socket = null;
     const replica = this.doc;
     this.doc = null;
-    void finalCheckpoint.then(
-      () => replica?.destroy(),
-      () => replica?.destroy(),
-    );
+    releaseReplicaAfterCheckpoint(replica, finalCheckpoint);
     this.ephemeral.destroy();
     this.changeListeners.clear();
     this.statusListeners.clear();
     this.peerListeners.clear();
     this.hydratedListeners.clear();
     this.errorListeners.clear();
+    this.editorViews.clear();
   }
+}
+
+interface DestroyableReplica {
+  destroy(): void;
+}
+
+/**
+ * A browser storage promise can ignore every cancellation signal. Teardown
+ * still releases the Wasm replica after the persistence budget; the poisoned
+ * lock lane prevents any detached exporter from starting afterward.
+ */
+export function releaseReplicaAfterCheckpoint(
+  replica: DestroyableReplica | null,
+  checkpoint: Promise<unknown>,
+  timeoutMs = FINAL_CHECKPOINT_RELEASE_MS,
+): void {
+  let released = false;
+  const release = (): void => {
+    if (released) return;
+    released = true;
+    globalThis.clearTimeout(timer);
+    replica?.destroy();
+  };
+  const timer = globalThis.setTimeout(release, Math.max(1, timeoutMs));
+  void checkpoint.then(release, release);
 }
 
 function randomLocalSite(): string {

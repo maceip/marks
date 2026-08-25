@@ -25,10 +25,11 @@ import '../../styles/overlays.css';
 
 export type AppDialog =
   | { type: 'templates' }
+  | { type: 'import-url' }
   | { type: 'rename'; documentId: string; title: string }
   | { type: 'delete'; documentId: string; title: string }
   | { type: 'trash' }
-  | { type: 'share'; documentId: string; title: string }
+  | { type: 'share'; documentId: string; title: string; publicPage: boolean }
   | { type: 'preferences' }
   | { type: 'command-palette' }
   | { type: 'keep-workspace' }
@@ -47,7 +48,7 @@ interface AppOverlaysProps {
   theme: 'light' | 'dark';
   preferences: UiPreferences;
   hasDocument: boolean;
-  /** Phone posture: single-device keep leads, the pairing QR follows. */
+  /** Phone posture: login requires opening this public page on a laptop. */
   phone: boolean;
   dataMode: 'local' | 'service';
   capabilities: DocumentCapabilities | null;
@@ -55,6 +56,7 @@ interface AppOverlaysProps {
   onCloseReview: () => void;
   onAction: (action: UiActionId) => void;
   onCreateFromTemplate: (templateId: TemplateId) => void;
+  onImportUrl: (url: string) => void;
   onRename: (documentId: string, title: string) => void;
   onDelete: (documentId: string) => void;
   onDocumentsChanged: () => void;
@@ -104,6 +106,42 @@ function TemplatesDialog({
         </button>
       ))}
     </div>
+  );
+}
+
+function ImportUrlDialog({ onImport }: { onImport: (url: string) => void }) {
+  const [url, setUrl] = useState('');
+  const valid = useMemo(() => {
+    try {
+      return ['http:', 'https:'].includes(new URL(url).protocol);
+    } catch {
+      return false;
+    }
+  }, [url]);
+  return (
+    <form
+      className="dialog-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (valid) onImport(url.trim());
+      }}
+    >
+      <label>
+        Public page URL
+        <input
+          data-autofocus
+          type="url"
+          inputMode="url"
+          placeholder="https://example.com/article"
+          value={url}
+          onChange={(event) => setUrl(event.target.value)}
+        />
+      </label>
+      <p className="hint">Marks imports the page’s static text, headings, links, lists, and tables. Scripts are never run.</p>
+      <div className="dialog-actions">
+        <button type="submit" className="button primary" disabled={!valid}>Import page</button>
+      </div>
+    </form>
   );
 }
 
@@ -723,6 +761,11 @@ export function AppOverlays(props: AppOverlaysProps) {
     description = 'Useful structure, still completely yours.';
     size = 'large';
     content = <TemplatesDialog onChoose={props.onCreateFromTemplate} />;
+  } else if (renderedDialog?.type === 'import-url') {
+    title = 'Import from URL';
+    description = 'Turn a public web page into portable Markdown.';
+    size = 'small';
+    content = <ImportUrlDialog onImport={props.onImportUrl} />;
   } else if (renderedDialog?.type === 'rename') {
     title = 'Rename document';
     description = 'The title updates everywhere in this workspace.';
@@ -740,27 +783,27 @@ export function AppOverlays(props: AppOverlaysProps) {
     content = <TrashDialog onChanged={props.onDocumentsChanged} onNotify={props.onNotify} />;
   } else if (renderedDialog?.type === 'share') {
     title = 'Share document';
-    description = 'Owner, editor, commenter, viewer. Scratch cannot share.';
+    description = renderedDialog.publicPage
+      ? 'This opaque page URL already grants public editor access.'
+      : 'Private pages use named roles and rotatable bearer links.';
     size = 'large';
-    content = <ShareDialog key={renderedDialog.documentId} documentId={renderedDialog.documentId} title={renderedDialog.title} capabilities={props.capabilities} onNotify={props.onNotify} />;
+    content = <ShareDialog key={renderedDialog.documentId} documentId={renderedDialog.documentId} title={renderedDialog.title} publicPage={renderedDialog.publicPage} capabilities={props.capabilities} onNotify={props.onNotify} />;
   } else if (renderedDialog?.type === 'keep-workspace') {
-    title = 'Keep this workspace';
-    description = 'A scratch tab is not a person.';
+    title = 'Log In';
+    description = props.phone ? 'Open this page on a laptop to log in.' : 'Scan the QR code with your phone.';
     content = (
       <KeepWorkspace
         onNotify={props.onNotify}
-        onOpenPhone={() => props.onAction('pairing')}
         onPromoted={props.onPromoted}
         phone={props.phone}
       />
     );
   } else if (renderedDialog?.type === 'account') {
-    title = 'Account and devices';
-    description = 'Phone controller, this browser, and honest scratch.';
+    title = 'Account';
+    description = 'Manage where you are logged in.';
     content = (
       <AccountSheet
         onNotify={props.onNotify}
-        onKeep={() => props.onAction('keep-workspace')}
         onSignedOut={props.onSignedOut}
       />
     );
@@ -769,8 +812,8 @@ export function AppOverlays(props: AppOverlaysProps) {
     description = 'Make Marks feel right without making it heavier.';
     content = <PreferencesDialog theme={props.theme} preferences={props.preferences} onTheme={props.onTheme} onPreferences={props.onPreferences} />;
   } else if (renderedDialog?.type === 'pairing-inspect') {
-    title = 'Phone confirmation';
-    description = 'Inspect, first phone, or approve. The secret stays in the fragment.';
+    title = 'Log In';
+    description = 'Scan the QR code or enter the login code from your other device.';
     content = <PairingInspect state="waiting" onNotify={props.onNotify} />;
   } else if (renderedDialog?.type === 'command-palette') {
     title = 'What do you want to do?';

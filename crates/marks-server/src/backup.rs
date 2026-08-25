@@ -8,12 +8,17 @@ use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
+use std::future::Future;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
 const BACKUP_SCHEMA: &str = "marks-backup.v2";
+const BACKUP_CREATE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -106,25 +111,102 @@ fn asset_rows(database: &Path) -> Result<Vec<BackupAsset>, String> {
         .collect()
 }
 
-fn create_blocking(
+#[derive(Debug)]
+struct PreparedBackup {
+    partial: PathBuf,
+    final_path: PathBuf,
+    published: bool,
+}
+
+impl PreparedBackup {
+    fn new(partial: PathBuf, final_path: PathBuf) -> Self {
+        Self {
+            partial,
+            final_path,
+            published: false,
+        }
+    }
+
+    /// The potentially long copy/verification worker never calls this. Only
+    /// a bounded publication worker may make the verified immutable tree
+    /// visible. If its JoinHandle times out after the rename began, the late
+    /// result is still a self-contained older snapshot and cannot mutate live
+    /// database or asset state.
+    fn publish(self) -> Result<PathBuf, String> {
+        self.publish_with_hook(|| {})
+    }
+
+    fn publish_with_hook(mut self, before_publish: impl FnOnce()) -> Result<PathBuf, String> {
+        before_publish();
+        fs::rename(&self.partial, &self.final_path)
+            .map_err(|error| format!("publish backup: {error}"))?;
+        self.published = true;
+        let root = self
+            .final_path
+            .parent()
+            .ok_or_else(|| "backup path has no parent".to_owned())?;
+        fsync_directory(root)?;
+        Ok(self.final_path.clone())
+    }
+}
+
+impl Drop for PreparedBackup {
+    fn drop(&mut self) {
+        if !self.published {
+            let _ = fs::remove_dir_all(&self.partial);
+        }
+    }
+}
+
+struct CancelPreparationOnDrop(Arc<AtomicBool>);
+
+impl Drop for CancelPreparationOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+fn finish_preparation(
+    prepared: PreparedBackup,
+    cancellation: &AtomicBool,
+    before_finish: impl FnOnce(),
+) -> Result<PreparedBackup, String> {
+    before_finish();
+    if cancellation.load(Ordering::Acquire) {
+        Err("backup preparation cancelled".to_owned())
+    } else {
+        Ok(prepared)
+    }
+}
+
+fn prepare_blocking(
     db: &Db,
     assets: &AssetStore,
     root: &Path,
     artifact: &ArtifactIdentity,
-) -> Result<PathBuf, String> {
+    cancellation: &AtomicBool,
+) -> Result<PreparedBackup, String> {
     fs::create_dir_all(root).map_err(|error| format!("create {}: {error}", root.display()))?;
     let created_at_ms = now_ms();
     let partial = root.join(format!(".partial-{created_at_ms}-{}", std::process::id()));
+    let final_path = root.join(format!("backup-{created_at_ms:020}"));
     fs::create_dir(&partial)
         .map_err(|error| format!("create backup staging directory: {error}"))?;
-    let result = (|| {
+    let prepared = PreparedBackup::new(partial.clone(), final_path);
+    (|| {
         let database = partial.join("marks.db3");
         db.backup_to(&database)
             .map_err(|error| format!("online SQLite backup: {error:?}"))?;
+        if cancellation.load(Ordering::Acquire) {
+            return Err("backup preparation cancelled".to_owned());
+        }
         let rows = asset_rows(&database)?;
         let asset_root = partial.join("assets");
         fs::create_dir(&asset_root).map_err(|error| format!("create backup assets: {error}"))?;
         for row in &rows {
+            if cancellation.load(Ordering::Acquire) {
+                return Err("backup preparation cancelled".to_owned());
+            }
             assets
                 .copy_verified_to(
                     decode_hash(&row.sha256)?,
@@ -157,17 +239,9 @@ fn create_blocking(
             .map_err(|error| format!("write backup manifest: {error}"))?;
         fsync_directory(&asset_root)?;
         fsync_directory(&partial)?;
-
-        let final_path = root.join(format!("backup-{created_at_ms:020}"));
-        fs::rename(&partial, &final_path).map_err(|error| format!("publish backup: {error}"))?;
-        fsync_directory(root)?;
-        verify_blocking(&final_path)?;
-        Ok(final_path)
-    })();
-    if result.is_err() {
-        let _ = fs::remove_dir_all(&partial);
-    }
-    result
+        verify_blocking(&partial)?;
+        finish_preparation(prepared, cancellation, || {})
+    })()
 }
 
 pub async fn create_once(
@@ -176,13 +250,69 @@ pub async fn create_once(
     root: PathBuf,
     artifact: ArtifactIdentity,
 ) -> Result<PathBuf, String> {
-    let guard = assets.backup_guard().await;
-    tokio::task::spawn_blocking(move || {
-        let _guard = guard;
-        create_blocking(&db, &assets, &root, &artifact)
-    })
-    .await
-    .map_err(|error| format!("backup task: {error}"))?
+    create_once_with_timeout(db, assets, root, artifact, BACKUP_CREATE_TIMEOUT).await
+}
+
+async fn create_once_with_timeout(
+    db: Arc<Db>,
+    assets: Arc<AssetStore>,
+    root: PathBuf,
+    artifact: ArtifactIdentity,
+    timeout: Duration,
+) -> Result<PathBuf, String> {
+    let deadline = Instant::now() + timeout;
+    let guard = tokio::time::timeout_at(deadline, assets.backup_guard())
+        .await
+        .map_err(|_| "backup timed out waiting for the asset guard".to_owned())?;
+    let cancellation = Arc::new(AtomicBool::new(false));
+    let _cancel_on_drop = CancelPreparationOnDrop(cancellation.clone());
+    let worker_cancellation = cancellation.clone();
+    let mut preparation = tokio::task::spawn_blocking(move || {
+        prepare_blocking(&db, &assets, &root, &artifact, worker_cancellation.as_ref())
+    });
+    let prepared = await_preparation(&mut preparation, cancellation.as_ref(), deadline).await?;
+    if Instant::now() >= deadline {
+        return Err("backup preparation timed out".to_owned());
+    }
+    let mut publication = tokio::task::spawn_blocking(move || prepared.publish());
+    let published = await_publication(&mut publication, deadline).await;
+    drop(guard);
+    published
+}
+
+async fn await_preparation(
+    preparation: &mut JoinHandle<Result<PreparedBackup, String>>,
+    cancellation: &AtomicBool,
+    deadline: Instant,
+) -> Result<PreparedBackup, String> {
+    match tokio::time::timeout_at(deadline, &mut *preparation).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(error)) => Err(format!("backup task: {error}")),
+        Err(_) => {
+            cancellation.store(true, Ordering::Release);
+            preparation.abort();
+            Err("backup preparation timed out".to_owned())
+        }
+    }
+}
+
+async fn await_publication(
+    publication: &mut JoinHandle<Result<PathBuf, String>>,
+    deadline: Instant,
+) -> Result<PathBuf, String> {
+    match tokio::time::timeout_at(deadline, &mut *publication).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(error)) => Err(format!("backup publication task: {error}")),
+        Err(_) => {
+            // `spawn_blocking` cannot cancel a rename/fsync already in the
+            // kernel. Detach at the absolute deadline so the live-asset guard
+            // is released. The worker owns only a fully verified immutable
+            // snapshot: it can either clean `.partial` on failure or publish a
+            // valid older backup, never alter live state.
+            publication.abort();
+            Err("backup publication timed out".to_owned())
+        }
+    }
 }
 
 fn verify_blocking(path: &Path) -> Result<BackupManifest, String> {
@@ -304,11 +434,28 @@ pub async fn run(
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                match create_once(db.clone(), assets.clone(), root.clone(), artifact.clone()).await {
+                let created = complete_or_stop(
+                    &mut stop,
+                    create_once(db.clone(), assets.clone(), root.clone(), artifact.clone()),
+                ).await;
+                let Some(created) = created else {
+                    return;
+                };
+                match created {
                     Ok(path) => {
                         tracing::info!(target: "marks_server::backup", backup = %path.display(), "backup verified and published");
                         let prune_root = root.clone();
-                        match tokio::task::spawn_blocking(move || prune(&prune_root, retain)).await {
+                        let mut pruning = tokio::task::spawn_blocking(move || prune(&prune_root, retain));
+                        let pruned = complete_or_stop(&mut stop, &mut pruning).await;
+                        let Some(pruned) = pruned else {
+                            // A running blocking syscall cannot be cancelled,
+                            // but the backup owner and `serve` no longer wait
+                            // for it. The binary runtime has its own final
+                            // shutdown deadline.
+                            pruning.abort();
+                            return;
+                        };
+                        match pruned {
                             Ok(Ok(())) => {}
                             Ok(Err(error)) => tracing::error!(target: "marks_server::backup", %error, "backup retention failed"),
                             Err(error) => tracing::error!(target: "marks_server::backup", %error, "backup retention task failed"),
@@ -323,5 +470,176 @@ pub async fn run(
                 }
             }
         }
+    }
+}
+
+/// Poll stop concurrently with one backup phase. Keeping the stop branch at
+/// this level matters: awaiting a `spawn_blocking` join inside a selected timer
+/// branch otherwise prevents the watch receiver from being polled at all.
+async fn complete_or_stop<T>(
+    stop: &mut tokio::sync::watch::Receiver<bool>,
+    work: impl Future<Output = T>,
+) -> Option<T> {
+    if *stop.borrow() {
+        return None;
+    }
+    tokio::pin!(work);
+    loop {
+        tokio::select! {
+            result = &mut work => return Some(result),
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow() {
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+    use std::sync::atomic::AtomicU64;
+
+    fn test_root() -> PathBuf {
+        static NEXT_TEST: AtomicU64 = AtomicU64::new(1);
+        std::env::temp_dir().join(format!(
+            "marks-backup-timeout-{}-{}",
+            std::process::id(),
+            NEXT_TEST.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    #[tokio::test]
+    async fn stop_interrupts_an_uncooperative_backup_phase() {
+        let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
+        let proof = tokio::spawn(async move {
+            complete_or_stop(&mut stop_rx, std::future::pending::<()>()).await
+        });
+        tokio::task::yield_now().await;
+        stop_tx.send(true).unwrap();
+
+        let result = tokio::time::timeout(Duration::from_secs(1), proof)
+            .await
+            .expect("backup owner must observe stop")
+            .expect("backup proof task");
+        assert!(result.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn timed_out_preparation_releases_guard_and_never_publishes_late() {
+        let root = test_root();
+        let asset_root = root.join("asset-store");
+        fs::create_dir_all(&root).unwrap();
+        let assets = Arc::new(AssetStore::open(asset_root).unwrap());
+        let guard = assets.backup_guard().await;
+        let partial = root.join(".partial-proof");
+        let published = root.join("backup-proof");
+        fs::create_dir(&partial).unwrap();
+        fs::write(partial.join("prepared"), b"not yet published").unwrap();
+
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let worker_cancellation = cancellation.clone();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let prepared = PreparedBackup::new(partial.clone(), published.clone());
+        let mut task = tokio::task::spawn_blocking(move || {
+            let result = finish_preparation(prepared, worker_cancellation.as_ref(), || {
+                let _ = started_tx.send(());
+                let _ = release_rx.recv();
+            });
+            let _ = done_tx.send(result.is_err());
+            result
+        });
+        started_rx
+            .await
+            .expect("preparation reached completion gate");
+        let error = await_preparation(
+            &mut task,
+            cancellation.as_ref(),
+            Instant::now() + Duration::from_millis(25),
+        )
+        .await
+        .expect_err("wedged preparation must time out");
+        assert!(error.contains("timed out"));
+
+        drop(guard);
+        let mutation_guard = tokio::time::timeout(Duration::from_secs(1), assets.mutation_guard())
+            .await
+            .expect("global asset guard released at the deadline");
+        drop(mutation_guard);
+        assert!(!published.exists(), "timed-out worker published a backup");
+
+        release_tx.send(()).expect("release late preparation");
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), done_rx)
+                .await
+                .expect("late preparation completed")
+                .expect("late preparation proof channel")
+        );
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while partial.exists() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("late worker discarded only its partial directory");
+        assert!(!published.exists(), "late preparation became visible");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn timed_out_publication_releases_guard_and_late_snapshot_is_isolated() {
+        let root = test_root();
+        let asset_root = root.join("asset-store");
+        fs::create_dir_all(&root).unwrap();
+        let assets = Arc::new(AssetStore::open(asset_root).unwrap());
+        let guard = assets.backup_guard().await;
+        let partial = root.join(".partial-publish-proof");
+        let published = root.join("backup-publish-proof");
+        fs::create_dir(&partial).unwrap();
+        fs::write(partial.join("verified-snapshot"), b"immutable proof").unwrap();
+
+        // In production this type can only be returned after the complete
+        // database/asset tree was verified. The hook models a metadata/fsync
+        // syscall that stops making progress after that point.
+        let prepared = PreparedBackup::new(partial.clone(), published.clone());
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let mut task = tokio::task::spawn_blocking(move || {
+            let result = prepared.publish_with_hook(|| {
+                let _ = started_tx.send(());
+                let _ = release_rx.recv();
+            });
+            let _ = done_tx.send(result.is_ok());
+            result
+        });
+        started_rx.await.expect("publication worker reached commit");
+        let error = await_publication(&mut task, Instant::now() + Duration::from_millis(25))
+            .await
+            .expect_err("wedged publication must time out");
+        assert!(error.contains("timed out"));
+
+        drop(guard);
+        let mutation_guard = tokio::time::timeout(Duration::from_secs(1), assets.mutation_guard())
+            .await
+            .expect("global asset guard released at publication deadline");
+        drop(mutation_guard);
+
+        release_tx.send(()).expect("release late publication");
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), done_rx)
+                .await
+                .expect("late publication completed")
+                .expect("late publication proof channel")
+        );
+        assert!(!partial.exists());
+        assert_eq!(
+            fs::read(published.join("verified-snapshot")).unwrap(),
+            b"immutable proof"
+        );
+        let _ = fs::remove_dir_all(root);
     }
 }

@@ -5,15 +5,17 @@
  * This is the production-path browser proof: artifact identity, scratch
  * admission, two isolated browser replicas, per-peer undo, preview writeback,
  * durable server commit, reload recovery, optional offline journal/reconnect,
- * and Markdown import/export. Pair its receipt with `live_service` for native
- * peers on the same document.
+ * public-slug admission, threshold persistence, drag/drop import/export, and
+ * Markdown conversion. Pair its receipt with `live_service` for native peers
+ * on the same document.
  *
  * Examples:
  *   MARKS_URL=http://127.0.0.1:3000 node scripts/ci-service-ui.mjs
  *   node scripts/ci-service-ui.mjs --url http://127.0.0.1:3000 --receipt /tmp/receipt.json
  *   node scripts/ci-service-ui.mjs --help
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { chromium, firefox, webkit } from 'playwright';
 import { CHROME_LAUNCH_ARGS, launchEnv } from './harness/env.mjs';
 
@@ -72,6 +74,31 @@ function pathnameOf(url) {
 }
 
 const SCRATCH_STORAGE_KEY = 'marks.auth.scratch.v1';
+function textPdf(text) {
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ];
+  const stream = `BT /F1 24 Tf 72 720 Td (${text}) Tj ET`;
+  objects.push(`<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`);
+
+  let pdf = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((body, index) => {
+    offsets.push(Buffer.byteLength(pdf));
+    pdf += `${index + 1} 0 obj\n${body}\nendobj\n`;
+  });
+  const xref = Buffer.byteLength(pdf);
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  pdf += offsets.slice(1)
+    .map((offset) => `${String(offset).padStart(10, '0')} 00000 n \n`)
+    .join('');
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(pdf);
+}
+
 const SCROLL_PROSE = Array.from(
   { length: 24 },
   (_, index) => `Paragraph ${index + 1}: enough current-service prose to make both panes scroll.`,
@@ -88,34 +115,68 @@ Cross-browser ${browserName} proof 🧭
 ${SCROLL_PROSE}
 `;
 
-async function readReplicaEvidence(page, documentId) {
-  return page.evaluate(async (id) => {
+async function readReplicaEvidence(page, documentId, timeoutMs = 5_000) {
+  return page.evaluate(async ({ id, timeout }) => {
+    const deadline = Date.now() + timeout;
     const raw = sessionStorage.getItem('marks.auth.scratch.v1');
     const credential = raw ? JSON.parse(raw) : null;
     const headers = credential
       ? { Authorization: `MarksScratch ${credential.scratchId}.${credential.capability}` }
       : {};
-    const [snapshotResponse, exportResponse] = await Promise.all([
-      fetch(`/v1/scratch/documents/${encodeURIComponent(id)}/snapshot?shallow=1`, { headers }),
-      fetch(`/v1/documents/${encodeURIComponent(id)}/export`, { headers }),
-    ]);
+    const controller = new AbortController();
+    const fetchTimer = setTimeout(() => controller.abort(), timeout);
+    let snapshotResponse;
+    let exportResponse;
+    try {
+      [snapshotResponse, exportResponse] = await Promise.all([
+        fetch(`/v1/scratch/documents/${encodeURIComponent(id)}/snapshot?shallow=1`, {
+          headers,
+          signal: controller.signal,
+        }),
+        fetch(`/v1/documents/${encodeURIComponent(id)}/export`, {
+          headers,
+          signal: controller.signal,
+        }),
+      ]);
+    } finally {
+      clearTimeout(fetchTimer);
+    }
     const snapshot = new Uint8Array(await snapshotResponse.arrayBuffer());
     const journal = await new Promise((resolve, reject) => {
+      let database = null;
+      let settled = false;
+      const settle = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        database?.close();
+        callback(value);
+      };
+      const fail = (error) => settle(
+        reject,
+        error instanceof Error ? error : new Error(String(error ?? 'IndexedDB evidence failed')),
+      );
+      const timer = setTimeout(
+        () => fail(new Error('timed out reading IndexedDB recovery evidence')),
+        Math.max(1, deadline - Date.now()),
+      );
       const request = indexedDB.open('keyval-store');
-      request.onerror = () => reject(request.error);
+      request.onerror = () => fail(request.error);
+      request.onblocked = () => fail(new Error('IndexedDB recovery evidence was blocked'));
       request.onsuccess = () => {
-        const database = request.result;
+        database = request.result;
         if (!database.objectStoreNames.contains('keyval')) {
-          resolve(null);
-          database.close();
+          settle(resolve, null);
           return;
         }
         const transaction = database.transaction('keyval', 'readonly');
         const get = transaction.objectStore('keyval').get(`marks:esbt:journal:${id}`);
-        get.onerror = () => reject(get.error);
+        transaction.onerror = () => fail(transaction.error);
+        transaction.onabort = () => fail(transaction.error ?? new Error('IndexedDB evidence aborted'));
+        get.onerror = () => fail(get.error);
         get.onsuccess = () => {
           const value = get.result;
-          resolve(value
+          settle(resolve, value
             ? {
                 version: value.version,
                 siteId: value.siteId,
@@ -130,7 +191,6 @@ async function readReplicaEvidence(page, documentId) {
                 })) ?? [],
               }
             : null);
-          database.close();
         };
       };
     });
@@ -144,7 +204,91 @@ async function readReplicaEvidence(page, documentId) {
       },
       journal,
     };
-  }, documentId);
+  }, { id: documentId, timeout: timeoutMs });
+}
+
+function requireCheck(check, name, pass, detail = '') {
+  check(name, pass, detail);
+  if (!pass) {
+    throw new Error(`prerequisite failed: ${name}${detail ? ` (${detail})` : ''}`);
+  }
+}
+
+function trackWait(promise) {
+  void promise.catch(() => undefined);
+  return promise;
+}
+
+async function withDeadline(promise, timeoutMs, label) {
+  void promise.catch(() => undefined);
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function waitForServiceWorkerController(page, timeoutMs = 30_000) {
+  await page.evaluate(async (timeout) => {
+    await new Promise((resolve, reject) => {
+      let settled = false;
+      let listening = false;
+      const cleanup = () => {
+        clearTimeout(timer);
+        if (listening) navigator.serviceWorker.removeEventListener('controllerchange', onControllerChange);
+      };
+      const succeed = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      };
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error instanceof Error ? error : new Error(String(error)));
+      };
+      const onControllerChange = () => {
+        if (navigator.serviceWorker.controller) succeed();
+      };
+      const timer = setTimeout(() => {
+        fail(new Error(
+          `service worker did not become ready and control the page within ${timeout}ms`,
+        ));
+      }, timeout);
+
+      navigator.serviceWorker.ready.then(() => {
+        if (settled) return;
+        if (navigator.serviceWorker.controller) {
+          succeed();
+          return;
+        }
+        listening = true;
+        navigator.serviceWorker.addEventListener('controllerchange', onControllerChange);
+      }, fail);
+    });
+  }, timeoutMs);
+}
+
+function writeReceiptAtomically(path, receipt) {
+  const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
+  try {
+    writeFileSync(temporary, `${JSON.stringify(receipt, null, 2)}\n`, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    });
+    renameSync(temporary, path);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
 }
 
 const args = parseArgs(process.argv.slice(2));
@@ -163,9 +307,11 @@ if (!['chromium', 'firefox', 'webkit'].includes(args.browser)) {
   throw new Error(`Error: unsupported browser ${args.browser}.`);
 }
 const receiptPath = args.receipt || process.env.MARKS_CI_RECEIPT || '';
+if (receiptPath) rmSync(receiptPath, { force: true });
 const results = [];
 const applicationErrors = [];
 const failedRequests = [];
+let pendingReceipt = null;
 const check = (name, pass, detail = '') => {
   results.push({ name, pass, detail });
   console.log(`${pass ? '  ok  ' : ' FAIL '} ${name}${detail ? ` — ${detail}` : ''}`);
@@ -214,75 +360,115 @@ try {
   const page = await context.newPage();
   observePage(page, 'primary');
 
-  const sessionProbe = page.waitForResponse(
+  const sessionProbe = trackWait(page.waitForResponse(
     (response) => pathnameOf(response.url()) === '/v1/auth/session',
     { timeout: 30_000 },
-  );
-  const catalogProbe = page.waitForResponse(
+  ));
+  const catalogProbe = trackWait(page.waitForResponse(
     (response) =>
       response.request().method() === 'GET' && pathnameOf(response.url()) === '/v1/documents',
     { timeout: 30_000 },
-  );
-  await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
-  const artifactResponse = await page.request.get(`${BASE}/v1/artifact`);
-  const artifact = await artifactResponse.json();
-  check('runtime artifact receipt is coherent',
-    artifactResponse.ok()
-      && artifact.engineCoherent === true
-      && artifact.profileCoherent === true
-      && artifact.staticArtifactVerified === true,
-    `${artifact.serverEngineRevision} / ${artifact.componentEngineRevision}`);
-  if (process.env.MARKS_REQUIRE_RELEASE === '1') {
-    check('runtime artifact is release-ready', artifact.releaseReady === true, artifact.buildRevision);
-  }
-  const session = await sessionProbe;
-  check('first paint probes GET /v1/auth/session', session.status() === 401 || session.status() === 200, `status ${session.status()}`);
-  const catalog = await catalogProbe;
-  check('home lists documents from GET /v1/documents', catalog.ok(), `status ${catalog.status()}`);
-
-  const mode = await page.evaluate(() => document.documentElement.dataset.marksMode ?? '');
-  check('documentElement is the service-mode build', mode === 'service', `data-marks-mode=${mode || 'missing'}`);
-  await page.waitForSelector('.home-actions .button.primary, .new-doc .button.primary', {
-    timeout: 30_000,
-  });
-
-  const created = page.waitForResponse(
+  ));
+  const created = trackWait(page.waitForResponse(
     (response) =>
       response.request().method() === 'POST' && pathnameOf(response.url()) === '/v1/documents',
     { timeout: 30_000 },
-  );
-  // Register before the click: the Wasm session admits (binds site) then
-  // fetches the snapshot, and either request can fire as soon as the
-  // editor route mounts.
-  const snapshotWait = page.waitForResponse(
+  ));
+  // Register before navigation. Anonymous first paint creates a unique public
+  // page and mounts its room without requiring a New-document click.
+  const snapshotWait = trackWait(page.waitForResponse(
     (response) =>
       response.request().method() === 'GET' &&
       /\/v1\/scratch\/documents\/[^/]+\/snapshot/.test(pathnameOf(response.url())),
     { timeout: 30_000 },
-  );
-  const ticketWait = page.waitForResponse(
+  ));
+  const ticketWait = trackWait(page.waitForResponse(
     (response) =>
       response.request().method() === 'POST' &&
       /\/v1\/scratch\/documents\/[^/]+\/session$/.test(pathnameOf(response.url())),
     { timeout: 30_000 },
+  ));
+  await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+  const mode = await page.evaluate(() => document.documentElement.dataset.marksMode ?? '');
+  requireCheck(
+    check,
+    'documentElement is the service-mode build',
+    mode === 'service',
+    `service proof loaded data-marks-mode=${mode || 'missing'}; rebuild with VITE_MARKS_DATA_MODE=service`,
   );
-  await page.locator('.home-actions .button.primary, .new-doc .button.primary').first().click();
+  const artifactResponse = await page.request.get(`${BASE}/v1/artifact`);
+  requireCheck(
+    check,
+    'runtime artifact endpoint responds',
+    artifactResponse.ok(),
+    `status ${artifactResponse.status()}`,
+  );
+  const artifact = await artifactResponse.json();
+  requireCheck(check, 'runtime artifact receipt is coherent',
+    artifact.engineCoherent === true
+      && artifact.profileCoherent === true
+      && artifact.staticArtifactVerified === true,
+    `${artifact.serverEngineRevision} / ${artifact.componentEngineRevision}`);
+  if (process.env.MARKS_REQUIRE_RELEASE === '1') {
+    requireCheck(check, 'runtime artifact is release-ready', artifact.releaseReady === true, artifact.buildRevision);
+  }
+  const session = await sessionProbe;
+  requireCheck(
+    check,
+    'first paint probes GET /v1/auth/session',
+    session.status() === 401 || session.status() === 200,
+    `status ${session.status()}`,
+  );
+  const catalog = await catalogProbe;
+  requireCheck(check, 'home lists documents from GET /v1/documents', catalog.ok(), `status ${catalog.status()}`);
   const createdResponse = await created;
-  check('New document POSTs /v1/documents', createdResponse.status() === 201, `status ${createdResponse.status()}`);
+  requireCheck(
+    check,
+    'anonymous root creates a unique page through /v1/documents',
+    createdResponse.status() === 201,
+    `status ${createdResponse.status()}`,
+  );
   const createdBody = await createdResponse.json();
   const documentId = createdBody?.document?.id;
-  check('create returns a document id', typeof documentId === 'string' && documentId.startsWith('document_'), String(documentId));
+  requireCheck(
+    check,
+    'create returns a document id',
+    typeof documentId === 'string' && documentId.startsWith('document_'),
+    String(documentId),
+  );
+  requireCheck(
+    check,
+    'anonymous page is public by its opaque slug on creation',
+    createdBody?.document?.public === true &&
+      createdBody?.document?.public_role === 'editor' &&
+      createdBody?.document?.slug === documentId,
+    JSON.stringify(createdBody?.document),
+  );
+  requireCheck(
+    check,
+    'anonymous slug is initialized with the editable marketing Markdown',
+    createdBody?.document?.title === 'Google Docs for Markdown' &&
+      createdBody?.document?.chars > 2_000,
+    `${String(createdBody?.document?.title)} chars=${String(createdBody?.document?.chars)}`,
+  );
 
   await page.waitForURL((url) => url.pathname === `/d/${documentId}`, { timeout: 30_000 });
-  check('router opens the server-created document', page.url().includes(`/d/${documentId}`));
+  requireCheck(
+    check,
+    'router opens the server-created document',
+    page.url().includes(`/d/${documentId}`),
+    page.url(),
+  );
 
   const [snapshot, ticket] = await Promise.all([snapshotWait, ticketWait]);
-  check(
+  requireCheck(
+    check,
     'editor fetches the scratch snapshot prefix',
     snapshot.ok() && pathnameOf(snapshot.url()).includes(documentId),
     `status ${snapshot.status()} ${pathnameOf(snapshot.url())}`,
   );
-  check(
+  requireCheck(
+    check,
     'editor mints a one-use room ticket',
     ticket.ok() && pathnameOf(ticket.url()).includes(documentId),
     `status ${ticket.status()} ${pathnameOf(ticket.url())}`,
@@ -292,26 +478,74 @@ try {
     const raw = sessionStorage.getItem('marks.auth.scratch.v1');
     return raw ? JSON.parse(raw) : null;
   });
-  check(
+  requireCheck(
+    check,
     'scratch credential is tab-scoped sessionStorage',
     Boolean(credential?.scratchId && credential?.capability),
+    credential?.scratchId ?? 'missing',
   );
 
   await page.waitForSelector('.cm-content', { timeout: 30_000 });
+  await page.waitForFunction(
+    () => document.querySelector('.cm-content')?.innerText?.includes('Google Docs for Markdown') &&
+      document.querySelector('.marks-preview')?.innerText?.includes('Typical Markdown') &&
+      document.querySelector('.app')?.getAttribute('data-marketing') === 'true',
+    undefined,
+    { timeout: 30_000 },
+  );
+  const initialExport = await page.request.get(`${BASE}/v1/documents/${documentId}/export`, {
+    headers: {
+      Authorization: `MarksScratch ${credential.scratchId}.${credential.capability}`,
+    },
+  });
+  requireCheck(
+    check,
+    'initial Markdown export responds',
+    initialExport.ok(),
+    `status ${initialExport.status()}`,
+  );
+  const initialMarkdown = await initialExport.text();
+  requireCheck(
+    check,
+    'editable introduction is durable before the first user edit',
+    initialMarkdown.includes('# Google Docs for Markdown') &&
+      initialMarkdown.includes('Delete this entire introduction'),
+  );
+  const marketingPresentation = await page.evaluate(() => ({
+    editor: document.querySelector('.cm-content')?.innerText ?? '',
+    preview: document.querySelector('.marks-preview')?.innerText ?? '',
+    marker: document.querySelector('.app')?.getAttribute('data-marketing') ?? '',
+    mode: [...(document.querySelector('.workspace')?.classList ?? [])]
+      .find((name) => name.startsWith('mode-')) ?? '',
+  }));
+  requireCheck(
+    check,
+    'new public slug renders the Markdown marketing page inside the real workspace',
+    marketingPresentation.preview.includes('Typical Markdown') &&
+      marketingPresentation.marker === 'true',
+    `marker=${marketingPresentation.marker || 'missing'} mode=${marketingPresentation.mode || 'missing'} ` +
+      `editor=${marketingPresentation.editor.length} preview=${marketingPresentation.preview.length}`,
+  );
   const committedText = `Cross-browser ${args.browser} proof 🧭`;
   const fixture = SERVICE_FIXTURE(args.browser);
-  check(
+  requireCheck(
+    check,
     'admitted scratch document is writable',
     await page.locator('.cm-content').getAttribute('contenteditable') === 'true',
   );
   await page.locator('.cm-content').click();
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+a' : 'Control+a');
   await page.keyboard.insertText(fixture);
   await page.waitForFunction(
     (expected) => document.querySelector('.cm-content')?.textContent?.includes(expected),
     committedText,
     { timeout: 30_000 },
   );
-  check('editor accepts the local mutation', true, committedText);
+  check(
+    'user can delete and replace the entire marketing starter',
+    !(await page.locator('.cm-content').innerText()).includes('Google Docs for Markdown'),
+    committedText,
+  );
   await page.waitForFunction(
     async ({ documentId, credential, expected }) => {
       const response = await fetch(`/v1/documents/${documentId}/export`, {
@@ -325,6 +559,34 @@ try {
     { timeout: 30_000 },
   );
   check('editor mutation receives a durable server-visible commit', true, committedText);
+
+  // Keep the edits separate so the room observes more than six anonymous
+  // commits, then require the document metadata to expose the persistence
+  // transition rather than inferring it from a still-open browser.
+  for (let edit = 0; edit < 7; edit += 1) {
+    await page.locator('.cm-content').click();
+    await page.keyboard.press('End');
+    await page.keyboard.insertText(String(edit));
+    await page.waitForTimeout(80);
+  }
+  await page.waitForFunction(
+    async ({ documentId, credential }) => {
+      const response = await fetch(`/v1/documents/${documentId}`, {
+        headers: {
+          Authorization: `MarksScratch ${credential.scratchId}.${credential.capability}`,
+        },
+      }).catch(() => null);
+      if (!response?.ok) return false;
+      const body = await response.json();
+      return body.document?.public === true &&
+        body.document?.anonymous_edits > 6 &&
+        body.document?.persisted === true &&
+        Number.isFinite(body.document?.persisted_at);
+    },
+    { documentId, credential },
+    { timeout: 30_000 },
+  );
+  check('more than six anonymous edits mark the public page persisted', true);
 
   await page.waitForSelector('.marks-preview input[type=checkbox]', { timeout: 30_000 });
   check(
@@ -396,38 +658,39 @@ try {
   );
   check('current service editor scrolling moves the preview', previewScroll > 0, String(previewScroll));
 
-  // The scratch capability is the current temporary-workspace authority. Give
-  // the same explicit bearer to an isolated browser profile, then require that
-  // profile to mint its own one-use room ticket. Separate BrowserContexts do
-  // not share IndexedDB or BroadcastChannel, so convergence must cross the
-  // production Rust service rather than a same-profile shortcut.
+  // Open the slug in a completely isolated anonymous profile without copying
+  // the owner's scratch capability. Public-by-URL collaboration must mint a
+  // different scratch identity and its own one-use room ticket. Separate
+  // BrowserContexts also rule out IndexedDB or BroadcastChannel shortcuts.
   const peerContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  await peerContext.addInitScript(
-    ({ storageKey, scratchCredential }) => {
-      sessionStorage.setItem(storageKey, JSON.stringify(scratchCredential));
-    },
-    { storageKey: SCRATCH_STORAGE_KEY, scratchCredential: credential },
-  );
   const peerPage = await peerContext.newPage();
   observePage(peerPage, 'peer');
-  const peerSnapshotWait = peerPage.waitForResponse(
+  const peerSnapshotWait = trackWait(peerPage.waitForResponse(
     (response) =>
       response.request().method() === 'GET' &&
       pathnameOf(response.url()) === `/v1/scratch/documents/${documentId}/snapshot`,
     { timeout: 30_000 },
-  );
-  const peerTicketWait = peerPage.waitForResponse(
+  ));
+  const peerTicketWait = trackWait(peerPage.waitForResponse(
     (response) =>
       response.request().method() === 'POST' &&
       pathnameOf(response.url()) === `/v1/scratch/documents/${documentId}/session`,
     { timeout: 30_000 },
-  );
+  ));
   await peerPage.goto(`${BASE}/d/${documentId}`, { waitUntil: 'domcontentloaded' });
   const [peerSnapshot, peerTicket] = await Promise.all([peerSnapshotWait, peerTicketWait]);
-  check(
-    'second isolated browser is admitted by current scratch authority',
-    peerSnapshot.ok() && peerTicket.ok(),
-    `snapshot ${peerSnapshot.status()} ticket ${peerTicket.status()}`,
+  const peerCredential = await peerPage.evaluate((storageKey) => {
+    const raw = sessionStorage.getItem(storageKey);
+    return raw ? JSON.parse(raw) : null;
+  }, SCRATCH_STORAGE_KEY);
+  requireCheck(
+    check,
+    'copy-pasted slug admits a different anonymous editor without sharing settings',
+    peerSnapshot.ok() &&
+      peerTicket.ok() &&
+      Boolean(peerCredential?.scratchId) &&
+      peerCredential.scratchId !== credential.scratchId,
+    `snapshot ${peerSnapshot.status()} ticket ${peerTicket.status()} peer ${peerCredential?.scratchId ?? 'missing'}`,
   );
   await peerPage.waitForSelector('.cm-content', { timeout: 30_000 });
   await peerPage.waitForFunction(
@@ -493,19 +756,24 @@ try {
     console.error(`reload editor text: ${JSON.stringify(await page.locator('.cm-content').textContent())}`);
     console.error(`reload requests: ${JSON.stringify(v1.slice(-20))}`);
     console.error(`reload status: ${JSON.stringify(await page.locator('.status').textContent().catch(() => null))}`);
-    const recoveryEvidence = await readReplicaEvidence(page, documentId);
-    console.error(`reload recovery evidence: ${JSON.stringify(recoveryEvidence)}`);
+    try {
+      const recoveryEvidence = await withDeadline(
+        readReplicaEvidence(page, documentId),
+        7_000,
+        'reload recovery evidence',
+      );
+      console.error(`reload recovery evidence: ${JSON.stringify(recoveryEvidence)}`);
+    } catch (evidenceError) {
+      console.error(
+        `reload recovery evidence unavailable: ${evidenceError instanceof Error ? evidenceError.message : String(evidenceError)}`,
+      );
+    }
     throw error;
   }
   check('reload reopens committed text', true);
 
   if (process.env.MARKS_TEST_SERVICE_WORKER === '1') {
-    await page.evaluate(async () => {
-      await navigator.serviceWorker.ready;
-      if (!navigator.serviceWorker.controller) {
-        await new Promise((resolve) => navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true }));
-      }
-    });
+    await waitForServiceWorkerController(page);
     await context.setOffline(true);
     if (args.browser === 'webkit') {
       // Playwright's WebKit port aborts an offline top-level navigation before
@@ -558,19 +826,64 @@ try {
     check('offline edit reconnects and commits', true, offlineText);
   }
 
-  const importedMarkdown = `# Imported on ${args.browser}\n\nPortable UTF-16: 🧪\n`;
-  const importedResponse = page.waitForResponse(
+  const importedMarkdown = `# Imported on ${args.browser}\n\nPortable UTF-16: 🧪`;
+  const convertedImport = trackWait(page.waitForResponse(
+    (response) => response.request().method() === 'POST' && pathnameOf(response.url()) === '/v1/import/file',
+    { timeout: 30_000 },
+  ));
+  const importedResponse = trackWait(page.waitForResponse(
     (response) => response.request().method() === 'POST' && pathnameOf(response.url()) === '/v1/documents',
     { timeout: 30_000 },
-  );
-  await page.locator('input[accept*=".md"]').setInputFiles({
+  ));
+  const draggedFile = {
     name: `browser-${args.browser}.md`,
     mimeType: 'text/markdown',
-    buffer: Buffer.from(importedMarkdown),
-  });
+    markdown: importedMarkdown,
+  };
+  await page.evaluate(({ name, mimeType, markdown }) => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([markdown], name, { type: mimeType }));
+    document.querySelector('.app')?.dispatchEvent(new DragEvent('dragenter', {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: transfer,
+    }));
+  }, draggedFile);
+  await page.waitForSelector('.document-drop-target', { timeout: 10_000 });
+  check('supported document drag shows the Markdown import target', true);
+  await page.evaluate(({ name, mimeType, markdown }) => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([markdown], name, { type: mimeType }));
+    document.querySelector('.app')?.dispatchEvent(new DragEvent('drop', {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: transfer,
+    }));
+  }, draggedFile);
+  const converted = await convertedImport;
   const imported = await importedResponse;
+  requireCheck(
+    check,
+    'dropped file conversion responds',
+    converted.ok(),
+    `status ${converted.status()}`,
+  );
+  requireCheck(
+    check,
+    'converted document creation responds',
+    imported.status() === 201,
+    `status ${imported.status()}`,
+  );
   const importedBody = await imported.json();
   const importedId = importedBody?.document?.id;
+  requireCheck(
+    check,
+    'converted import returns a populated public document id',
+    typeof importedId === 'string' &&
+      importedId.startsWith('document_') &&
+      importedBody?.document?.public === true,
+    JSON.stringify(importedBody?.document),
+  );
   await page.waitForURL((url) => url.pathname === `/d/${importedId}`, { timeout: 30_000 });
   await page.waitForSelector('.cm-content', { timeout: 30_000 });
   await page.waitForFunction(
@@ -578,14 +891,70 @@ try {
     `Imported on ${args.browser}`,
     { timeout: 30_000 },
   );
-  check('Markdown import creates one populated document', imported.status() === 201, String(importedId));
+  check(
+    'document drop converts and creates one populated public page',
+    true,
+    `${converted.status()} / ${imported.status()} / ${String(importedId)}`,
+  );
 
-  const downloadEvent = page.waitForEvent('download', { timeout: 30_000 });
+  const downloadEvent = trackWait(page.waitForEvent('download', { timeout: 30_000 }));
   await page.locator('.titlebar-download').click();
   const download = await downloadEvent;
   const downloadPath = await download.path();
   const downloaded = downloadPath ? readFileSync(downloadPath, 'utf8') : '';
   check('Markdown export returns the current source', downloaded === importedMarkdown, download.suggestedFilename());
+
+  const pdfText = `Browser Wasm ${args.browser} PDF drop proof`;
+  const pdfImportsBefore = v1.filter((entry) =>
+    entry.method === 'POST' && entry.path === '/v1/import/file').length;
+  const pdfCreatedResponse = trackWait(page.waitForResponse(
+    (response) => response.request().method() === 'POST' && pathnameOf(response.url()) === '/v1/documents',
+    { timeout: 45_000 },
+  ));
+  const pdfFixture = {
+    name: `browser-wasm-${args.browser}.pdf`,
+    base64: textPdf(pdfText).toString('base64'),
+  };
+  await page.evaluate(({ name, base64 }) => {
+    const binary = atob(base64);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([bytes], name, { type: 'application/pdf' }));
+    document.querySelector('.app')?.dispatchEvent(new DragEvent('dragenter', {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: transfer,
+    }));
+    document.querySelector('.app')?.dispatchEvent(new DragEvent('drop', {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: transfer,
+    }));
+  }, pdfFixture);
+  const pdfCreated = await pdfCreatedResponse;
+  const pdfBody = await pdfCreated.json();
+  const pdfDocumentId = pdfBody?.document?.id;
+  requireCheck(
+    check,
+    'browser Wasm PDF drop creates a populated public Markdown page',
+    pdfCreated.status() === 201 &&
+      typeof pdfDocumentId === 'string' &&
+      pdfBody?.document?.public === true,
+    `${pdfCreated.status()} / ${String(pdfDocumentId)}`,
+  );
+  await page.waitForURL((url) => url.pathname === `/d/${pdfDocumentId}`, { timeout: 45_000 });
+  await page.waitForFunction(
+    (expected) => document.querySelector('.cm-content')?.textContent?.includes(expected),
+    pdfText,
+    { timeout: 45_000 },
+  );
+  const pdfImportsAfter = v1.filter((entry) =>
+    entry.method === 'POST' && entry.path === '/v1/import/file').length;
+  check(
+    'PDF drop stays in browser Wasm and never uploads to the server',
+    pdfImportsAfter === pdfImportsBefore,
+    `${pdfImportsBefore} before / ${pdfImportsAfter} after`,
+  );
 
   check(
     'no Node /api alias',
@@ -601,8 +970,8 @@ try {
     applicationErrors.join(' | '),
   );
 
-  if (receiptPath && credential && typeof documentId === 'string') {
-    const receipt = {
+  if (receiptPath) {
+    pendingReceipt = {
       documentId,
       scratchId: credential.scratchId,
       capability: credential.capability,
@@ -610,10 +979,6 @@ try {
       browser: args.browser,
       artifact,
     };
-    writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
-    console.log(`receipt: ${receiptPath}`);
-  } else if (receiptPath) {
-    check('wrote service-mode receipt', false, 'missing document or scratch');
   }
 } catch (error) {
   if (applicationErrors.length > 0) {
@@ -630,4 +995,9 @@ try {
 
 const failed = results.filter((result) => !result.pass);
 console.log(`\n${results.length - failed.length}/${results.length} service-mode UI checks passed`);
+if (failed.length === 0 && receiptPath) {
+  if (!pendingReceipt) throw new Error('service-mode receipt was not prepared');
+  writeReceiptAtomically(receiptPath, pendingReceipt);
+  console.log(`receipt: ${receiptPath}`);
+}
 process.exit(failed.length === 0 ? 0 : 1);

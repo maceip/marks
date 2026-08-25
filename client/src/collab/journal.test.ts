@@ -4,13 +4,17 @@ import 'fake-indexeddb/auto';
 import {
   JOURNAL_PRUNE_INTERVAL_MS,
   JOURNAL_RETAINED_THRESHOLD,
+  ReplicaJournalUnavailableError,
   acknowledgePendingMutation,
   appendPendingMutation,
   appendMutation,
   checkpointReplicaJournal,
+  deleteReplicaJournal,
+  openWithReplicaJournal,
   readReplicaJournal,
   shouldPruneHistory,
   type ReplicaJournalRecord,
+  writeReplicaJournal,
 } from './journal.ts';
 
 let nextDocument = 1;
@@ -50,6 +54,62 @@ test('journal persists the last authorized offline role', async () => {
   const id = docId();
   await checkpointReplicaJournal(id, record(), () => new Uint8Array([9]));
   assert.equal((await readReplicaJournal(id))?.role, 'editor');
+});
+
+test('one corruptible built-in journal can be removed without touching another document', async () => {
+  const removedId = docId();
+  const retainedId = docId();
+  await writeReplicaJournal(removedId, record());
+  await writeReplicaJournal(retainedId, record());
+
+  await deleteReplicaJournal(removedId);
+
+  assert.equal(await readReplicaJournal(removedId), null);
+  assert.deepEqual([...(await readReplicaJournal(retainedId))!.snapshot], [1]);
+});
+
+test('replica opening never continues to server fallback when the durable journal cannot be read', async () => {
+  let continued = false;
+  await assert.rejects(
+    openWithReplicaJournal(
+      docId(),
+      async () => {
+        continued = true;
+        return 'opened';
+      },
+      {
+        timeoutMs: 50,
+        read: async () => {
+          throw new Error('IndexedDB read failed');
+        },
+      },
+    ),
+    (error: unknown) =>
+      error instanceof ReplicaJournalUnavailableError &&
+      /durable local copy was left untouched/.test(error.message),
+  );
+  assert.equal(continued, false);
+});
+
+test('replica opening never continues after a non-cooperative journal read reaches its deadline', async () => {
+  const startedAt = Date.now();
+  let continued = false;
+  await assert.rejects(
+    openWithReplicaJournal(
+      docId(),
+      async () => {
+        continued = true;
+        return 'opened';
+      },
+      {
+        timeoutMs: 5,
+        read: () => new Promise(() => undefined),
+      },
+    ),
+    ReplicaJournalUnavailableError,
+  );
+  assert.equal(continued, false);
+  assert(Date.now() - startedAt < 250, 'journal opening exceeded its bounded deadline');
 });
 
 test('one mutation id cannot be rebound to different bytes', () => {

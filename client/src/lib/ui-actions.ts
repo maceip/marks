@@ -6,6 +6,10 @@ export type UiActionId =
   | 'new'
   | 'templates'
   | 'import'
+  | 'template-notes'
+  | 'template-meeting'
+  | 'template-github-readme'
+  | 'import-url'
   | 'rename'
   | 'duplicate'
   | 'download'
@@ -42,6 +46,10 @@ export const UI_ACTIONS: UiActionDescriptor[] = [
   { id: 'new', label: 'New document', description: 'Open a quiet blank page', group: 'Document', shortcut: '⌘N' },
   { id: 'templates', label: 'New from template', description: 'Start from a useful structure', group: 'Document' },
   { id: 'import', label: 'Import Markdown', description: 'Create a document from a .md file', group: 'Document' },
+  { id: 'template-notes', label: 'Notes app', description: 'Start a lightweight running notes page', group: 'Document' },
+  { id: 'template-meeting', label: 'Meeting', description: 'Start notes, decisions, and actions for a meeting', group: 'Document' },
+  { id: 'template-github-readme', label: 'GitHub README', description: 'Start a structured repository README', group: 'Document' },
+  { id: 'import-url', label: 'Import from URL', description: 'Convert a public web page to Markdown', group: 'Document' },
   { id: 'rename', label: 'Rename document', description: 'Change the title in the document catalog', group: 'Document' },
   { id: 'duplicate', label: 'Duplicate document', description: 'Create an independent local copy', group: 'Document' },
   { id: 'download', label: 'Download Markdown', description: 'Export the current source as a .md file', group: 'Document' },
@@ -57,10 +65,10 @@ export const UI_ACTIONS: UiActionDescriptor[] = [
   { id: 'command-palette', label: 'Command palette', description: 'Search every Marks command', group: 'Workspace', shortcut: '⌘⇧P' },
   { id: 'benchmark', label: 'Open performance receipt', description: 'Run the in-browser engine benchmark', group: 'Navigate' },
   { id: 'about', label: 'Google Docs for Markdown', description: 'Open the marketing page in the editor', group: 'Navigate' },
-  { id: 'keep-workspace', label: 'Keep this workspace', description: 'See how a temporary tab becomes a durable principal', group: 'Workspace' },
-  { id: 'account', label: 'Account and devices', description: 'Scratch, phone controller, and this browser', group: 'Workspace' },
-  { id: 'pairing', label: 'Phone confirmation', description: 'Open the /link pairing surface', group: 'Workspace' },
-  { id: 'logout', label: 'Sign out', description: 'Revoke the session cookie when one exists', group: 'Workspace' },
+  { id: 'keep-workspace', label: 'Log In', description: 'Log in with your phone', group: 'Workspace' },
+  { id: 'account', label: 'Account', description: 'Manage where you are logged in', group: 'Workspace' },
+  { id: 'pairing', label: 'Approve Login', description: 'Approve a login from another browser', group: 'Workspace' },
+  { id: 'logout', label: 'Log Out', description: 'Log out on this browser', group: 'Workspace' },
   { id: 'find', label: 'Find in document', description: 'Open the editor search panel', group: 'Workspace', shortcut: '⌘F' },
   { id: 'draft-tools', label: 'Draft tools', description: 'Apply deterministic local Markdown transformations', group: 'Workspace' },
   { id: 'practical-health', label: 'Document health', description: 'Prioritize issues across the document', group: 'Review' },

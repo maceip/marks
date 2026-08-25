@@ -1,5 +1,6 @@
 /** Production browser owner for the WIT-generated ESBT component. */
 
+import { runWithTimeout, SERVICE_REQUEST_TIMEOUT_MS } from '../../browser/network.ts';
 import type { TextEdit } from '../../text/change';
 import { instantiate, type Root } from './generated/esbt.js';
 import type {
@@ -29,6 +30,7 @@ const MAX_COMPONENT_MODULE_BYTES = 64 * 1024 * 1024;
 const MAX_POSITION_BYTES = 4_096;
 
 export const ESBT_COMPONENT_MANIFEST_URL = '/esbt.component.manifest.json';
+export const ESBT_RUNTIME_BOOTSTRAP_TIMEOUT_MS = SERVICE_REQUEST_TIMEOUT_MS;
 
 export interface ComponentArtifactDescriptor {
   path: string;
@@ -173,6 +175,12 @@ type CoreModuleLoader = (
   name: string,
 ) => WebAssembly.Module | Promise<WebAssembly.Module>;
 
+export interface EsbtRuntimeLoadOptions {
+  timeoutMs?: number;
+  fetch?: typeof fetch;
+  compile?: (bytes: BufferSource) => Promise<WebAssembly.Module>;
+}
+
 export class EsbtRuntime {
   readonly engine: Root['engine'];
   readonly manifest: EsbtComponentManifest | null;
@@ -190,40 +198,53 @@ export class EsbtRuntime {
 
   static async load(
     manifestUrl = ESBT_COMPONENT_MANIFEST_URL,
+    options: EsbtRuntimeLoadOptions = {},
   ): Promise<EsbtRuntime> {
-    const manifestResponse = await fetch(manifestUrl);
-    if (!manifestResponse.ok) {
-      throw new Error(`esbt: failed to fetch component manifest (${manifestResponse.status})`);
-    }
-    const manifest: unknown = await manifestResponse.json();
-    if (!isEsbtComponentManifest(manifest)) {
-      throw new TypeError('esbt: invalid component provenance manifest');
-    }
-    const byName = new Map(
-      manifest.core_modules.map((entry) => [entry.path.slice(entry.path.lastIndexOf('/') + 1), entry]),
-    );
-    const compiled = new Map<string, Promise<WebAssembly.Module>>();
-    const loader: CoreModuleLoader = (name) => {
-      const existing = compiled.get(name);
-      if (existing) return existing;
-      const descriptor = byName.get(name);
-      if (!descriptor) throw new TypeError(`esbt: manifest does not declare ${name}`);
-      const promise = (async () => {
-        const response = await fetch(descriptor.path);
-        if (!response.ok) {
-          throw new Error(`esbt: failed to fetch ${descriptor.path} (${response.status})`);
+    const fetchImpl = options.fetch ?? globalThis.fetch;
+    const compile = options.compile ?? ((bytes: BufferSource) => WebAssembly.compile(bytes));
+    return runWithTimeout(
+      async (signal) => {
+        const manifestResponse = await fetchImpl(manifestUrl, { signal });
+        if (!manifestResponse.ok) {
+          throw new Error(`esbt: failed to fetch component manifest (${manifestResponse.status})`);
         }
-        const bytes = new Uint8Array(await response.arrayBuffer());
-        await verifyComponentArtifact(bytes, descriptor);
-        return WebAssembly.compile(bytes);
-      })();
-      compiled.set(name, promise);
-      return promise;
-    };
-    return EsbtRuntime.instantiate(
-      loader,
-      manifest,
-      manifest.core_modules.reduce((sum, entry) => sum + entry.bytes, 0),
+        const manifest: unknown = await manifestResponse.json();
+        if (!isEsbtComponentManifest(manifest)) {
+          throw new TypeError('esbt: invalid component provenance manifest');
+        }
+        const byName = new Map(
+          manifest.core_modules.map((entry) => [
+            entry.path.slice(entry.path.lastIndexOf('/') + 1),
+            entry,
+          ]),
+        );
+        const compiled = new Map<string, Promise<WebAssembly.Module>>();
+        const loader: CoreModuleLoader = (name) => {
+          const existing = compiled.get(name);
+          if (existing) return existing;
+          const descriptor = byName.get(name);
+          if (!descriptor) throw new TypeError(`esbt: manifest does not declare ${name}`);
+          const promise = (async () => {
+            const response = await fetchImpl(descriptor.path, { signal });
+            if (!response.ok) {
+              throw new Error(`esbt: failed to fetch ${descriptor.path} (${response.status})`);
+            }
+            const bytes = new Uint8Array(await response.arrayBuffer());
+            await verifyComponentArtifact(bytes, descriptor);
+            return compile(bytes);
+          })();
+          compiled.set(name, promise);
+          return promise;
+        };
+        return EsbtRuntime.instantiate(
+          loader,
+          manifest,
+          manifest.core_modules.reduce((sum, entry) => sum + entry.bytes, 0),
+        );
+      },
+      options.timeoutMs ?? ESBT_RUNTIME_BOOTSTRAP_TIMEOUT_MS,
+      null,
+      new DOMException('The collaboration engine took too long to start.', 'TimeoutError'),
     );
   }
 
@@ -306,6 +327,21 @@ export class EsbtRuntime {
   emptyVersion(): Uint8Array {
     return this.engine.emptyVersion().slice();
   }
+}
+
+let sharedRuntime: Promise<EsbtRuntime> | null = null;
+
+/** Share a successful runtime, but never pin a failed bootstrap across UI retries. */
+export function loadSharedEsbtRuntime(
+  load: () => Promise<EsbtRuntime> = () => EsbtRuntime.load(),
+): Promise<EsbtRuntime> {
+  if (sharedRuntime) return sharedRuntime;
+  const pending = load();
+  sharedRuntime = pending;
+  void pending.catch(() => {
+    if (sharedRuntime === pending) sharedRuntime = null;
+  });
+  return pending;
 }
 
 export type LimitField = keyof ResourceLimits;

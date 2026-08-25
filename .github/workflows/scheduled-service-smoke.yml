@@ -7,9 +7,9 @@ on:
   schedule:
     # Daily release-shape smoke and performance budgets.
     - cron: '17 8 * * *'
-    # Weekly Firefox and WebKit full service proof, so incremental-classifier
+    # Daily Firefox and WebKit full service proof, so incremental-classifier
     # mistakes or browser drift cannot accumulate indefinitely.
-    - cron: '41 9 * * 1'
+    - cron: '41 9 * * *'
   workflow_dispatch:
   push:
     branches: [main]
@@ -154,12 +154,12 @@ jobs:
           exit "$measure_status"
 
   # Required CI runs Firefox and WebKit only when the incremental classifier
-  # decides a change needs them. Once a week the live service proof runs on
+  # decides a change needs them. Once a day the live service proof runs on
   # both engines regardless, so a classification mistake or upstream browser
   # drift is caught within days instead of accumulating.
-  weekly-browser-safety-net:
-    if: github.event_name != 'schedule' || github.event.schedule == '41 9 * * 1'
-    name: weekly ${{ matrix.browser }} service proof
+  daily-browser-safety-net:
+    if: github.event_name != 'schedule' || github.event.schedule == '41 9 * * *'
+    name: daily ${{ matrix.browser }} service proof
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
@@ -227,14 +227,13 @@ jobs:
           bash scripts/run-service-ci.sh \
             --bin target/debug/marks-server \
             --static-dir client/dist \
-            --browser "${MARKS_BROWSER}" \
-            --skip-collab
+            --browser "${MARKS_BROWSER}"
 
       - name: Upload failure evidence
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: weekly-service-failure-${{ matrix.browser }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: daily-service-failure-${{ matrix.browser }}-${{ github.run_id }}-${{ github.run_attempt }}
           retention-days: 7
           if-no-files-found: ignore
           path: |

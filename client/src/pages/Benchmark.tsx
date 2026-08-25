@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import type { BenchMessage, BenchOptions, BenchReceipt, BenchTiming } from '../bench/types';
+import type { BenchOptions, BenchReceipt, BenchTiming } from '../bench/types';
+import {
+  superviseBenchmarkWorker,
+  type BenchmarkWorkerSupervisor,
+} from '../bench/worker-run.ts';
 import { Icon, icons } from '../components/ui/Icon';
 import { formatBytes, formatCount, formatMs } from '../lib/format';
 import BenchWorker from '../workers/bench.worker?worker';
@@ -65,35 +69,58 @@ export function Benchmark({ onBack }: BenchmarkProps) {
   const [phase, setPhase] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const workerRef = useRef<Worker | null>(null);
+  const supervisorRef = useRef<BenchmarkWorkerSupervisor | null>(null);
 
-  useEffect(() => () => workerRef.current?.terminate(), []);
+  useEffect(() => () => supervisorRef.current?.cancel(), []);
 
   const run = (): void => {
-    workerRef.current?.terminate();
+    supervisorRef.current?.cancel();
+    supervisorRef.current = null;
+    workerRef.current = null;
     setReceipt(null);
     setError(null);
     setPhase('Starting…');
 
-    const worker = new BenchWorker();
+    let worker: Worker;
+    try {
+      worker = new BenchWorker();
+    } catch (workerError) {
+      setError(
+        workerError instanceof Error
+          ? workerError.message
+          : 'The benchmark worker could not start.',
+      );
+      setPhase(null);
+      return;
+    }
     workerRef.current = worker;
-    worker.onmessage = (event: MessageEvent<BenchMessage>) => {
-      const message = event.data;
-      if (message.type === 'progress') setPhase(message.phase);
-      else if (message.type === 'receipt') setReceipt(message.receipt);
-      else if (message.type === 'error') {
-        setError(message.message);
+    const supervisor = superviseBenchmarkWorker(worker, {
+      onMessage: (message) => {
+        if (message.type === 'progress') setPhase(message.phase);
+        else if (message.type === 'receipt') setReceipt(message.receipt);
+      },
+      onDone: () => {
         setPhase(null);
-      } else if (message.type === 'done') {
-        setPhase(null);
-        worker.terminate();
         workerRef.current = null;
-      }
-    };
-
-    worker.postMessage({
-      type: 'run',
-      options: { ops: size.ops, branchOps: size.branchOps, trials: size.trials, seed: 20260821 },
+        supervisorRef.current = null;
+      },
+      onFailure: (message) => {
+        setError(message);
+        setPhase(null);
+        workerRef.current = null;
+        supervisorRef.current = null;
+      },
     });
+    supervisorRef.current = supervisor;
+
+    try {
+      worker.postMessage({
+        type: 'run',
+        options: { ops: size.ops, branchOps: size.branchOps, trials: size.trials, seed: 20260821 },
+      });
+    } catch (postError) {
+      supervisor.fail(postError instanceof Error ? postError.message : 'The benchmark could not start.');
+    }
   };
 
   const downloadReceipt = (): void => {

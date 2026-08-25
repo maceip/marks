@@ -55,6 +55,10 @@ The server has exactly two request authorities:
 | Session | HTTP-only cookie `__Host-marks_session=<sessionId>.<secret>` | A durable principal + device |
 | Scratch | `Authorization: MarksScratch <scratchId>.<capability>` | Temporary tab-scoped workspace capability |
 
+“Temporary” describes the caller capability, not the page: anonymous pages
+are public editors by opaque slug and become explicitly persisted after their
+seventh anonymous edit.
+
 There is **no** `MarksSession` header. JavaScript cannot read the session
 cookie. Session presence is discovered with `GET /v1/auth/session` and
 `credentials: "same-origin"`.
@@ -85,7 +89,7 @@ Implemented in `client/src/auth/caller.ts` as `ensureServiceCaller`,
 | Catalog, create, rename, duplicate, trash/restore, export, assets | `/v1/documents…` with cookie only | `/v1/documents…` with `MarksScratch` |
 | Snapshot | `GET /v1/documents/{id}/snapshot` | `GET /v1/scratch/documents/{id}/snapshot` |
 | Room ticket | `POST /v1/documents/{id}/session` | `POST /v1/scratch/documents/{id}/session` |
-| Shares and link grants | `/v1/documents/{id}/shares` and `/link` | Forbidden. Scratch cannot share. |
+| Shares and link grants | `/v1/documents/{id}/shares` and `/link` | The opaque document slug is already public-editor access. Scratch cannot manage named ACLs or narrower bearer grants. |
 | Comments and named versions | `/v1/documents/{id}/comments` and `/versions` | Forbidden. Review metadata is principal-owned. |
 | Pairing / EVT / pending device | Not these endpoints | Scratch header |
 
@@ -233,10 +237,10 @@ block authentication on the grant.
 
 ### 6.2 Pending device and promotion
 
-The durable-upgrade line the UI already owns:
+The login line the UI already owns:
 
-> This workspace is temporary. Scan with your phone to keep it and use it on
-> other devices.
+> This page is already saved and public. Log in with your phone to keep owner
+> access and use your account on other devices.
 
 #### `PUT /v1/auth/scratch/{scratchId}/device`
 
@@ -363,9 +367,15 @@ Document JSON uses **snake_case timestamps**. Auth JSON uses **camelCase
 ```json
 {
   "id": "document_…",
+  "slug": "document_…",
   "title": "Untitled",
   "engine": "esbt",
   "chars": 0,
+  "public": true,
+  "public_role": "editor",
+  "anonymous_edits": 7,
+  "persisted": true,
+  "persisted_at": 0,
   "created_at": 0,
   "updated_at": 0,
   "deleted_at": null,
@@ -394,6 +404,21 @@ Creation validates and publishes optional Markdown and its initial snapshot in
 one transaction; templates/imports must not create a visible blank row and
 fill it in with a second request.
 
+Every scratch-created document is assigned a collision-resistant opaque slug,
+stored by the service immediately, and marked `public: true` with the fixed
+public role `editor`. Opening `/d/{slug}` in another browser creates or reuses
+that browser's caller, mints a one-use ticket, and joins the same room without a
+sharing-settings step. The slug is intentionally a public collaboration
+capability: anyone who receives it may read and edit, but cannot rename, delete,
+manage ACLs, or grant owner.
+
+The room increments `anonymous_edits` only for committed public scratch text
+mutations, not presence or receipt traffic. When the committed count becomes
+seven, the same transaction sets `persisted_at` once. Losing or expiring the
+creating scratch capability therefore loses owner authority, not the public
+page or its committed Markdown. `persisted_at` is a retention milestone, while
+the room journal remains durable from the first accepted mutation.
+
 Delete is owner-only trash, not immediate reclamation. It closes the live
 room, revokes tickets, and hides the document from collaborators. Only the
 recovery owner sees `/v1/trash`; `purge_at` is 30 days after `deleted_at`.
@@ -418,6 +443,38 @@ The service bundle rewrites known `/a/…` links in one pass, verifies every
 content hash before sending headers, and streams through a bounded channel;
 `MARKS_MAX_BUNDLE_EXPORTS` bounds concurrent compression/I/O. Local mode emits
 the same version-1 portable manifest from IndexedDB.
+
+#### Document and URL import
+
+| Method | Path | Authority | Origin | Request / response |
+| --- | --- | --- | --- | --- |
+| `POST` | `/v1/import/file` | session or scratch | session only | Raw body + `X-Marks-Filename`; Markdown, PDF, DOC, DOCX, XLS, or XLSX → `{ "title", "markdown" }` |
+| `POST` | `/v1/import/url` | session or scratch | session only | `{ "url": "https://…" }` → `{ "title", "markdown", "sourceUrl" }` |
+
+File imports are capped at 12 MiB, matching the public edge. OOXML archives
+also have entry-count and expanded-byte limits. PDF import extracts embedded
+text (no OCR). Word import keeps document structure as Markdown. Excel import
+emits bounded pipe tables from displayed/cached cell values only; formulas,
+formula source, scripts, macros, charts, and drawings are not imported.
+
+The web UI intercepts PDF picker and drop imports before this route. It reads
+the bytes locally and runs the MIT-licensed `@firecrawl/anydoc-wasm` converter
+in a disposable module worker, so PDF bytes are not uploaded. The browser path
+shares the 12 MiB limit and has a hard 35-second deadline; timing out terminates
+the worker, including a synchronous Wasm conversion. The native route remains
+available to non-browser API clients and as a separately bounded service
+capability. Neither path performs OCR.
+
+Both routes authenticate, rate-limit, and reserve bounded capacity before body
+upload or outbound work. Capacity exhaustion is rejected immediately. One
+30-second deadline covers upload, DNS, cumulative redirects, body streaming,
+and conversion; PDF, Office, and HTML conversion run in a killable, reaped
+worker process with a bounded response channel.
+
+URL import accepts only public HTTP(S) destinations, revalidates and repins DNS
+on every redirect, refuses loopback/private/link-local destinations, caps both
+redirects and response bytes, and converts static HTML to Markdown after
+dropping active/embedded content. It does not run page JavaScript.
 
 ### 6.7 Snapshot and room ticket
 
@@ -450,9 +507,9 @@ the same version-1 portable manifest from IndexedDB.
 }
 ```
 
-Scratch tickets omit a principal role (`role` is `null`). Persist `siteId`
-per document so reconnects reuse the replica site. Two devices never share a
-site.
+The creating scratch owner receives `role: null`; a different scratch caller
+opening a public slug receives `role: "editor"`. Persist `siteId` per document
+so reconnects reuse the replica site. Two devices never share a site.
 
 Mint a fresh ticket immediately before every WebSocket open, including
 reconnect. Tickets last 30 seconds and are one-use.
@@ -472,7 +529,8 @@ the real invitations.
 | `POST` | `/v1/documents/{id}/link/redeem` | `{ "token" }` | `{ "role" }` |
 
 Shares cannot grant `owner`. Link redeem requires a live session. Scratch
-callers receive `401`/`404`, not a staged success.
+callers cannot manage ACLs or bearer-link roles; their plain opaque document
+slug already grants the fixed public editor role.
 
 ### 6.9 Comments and named versions (session principals)
 
@@ -596,20 +654,22 @@ fold, and ribbon presentations may change without duplicating their logic.
 
 1. **First paint (service):** run `ensureServiceCaller` before catalog or
    editor work. There is no registration form.
-2. **Honest scratch:** closing an unpromoted tab loses its authority. The
-   local CRDT journal does not turn that capability into an account.
+2. **Honest scratch:** every service-mode anonymous page has its own public
+   slug and is saved immediately. Closing an unpromoted tab can lose owner
+   authority, but it does not erase the page; after seven committed public
+   edits the server records the anonymous persistence milestone.
 3. **Upgrade:** bind the pending device, create a QR/four-word pairing, finish
    promotion, clear scratch state, and reconnect under the session caller.
-4. **Single-device keep:** on phone posture, lead with “Keep on this phone”
-   (`selfBootstrap`) because there is no second screen to scan; keep the
-   pairing QR one tap away. On larger postures the QR leads and the
-   single-device keep is the quiet fallback. Say plainly that one device
-   means one key, and that keeping here never merges with an account that
-   lives elsewhere.
+4. **Mobile login:** on phone posture, lead with opening the same public page
+   on a laptop and using the phone-link login flow. Put `selfBootstrap` behind
+   a secondary disclosure labelled as phone-only login. On larger postures the
+   QR leads and single-device login stays the quiet fallback. Say plainly that
+   one device means one key and never silently merges with an account elsewhere.
 5. **Return visit:** probe the cookie, attempt silent device redeem, and only
    then mint scratch.
-6. **Sharing:** local mode is explicit staging; service mode calls §6.8 and
-   never claims success on `401`/`404`.
+6. **Sharing:** a scratch-created service page is public-editor by slug with no
+   settings change. Named ACLs and narrower bearer roles remain owner/session
+   operations in §6.8; local mode is explicit staging.
 7. **Reconnect/durability:** mint a new ticket, reuse the journaled `siteId`,
    send the stable pending mutation IDs, and keep “saving” visible until their
    commit receipts are checkpointed.
@@ -618,9 +678,12 @@ fold, and ribbon presentations may change without duplicating their logic.
 9. **Review:** role capabilities control comment/version actions. Creating and
    restoring a version crosses `whenDurable()`; it never edits history in
    place.
-10. **Import/assets/export:** Markdown import is one populated create; paste,
-    drop, and picker images use stable editor ranges; portable export includes
-    only referenced known assets.
+10. **Import/assets/export:** Import is the first ribbon tab on every posture.
+    Its templates are Notes app, Meeting, and GitHub README; file/drop import
+    converts Markdown, PDF, Word, and table-only Excel; protected URL import
+    converts static public HTML. Every import becomes one populated create.
+    Paste, drop, and picker images use stable editor ranges; portable export
+    includes only referenced known assets.
 11. **Errors:** map §3.4 to product copy; never dump record-sensitive protocol
     detail, credentials, or raw service bodies into a toast.
 
@@ -646,11 +709,13 @@ matrix in [`TEST-HARNESS.md`](TEST-HARNESS.md), not this table.
 | Scratch mint + storage | Yes | Yes (`scratch.ts`, `caller.ts`) |
 | Session probe prefers cookie | Yes (cookie wins) | Yes (`ensureServiceCaller`) |
 | Catalog / atomic create / duplicate / export | Yes | Yes (`api.ts`, `documents.ts`) |
+| Public anonymous slug + seventh-edit persistence | Yes | Yes (automatic `/` create, direct `/d/{slug}` room admission) |
+| PDF / Word / table-only Excel / URL import | Yes (`routes/imports.rs`) | Yes (Import ribbon, picker, URL dialog, document drop) |
 | Trash / restore / retained purge | Yes | Yes, local and service repositories |
 | Snapshot + ticket mint | Yes, both prefixes | Yes (`room-access.ts`) |
 | Pending device bind | Yes | Yes (`pending-device.ts`, first paint in service mode) |
-| QR pairing + finalize | Yes | Yes (`identity.ts`, Keep workspace); local mode does not mint |
-| Single-device keep (phone-only signup) | Yes (`/scratch/{id}/bootstrap`) | Yes (`selfBootstrap`, Keep workspace phone posture) |
+| QR pairing + finalize | Yes | Yes (`identity.ts`, Log In); local mode does not mint |
+| Single-device login (phone-only fallback) | Yes (`/scratch/{id}/bootstrap`) | Yes (`selfBootstrap`, disclosed below the laptop-first phone prompt) |
 | DBSC hardware session binding | Yes (register/refresh, quiet fallback) | Browser-managed; UI surfaces `deviceBound` only |
 | Durable storage request | n/a | Yes (`durable-storage.ts` on promotion + redeem) |
 | Four-word pairing | Yes (`/lookup`) | Yes (Keep + `/link`) |

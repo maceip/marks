@@ -18,6 +18,7 @@
     "@codemirror/search": "^6.5.11",
     "@codemirror/state": "^6.7.1",
     "@codemirror/view": "^6.43.9",
+    "@firecrawl/anydoc-wasm": "0.2.3",
     "@lezer/highlight": "^1.2.1",
     "@vscode/markdown-it-katex": "^1.1.2",
     "dompurify": "^3.4.14",

@@ -49,7 +49,8 @@ Marks is a quiet writing surface with a powerful command layer. The normative vi
 
 | Surface | Entry | Loading rule | Owner |
 | --- | --- | --- | --- |
-| Workspace home | `/` | App shell, local catalog, and home CSS only | `App` + `pages/Home` |
+| Anonymous entry | `/` | In service mode, atomically create a unique public document preloaded with the editable marketing Markdown, then replace the URL with its `/d/document_*` slug | `App` + `content/marketing-markdown.ts` |
+| Local workspace home | `/` | In local/demo mode, app shell, local catalog, and home CSS only | `App` + `pages/Home` |
 | Document | `/d/:id` | Session, CodeMirror, workspace, preview, and review overlays load on demand | `App` + `TopBar` + `components/workspace` |
 | Benchmark | `/bench` | Benchmark view, CSS, and worker load only on this route | `pages/Benchmark` |
 | Design system | `/design-system` | Internal catalog and CSS load only on direct navigation; never linked in production navigation | `design-system/DesignSystem` |
@@ -58,18 +59,28 @@ Marks is a quiet writing surface with a powerful command layer. The normative vi
 The welcome URL exists so a public deployment can keep a stable marketing
 address. The page people read is a Marks document: source, preview, ribbon,
 and the same Markdown that describes the product, accounts, and machinery.
+An unauthenticated visit to the deployed root does not reuse that fixed
+built-in document. It clones the same Markdown into an ordinary public page
+with a unique slug. Phones open the clone in rendered Preview; laptops open
+the source and rendering side by side. Either posture can switch to Editor,
+replace all of the introduction, share the current URL, or trash the page
+using the normal document controls.
 
-Identity chrome is presentation-complete in local mode on desktop, phone, and
-fold: Temporary chip, Keep workspace with an on-brand QR of `/link`, phone
-confirmation, Account devices/controllers/sessions, Share principal and link
-grants, mapped service-error toasts, and reconnect copy. Keep workspace is
-posture-aware: on the phone shell — where there is no second screen to scan —
-“Keep on this phone” leads and the pairing QR sits one tap behind it; on
-larger shells the QR leads and “Keep on this device only” is the quiet
-fallback. In service mode the same surfaces mint a real pairing, show the QR
-and four-word code, finalize the desktop tab, run the single-device
-self-bootstrap, and redeem a silent device session. The HTTP contract lives
-in [`UI-SERVICE-CONTRACT.md`](UI-SERVICE-CONTRACT.md).
+Identity chrome uses the familiar Log In, Log Out, and Account labels on
+desktop, phone, and foldable shells. Log In is posture-aware: larger shells
+open the QR flow, while the phone shell tells the visitor to open the same
+public page on a laptop and scan that laptop's QR code. Phone-only registration
+is not advertised or rendered. In service mode the same surfaces mint the
+short-lived login request, show the QR and four-word code, finish the desktop
+login, and restore an approved device login on return visits. The HTTP contract lives in
+[`UI-SERVICE-CONTRACT.md`](UI-SERVICE-CONTRACT.md).
+
+Start from template is the initial ribbon tab on desktop, phone, and foldable
+shells. Its first-class entries are Notes, Meeting, GitHub README, Import
+web page, and From file. On anonymous clients, Log In is the second top-level
+ribbon control and opens the posture-aware flow above. Dropping a PDF, DOC,
+DOCX, XLS, XLSX, or Markdown file anywhere on the app invokes the same import
+path; image drops continue to belong to the editor.
 
 ## Replaceable data plumbing
 

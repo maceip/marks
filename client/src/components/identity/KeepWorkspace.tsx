@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { getActiveCaller } from '../../auth/caller';
+import { pollPairingUntilSettled } from '../../auth/pairing-poll.ts';
 import { bindPendingDevice } from '../../auth/pending-device';
+import { runWithTimeout, SERVICE_REQUEST_TIMEOUT_MS } from '../../browser/network.ts';
 import {
   finalizePairing,
   mintPairing,
@@ -16,7 +18,6 @@ import {
   SELF_KEEP_DEVICE_LINE,
   SELF_KEEP_HONEST_LINE,
   SELF_KEEP_LOCAL_LINE,
-  SELF_KEEP_OTHER_DEVICE_LINE,
   SELF_KEEP_PHONE_LINE,
 } from '../../lib/identity-copy';
 import { pairingLandingPath } from '../../lib/pairing-link';
@@ -27,7 +28,6 @@ import { QrMark } from './QrMark';
 
 interface KeepWorkspaceProps {
   onNotify: (title: string, detail?: string, tone?: 'neutral' | 'success' | 'danger') => void;
-  onOpenPhone?: () => void;
   onPromoted?: () => void;
   /** Phone posture: this device has no second screen to scan from. */
   phone?: boolean;
@@ -39,18 +39,18 @@ function copyForFailure(error: unknown) {
   return copyForHttpStatus(status ? Number(status[1]) : 500);
 }
 
-export function KeepWorkspace({ onNotify, onOpenPhone, onPromoted, phone = false }: KeepWorkspaceProps) {
+export function KeepWorkspace({ onNotify, onPromoted, phone = false }: KeepWorkspaceProps) {
   const service = UI_DATA_MODE === 'service';
-  // Reopening the dialog on an already-promoted tab shows the kept state
-  // instead of a keep button that can only fail closed.
+  // Reopening the dialog on an already-promoted tab shows the logged-in state
+  // instead of an action that can only fail closed.
   const [alreadyKept] = useState(() => service && getActiveCaller()?.kind === 'session');
   const [ticket, setTicket] = useState<PairingTicket | null>(null);
   const [status, setStatus] = useState<'idle' | 'minting' | 'waiting' | 'kept' | 'failed'>(
     alreadyKept ? 'kept' : 'idle',
   );
   const [keeping, setKeeping] = useState(false);
-  // On a phone there is nothing to scan this QR with; the pairing rail stays
-  // one tap away instead of being the only door.
+  // A phone cannot scan a QR shown on itself. Phone login therefore stays
+  // laptop-first; the single-device bootstrap has no mobile UI entry point.
   const [pairingOpen, setPairingOpen] = useState(!phone && !alreadyKept);
   const onNotifyRef = useRef(onNotify);
   const onPromotedRef = useRef(onPromoted);
@@ -60,39 +60,45 @@ export function KeepWorkspace({ onNotify, onOpenPhone, onPromoted, phone = false
   useEffect(() => {
     if (!service || !pairingOpen || alreadyKept) return;
     let cancelled = false;
-    let poll: number | undefined;
+    const controller = new AbortController();
     void (async () => {
       setStatus('minting');
       try {
-        await bindPendingDevice();
-        const minted = await mintPairing();
+        await runWithTimeout(
+          (signal) => bindPendingDevice(signal),
+          SERVICE_REQUEST_TIMEOUT_MS,
+          controller.signal,
+        );
+        const minted = await runWithTimeout(
+          (signal) => mintPairing(signal),
+          SERVICE_REQUEST_TIMEOUT_MS,
+          controller.signal,
+        );
         if (cancelled) return;
         setTicket(minted);
         setStatus('waiting');
-        poll = window.setInterval(() => {
-          void finalizePairing(minted.pairingId).then((result) => {
-            if (cancelled || result === 'pending') return;
-            if (result === 'gone') {
-              setStatus('failed');
-              if (poll) window.clearInterval(poll);
-              return;
-            }
-            setStatus('kept');
-            if (poll) window.clearInterval(poll);
-            onNotifyRef.current('Workspace kept', 'This tab can now see and save your documents on other devices.', 'success');
-            onPromotedRef.current?.();
-          });
-        }, 1500);
-      } catch {
-        if (!cancelled) {
+        const result = await pollPairingUntilSettled({
+          expiresAtMs: minted.expiresAtMs,
+          signal: controller.signal,
+          finalize: (signal) => finalizePairing(minted.pairingId, signal),
+        });
+        if (cancelled) return;
+        if (result === 'gone') {
           setStatus('failed');
-          onNotifyRef.current(SERVICE_ERROR_COPY[401].title, SERVICE_ERROR_COPY[401].detail, SERVICE_ERROR_COPY[401].tone);
+          return;
         }
+        setStatus('kept');
+        onNotifyRef.current('Logged In', 'Your account is now available on this browser.', 'success');
+        onPromotedRef.current?.();
+      } catch {
+        if (cancelled || controller.signal.aborted) return;
+        setStatus('failed');
+        onNotifyRef.current(SERVICE_ERROR_COPY[401].title, SERVICE_ERROR_COPY[401].detail, SERVICE_ERROR_COPY[401].tone);
       }
     })();
     return () => {
       cancelled = true;
-      if (poll) window.clearInterval(poll);
+      controller.abort(new DOMException('Login dialog closed.', 'AbortError'));
     };
   }, [service, pairingOpen, alreadyKept]);
 
@@ -103,14 +109,17 @@ export function KeepWorkspace({ onNotify, onOpenPhone, onPromoted, phone = false
     }
     setKeeping(true);
     try {
-      await selfBootstrap();
+      await runWithTimeout(
+        (signal) => selfBootstrap(signal),
+        SERVICE_REQUEST_TIMEOUT_MS,
+      );
       setPairingOpen(false);
       setStatus('kept');
       onNotify(
-        'Workspace kept',
+        'Logged In',
         phone
-          ? 'This phone now holds the account key. Open Keep workspace on another device to link it.'
-          : 'This device now holds the account key. Open Keep workspace on another device to link it.',
+          ? 'Your account is now available on this phone.'
+          : 'Your account is now available on this browser.',
         'success',
       );
       onPromotedRef.current?.();
@@ -122,7 +131,7 @@ export function KeepWorkspace({ onNotify, onOpenPhone, onPromoted, phone = false
     }
   };
 
-  const kept = status === 'kept';
+  const loggedIn = status === 'kept';
   const landing = ticket ? pairingUrlFromTicket(ticket) : pairingLandingPath(location.origin);
 
   const copyValue = async (value: string, title: string, detail: string) => {
@@ -137,57 +146,65 @@ export function KeepWorkspace({ onNotify, onOpenPhone, onPromoted, phone = false
   return (
     <div className="identity-dialog">
       <p className="identity-lede">
-        {kept
-          ? 'This workspace is kept. Documents follow your account key and open on every device you link.'
+        {loggedIn
+          ? 'You are logged in. Account documents open on every device you link.'
           : phone
             ? SELF_KEEP_PHONE_LINE
             : SCRATCH_UPGRADE_LINE}
       </p>
-      {!kept && <p className="identity-note">{SCRATCH_HONEST_LINE}</p>}
+      {!loggedIn && <p className="identity-note">{SCRATCH_HONEST_LINE}</p>}
 
-      {phone && !kept && (
-        <div className="keep-solo">
-          <button type="button" className="button primary" disabled={keeping} onClick={() => void keepHere()}>
-            <Icon path={icons.check} /> Keep on this phone
+      {phone && !loggedIn && (
+        <div className="mobile-login-path">
+          <div className="keep-stage laptop-login-stage">
+            <Icon path={icons.document} size={36} />
+            <div>
+              <strong>Open this page on a laptop</strong>
+              <small>The page URL is already public. On the laptop, choose Log In and use the phone-link flow to join your account.</small>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="button primary"
+            onClick={() => void copyValue(
+              `${location.origin}${location.pathname}${location.search}`,
+              'Laptop link copied',
+              'Paste it into a browser on your laptop, then choose Log In.',
+            )}
+          >
+            <Icon path={icons.link} /> Copy page link for laptop
           </button>
-          <small>{SELF_KEEP_HONEST_LINE}</small>
-          <small>{SELF_KEEP_OTHER_DEVICE_LINE}</small>
-          {!pairingOpen && (
-            <button type="button" className="button" onClick={() => setPairingOpen(true)}>
-              <Icon path={icons.link} /> Link another device instead
-            </button>
-          )}
         </div>
       )}
 
-      {kept && (
+      {loggedIn && (
         <div className="keep-stage">
           <div>
-            <strong>This workspace is kept</strong>
-            <small>Documents follow the account key on this device. Link more devices from Keep workspace on those devices.</small>
+            <strong>You are logged in</strong>
+            <small>Your account pages are available on this browser.</small>
           </div>
         </div>
       )}
 
-      {!kept && pairingOpen && (
+      {!loggedIn && pairingOpen && (
         <>
           <div className="keep-stage">
-            <QrMark value={landing} label="QR for the Marks pairing ticket" />
+            <QrMark value={landing} label="QR code for Marks login" />
             <div>
-              <strong>Phone controller</strong>
+              <strong>Scan with your phone</strong>
               <small>
                 {service
-                  ? 'Scan the QR, or type the four words on a phone that cannot scan. The secret stays out of toasts.'
-                  : 'This build shows the landing path. The service puts only the pairing URL in this QR.'}
+                  ? 'Scan the QR code, or enter the four-word login code if the phone cannot scan it.'
+                  : 'This build shows where a connected service puts its secure login link.'}
               </small>
             </div>
           </div>
 
           {ticket && (
             <div className="pairing-words" aria-live="polite">
-              <strong>Four words</strong>
+              <strong>Login code</strong>
               <p className="pairing-words-phrase">{ticket.words}</p>
-              <small>For a phone, terminal, or other low-fidelity client that cannot scan.</small>
+              <small>Enter these words on the phone if you cannot scan the QR code.</small>
             </div>
           )}
 
@@ -205,12 +222,12 @@ export function KeepWorkspace({ onNotify, onOpenPhone, onPromoted, phone = false
           {service && status === 'waiting' && (
             <p className="identity-note">
               {phone
-                ? 'Waiting for the device that already holds your account to confirm. This tab finalizes itself.'
-                : 'Waiting for the phone to confirm. This tab finalizes itself.'}
+                ? 'Waiting for your account to be confirmed.'
+                : 'Waiting for your phone to approve the login.'}
             </p>
           )}
           {service && status === 'failed' && (
-            <p className="identity-note">The pairing expired or failed. Open Keep workspace again for a fresh code.</p>
+            <p className="identity-note">The login code expired or failed. Open Log In again for a fresh code.</p>
           )}
 
           <div className="dialog-actions">
@@ -220,42 +237,38 @@ export function KeepWorkspace({ onNotify, onOpenPhone, onPromoted, phone = false
               onClick={() =>
                 void copyValue(
                   ticket?.url ?? landing,
-                  ticket ? 'Secure link copied' : 'Pairing path copied',
+                  ticket ? 'Login link copied' : 'Login page copied',
                   ticket
-                    ? 'Open this on the phone. The secret is in the fragment.'
-                    : 'This is /link. It is not a pairing ticket until the service mints one.',
+                    ? 'Open this secure link on your phone.'
+                    : 'Open this page on your phone.',
                 )
               }
             >
-              <Icon path={icons.link} /> {ticket ? 'Copy secure link' : 'Copy /link'}
+              <Icon path={icons.link} /> {ticket ? 'Copy login link' : 'Copy login page'}
             </button>
             {ticket && (
               <button
                 type="button"
                 className="button"
-                onClick={() => void copyValue(ticket.words, 'Four words copied', 'Type these on the phone confirmation page.')}
+                onClick={() => void copyValue(ticket.words, 'Login code copied', 'Enter these words on your phone.')}
               >
-                Copy words
-              </button>
-            )}
-            {onOpenPhone && (
-              <button type="button" className="button" onClick={onOpenPhone}>
-                Open phone confirmation
+                Copy login code
               </button>
             )}
           </div>
         </>
       )}
 
-      {!phone && !kept && (
-        <div className="keep-solo">
+      {!phone && !loggedIn && (
+        <details className="keep-solo keep-solo-disclosure">
+          <summary>Cannot use your phone?</summary>
           <small>
             {SELF_KEEP_DEVICE_LINE} {SELF_KEEP_HONEST_LINE}
           </small>
           <button type="button" className="button" disabled={keeping} onClick={() => void keepHere()}>
-            Keep on this device only
+            Log In on This Browser Only
           </button>
-        </div>
+        </details>
       )}
     </div>
   );

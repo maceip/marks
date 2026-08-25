@@ -15,8 +15,10 @@ use axum::response::{IntoResponse, Response};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use futures_util::{SinkExt, StreamExt};
 use marks_auth::{
-    DocumentId, ESBT_SUBPROTOCOL, RoomActor, RoomIdentity, TICKET_SUBPROTOCOL_PREFIX,
-    parse_ticket_subprotocol, redeem_document_ticket, redeem_scratch_document_ticket,
+    DocumentId, DocumentOwner, ESBT_SUBPROTOCOL, RoomActor, RoomIdentity,
+    TICKET_SUBPROTOCOL_PREFIX, parse_ticket_subprotocol, redeem_document_ticket,
+    redeem_public_document_ticket, redeem_public_scratch_document_ticket,
+    redeem_scratch_document_ticket, require_scratch_document,
 };
 use rusqlite::params;
 use sha2::{Digest, Sha256};
@@ -24,6 +26,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+
+const SOCKET_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub async fn collab_esbt(
     State(app): State<Arc<App>>,
@@ -93,14 +98,26 @@ fn admit(
         let actor = match &ticket {
             store::StoredTicket::Principal(stored) => {
                 let cookie = cookie.as_ref().ok_or_else(ApiError::unauthenticated)?;
-                let actor = redeem_document_ticket(
-                    &stored.record,
-                    &ticket_secret,
-                    &cookie.session,
-                    &document.record,
-                    &stored.record.esbt_site,
-                    now,
-                )
+                let actor = if matches!(document.record.owner, DocumentOwner::Scratch(_)) {
+                    redeem_public_document_ticket(
+                        &stored.record,
+                        &ticket_secret,
+                        &cookie.session,
+                        &document.record,
+                        document.public_edit,
+                        &stored.record.esbt_site,
+                        now,
+                    )
+                } else {
+                    redeem_document_ticket(
+                        &stored.record,
+                        &ticket_secret,
+                        &cookie.session,
+                        &document.record,
+                        &stored.record.esbt_site,
+                        now,
+                    )
+                }
                 .map_err(|_| ApiError::unauthenticated())?;
                 let identity = principal_identity(actor.principal_id.as_str());
                 RoomActor::Principal(marks_auth::Actor { identity, ..actor })
@@ -108,14 +125,31 @@ fn admit(
             store::StoredTicket::Scratch(stored) => {
                 let scratch = store::load_scratch(conn, &stored.record.scratch_id)?
                     .ok_or_else(ApiError::unauthenticated)?;
-                let actor = redeem_scratch_document_ticket(
-                    &stored.record,
-                    &ticket_secret,
-                    &scratch,
+                let actor = if require_scratch_document(
                     &document.record,
-                    &stored.record.esbt_site,
-                    now,
+                    &stored.record.scratch_id,
                 )
+                .is_ok()
+                {
+                    redeem_scratch_document_ticket(
+                        &stored.record,
+                        &ticket_secret,
+                        &scratch,
+                        &document.record,
+                        &stored.record.esbt_site,
+                        now,
+                    )
+                } else {
+                    redeem_public_scratch_document_ticket(
+                        &stored.record,
+                        &ticket_secret,
+                        &scratch,
+                        &document.record,
+                        document.public_edit,
+                        &stored.record.esbt_site,
+                        now,
+                    )
+                }
                 .map_err(|_| ApiError::unauthenticated())?;
                 let identity = scratch_identity(document_id.as_str(), actor.scratch_id.as_str());
                 RoomActor::Scratch(marks_auth::ScratchActor { identity, ..actor })
@@ -200,7 +234,7 @@ async fn socket_loop(
 
     let joined = match app
         .rooms
-        .join(&document_id, actor, client_version, out_tx)
+        .join(&document_id, actor, client_version, out_tx.clone())
         .await
     {
         Ok(joined) => joined,
@@ -259,15 +293,12 @@ async fn socket_loop(
             };
         match message {
             Ok(Message::Binary(data)) => {
-                if joined
-                    .tx
-                    .send(RoomMsg::Frame {
-                        conn: joined.conn,
-                        data: data.to_vec(),
-                    })
-                    .await
-                    .is_err()
-                {
+                if let Err(refusal) = handoff_frame(&joined.tx, joined.conn, data.to_vec()) {
+                    let code = match refusal {
+                        JoinRefusal::Capacity => CLOSE_CAPACITY,
+                        _ => super::CLOSE_INTERNAL,
+                    };
+                    let _ = out_tx.try_send(OutMsg::Close(code));
                     break;
                 }
             }
@@ -279,10 +310,27 @@ async fn socket_loop(
         }
     }
 
-    // Leaving drops the room's sender; the writer drains and exits, so any
-    // in-flight close frame still reaches the peer.
-    let _ = joined.tx.send(RoomMsg::Leave { conn: joined.conn }).await;
-    let _ = writer.await;
+    // Leaving is acknowledged through the same bounded room queue. If the
+    // owner is saturated or wedged, the manager evicts that room fail-closed.
+    // Dropping our final outbound sender then lets the writer drain; a second
+    // deadline ensures even a stuck transport cannot retain this socket task.
+    app.rooms.leave(&document_id, &joined).await;
+    drop(out_tx);
+    finish_writer(writer, SOCKET_SHUTDOWN_TIMEOUT).await;
+}
+
+fn handoff_frame(tx: &mpsc::Sender<RoomMsg>, conn: u64, data: Vec<u8>) -> Result<(), JoinRefusal> {
+    tx.try_send(RoomMsg::Frame { conn, data })
+        .map_err(|error| match error {
+            mpsc::error::TrySendError::Full(_) => JoinRefusal::Capacity,
+            mpsc::error::TrySendError::Closed(_) => JoinRefusal::Internal,
+        })
+}
+
+async fn finish_writer(mut writer: JoinHandle<()>, deadline: Duration) {
+    if tokio::time::timeout(deadline, &mut writer).await.is_err() {
+        writer.abort();
+    }
 }
 
 /// The retired Loro/Yjs room paths must be refused at the socket, not left to
@@ -311,5 +359,37 @@ mod identity_tests {
         assert_ne!(first.participant_id, second.participant_id);
         assert!(!first.participant_id.contains("raw-device-secret"));
         assert!(first.display_name.starts_with("Anonymous "));
+    }
+
+    #[test]
+    fn saturated_room_handoff_is_rejected_without_waiting() {
+        let (tx, mut rx) = mpsc::channel(1);
+        tx.try_send(RoomMsg::Frame {
+            conn: 1,
+            data: vec![1],
+        })
+        .unwrap();
+
+        assert_eq!(handoff_frame(&tx, 2, vec![2]), Err(JoinRefusal::Capacity));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(RoomMsg::Frame {
+                conn: 1,
+                data
+            }) if data == vec![1]
+        ));
+    }
+
+    #[tokio::test]
+    async fn wedged_writer_is_aborted_at_the_shutdown_deadline() {
+        let deadline = Duration::from_millis(20);
+        let started = tokio::time::Instant::now();
+        let writer = tokio::spawn(std::future::pending::<()>());
+
+        tokio::time::timeout(Duration::from_secs(1), finish_writer(writer, deadline))
+            .await
+            .expect("a wedged writer must not retain the socket task");
+
+        assert!(tokio::time::Instant::now() - started >= deadline);
     }
 }

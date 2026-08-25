@@ -1,8 +1,21 @@
+import { runWithTimeout } from '../browser/network.ts';
+
 type MermaidApi = typeof import('mermaid').default;
+
+const MAX_DIAGRAM_BYTES = 4_096;
+const MAX_DIAGRAM_LINES = 80;
+const MAX_DIAGRAM_TOKENS = 320;
+const MAX_DIAGRAM_STRUCTURE = 160;
+const MAX_DIAGRAMS_PER_BATCH = 8;
+const MAX_CACHED_DIAGRAMS = 32;
+const MERMAID_LOAD_TIMEOUT_MS = 15_000;
+const MERMAID_RENDER_TIMEOUT_MS = 8_000;
 
 let mermaidPromise: Promise<MermaidApi> | null = null;
 let currentTheme: 'light' | 'dark' = 'light';
 let counter = 0;
+let renderQueue: Promise<void> = Promise.resolve();
+let renderCircuitError: string | null = null;
 
 /** Rendered SVG by diagram source, so re-mounting a block never re-runs mermaid. */
 const svgCache = new Map<string, string>();
@@ -11,18 +24,28 @@ async function getMermaid(): Promise<MermaidApi> {
   if (!mermaidPromise) {
     // Mermaid is by far the heaviest renderer we ship; it stays out of the
     // initial bundle and only loads for documents that actually contain a diagram.
-    mermaidPromise = import('mermaid').then(({ default: mermaid }) => {
-      mermaid.initialize({
-        startOnLoad: false,
-        securityLevel: 'strict',
-        theme: currentTheme === 'dark' ? 'dark' : 'default',
-        // Mermaid measures label text to size each node, so it needs a
-        // concrete font stack: `inherit` leaves it measuring against the wrong
-        // metrics and the labels end up clipped.
-        fontFamily:
-          '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-      });
-      return mermaid;
+    mermaidPromise = runWithTimeout(
+      () => import('mermaid').then(({ default: mermaid }) => {
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: 'strict',
+          maxTextSize: MAX_DIAGRAM_BYTES,
+          maxEdges: 64,
+          theme: currentTheme === 'dark' ? 'dark' : 'default',
+          // Mermaid measures label text to size each node, so it needs a
+          // concrete font stack: `inherit` leaves it measuring against the wrong
+          // metrics and the labels end up clipped.
+          fontFamily:
+            '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+        });
+        return mermaid;
+      }),
+      MERMAID_LOAD_TIMEOUT_MS,
+      null,
+      new DOMException('Diagram renderer took too long to load.', 'TimeoutError'),
+    ).catch((error) => {
+      mermaidPromise = null;
+      throw error;
     });
   }
   return mermaidPromise;
@@ -38,7 +61,7 @@ export function setMermaidTheme(theme: 'light' | 'dark'): void {
 /** Render every pending diagram inside `root`. */
 export async function renderDiagrams(root: ParentNode): Promise<void> {
   const pending = root.querySelectorAll<HTMLElement>('.marks-mermaid[data-mermaid="pending"]');
-  await renderHosts(Array.from(pending));
+  await enqueueRenderHosts(Array.from(pending));
 }
 
 /**
@@ -62,7 +85,7 @@ export function watchDiagrams(root: HTMLElement): () => void {
         observer.unobserve(entry.target);
         visible.push(entry.target as HTMLElement);
       }
-      if (visible.length > 0) void renderHosts(visible);
+      if (visible.length > 0) void enqueueRenderHosts(visible);
     },
     { rootMargin: '240px 0px', threshold: 0.01 },
   );
@@ -82,39 +105,120 @@ export function watchDiagrams(root: HTMLElement): () => void {
   };
 }
 
+function enqueueRenderHosts(hosts: HTMLElement[]): Promise<void> {
+  const next = renderQueue.then(() => renderHosts(hosts));
+  renderQueue = next.catch(() => undefined);
+  return next;
+}
+
 async function renderHosts(hosts: HTMLElement[]): Promise<void> {
   const pending = hosts.filter((host) => host.dataset.mermaid === 'pending');
   if (pending.length === 0) return;
 
-  const mermaid = await getMermaid();
+  const eligible: Array<{ host: HTMLElement; output: HTMLElement; source: string }> = [];
+  for (const host of pending) {
+    const source = host.querySelector('.marks-mermaid-src')?.textContent ?? '';
+    const output = host.querySelector<HTMLElement>('.marks-mermaid-out');
+    if (!output || !source.trim()) continue;
+    const invalid = validateMermaidSource(source);
+    if (invalid) {
+      showDiagramError(host, output, invalid);
+    } else if (eligible.length >= MAX_DIAGRAMS_PER_BATCH) {
+      showDiagramError(host, output, 'Too many diagrams became visible at once. Edit the page to retry.');
+    } else {
+      eligible.push({ host, output, source });
+    }
+  }
+  if (eligible.length === 0) return;
 
-  await Promise.all(
-    pending.map(async (host) => {
-      const source = host.querySelector('.marks-mermaid-src')?.textContent ?? '';
-      const output = host.querySelector<HTMLElement>('.marks-mermaid-out');
-      if (!output || !source.trim()) return;
-
+  if (renderCircuitError) {
+    for (const { host, output, source } of eligible) {
       const cached = svgCache.get(source);
       if (cached) {
         output.innerHTML = cached;
         host.dataset.mermaid = 'done';
+      } else {
+        showDiagramError(host, output, renderCircuitError);
+      }
+    }
+    return;
+  }
+
+  let mermaid: MermaidApi;
+  try {
+    mermaid = await getMermaid();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Diagram renderer failed to load';
+    for (const { host, output } of eligible) showDiagramError(host, output, message);
+    return;
+  }
+
+  // Mermaid owns shared DOM/config state. Serialize bounded diagrams so one
+  // public page cannot fan out synchronous graph layout on the main thread.
+  for (let index = 0; index < eligible.length; index += 1) {
+    const { host, output, source } = eligible[index];
+    const cached = svgCache.get(source);
+    if (cached) {
+      output.innerHTML = cached;
+      host.dataset.mermaid = 'done';
+      continue;
+    }
+    try {
+      counter += 1;
+      const { svg } = await runWithTimeout(
+        () => mermaid.render(`marks-diagram-${counter}`, source),
+        MERMAID_RENDER_TIMEOUT_MS,
+        null,
+        new DOMException('Diagram rendering took too long.', 'TimeoutError'),
+      );
+      if (svgCache.size >= MAX_CACHED_DIAGRAMS) {
+        const oldest = svgCache.keys().next().value;
+        if (oldest !== undefined) svgCache.delete(oldest);
+      }
+      svgCache.set(source, svg);
+      output.innerHTML = svg;
+      host.dataset.mermaid = 'done';
+    } catch (error) {
+      if (isMermaidRenderTimeout(error)) {
+        renderCircuitError =
+          'Diagram rendering timed out. Reload this page before trying diagrams again.';
+        for (const remaining of eligible.slice(index)) {
+          showDiagramError(remaining.host, remaining.output, renderCircuitError);
+        }
         return;
       }
+      showDiagramError(
+        host,
+        output,
+        error instanceof Error ? error.message : 'Diagram failed to render',
+      );
+    }
+  }
+}
 
-      try {
-        counter += 1;
-        const { svg } = await mermaid.render(`marks-diagram-${counter}`, source);
-        svgCache.set(source, svg);
-        output.innerHTML = svg;
-        host.dataset.mermaid = 'done';
-      } catch (error) {
-        host.dataset.mermaid = 'error';
-        output.innerHTML = `<pre class="marks-diagram-error">${
-          error instanceof Error ? escapeText(error.message) : 'Diagram failed to render'
-        }</pre>`;
-      }
-    }),
-  );
+export function isMermaidRenderTimeout(error: unknown): boolean {
+  return error instanceof Error && error.name === 'TimeoutError';
+}
+
+export function validateMermaidSource(source: string): string | null {
+  if (new TextEncoder().encode(source).byteLength > MAX_DIAGRAM_BYTES) {
+    return 'Diagram source is larger than the safe rendering limit.';
+  }
+  if (source.split(/\r?\n/u).length > MAX_DIAGRAM_LINES) {
+    return 'Diagram has too many lines to render safely.';
+  }
+  if ((source.match(/\S+/gu) ?? []).length > MAX_DIAGRAM_TOKENS) {
+    return 'Diagram has too many tokens to render safely.';
+  }
+  if ((source.match(/-->|---|==>|-\.->|->|<-|[,;\[\]{}()]/gu) ?? []).length > MAX_DIAGRAM_STRUCTURE) {
+    return 'Diagram graph is too complex to render safely.';
+  }
+  return null;
+}
+
+function showDiagramError(host: HTMLElement, output: HTMLElement, message: string): void {
+  host.dataset.mermaid = 'error';
+  output.innerHTML = `<pre class="marks-diagram-error">${escapeText(message)}</pre>`;
 }
 
 function escapeText(value: string): string {

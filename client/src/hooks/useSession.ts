@@ -8,12 +8,14 @@ import type {
 } from '../collab/types';
 import { isAboutDocument } from '../content/about';
 import { UI_DATA_MODE } from '../lib/product';
+import { openSessionWithTimeout } from './session-opening.ts';
 
 export interface SessionState {
   session: CollabSession | null;
   status: ConnectionStatus;
   peers: Peer[];
   hydrated: boolean;
+  error: string | null;
 }
 
 /**
@@ -32,6 +34,7 @@ export function useSession(
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
   const [peers, setPeers] = useState<Peer[]>([]);
   const [hydrated, setHydrated] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Identity changes should not tear down a live session.
   const identity = useMemo(() => user, [user.name, user.colorIndex, user.id]);
@@ -41,6 +44,7 @@ export function useSession(
       setSession(null);
       setHydrated(false);
       setPeers([]);
+      setError(null);
       return;
     }
 
@@ -53,38 +57,42 @@ export function useSession(
       setStatus('connecting');
       setHydrated(false);
       setPeers([]);
+      setError(null);
       return;
     }
 
     let active = true;
     let next: CollabSession | null = null;
     let unsubscribe: Array<() => void> = [];
+    const opening = new AbortController();
     setStatus('connecting');
     setPeers([]);
     setHydrated(false);
+    setError(null);
 
     // The documents shell should not pay for CodeMirror, the CRDT, or their
     // bindings. Load the editing engine only when a document is ready to open.
-    const factory =
-      UI_DATA_MODE === 'local' || isAboutDocument(docId)
-        ? import('../demo/local-session').then(({ createLocalSession }) => () =>
-            createLocalSession(docId, identity),
-          )
-        : import('../collab').then(({ createSession }) => {
-            if (!access) {
-              throw new Error('service mode requires a document admission provider');
-            }
-            return () => createSession({ docId, user: identity, access });
-          });
-
-    void factory
-      .then((create) => create())
+    void openSessionWithTimeout(
+      () =>
+        UI_DATA_MODE === 'local' || isAboutDocument(docId)
+          ? import('../demo/local-session').then(({ createLocalSession }) => () =>
+              createLocalSession(docId, identity),
+            )
+          : import('../collab').then(({ createSession }) => {
+              if (!access) {
+                throw new Error('service mode requires a document admission provider');
+              }
+              return () => createSession({ docId, user: identity, access });
+            }),
+      { signal: opening.signal },
+    )
       .then((session) => {
         if (!active) {
           session.destroy();
           return;
         }
         next = session;
+        setError(null);
         setSession(next);
         setStatus(next.status());
         setPeers(next.peers());
@@ -99,16 +107,18 @@ export function useSession(
         if (active) {
           console.error('[marks] session bootstrap failed', error);
           setStatus('offline');
+          setError(error instanceof Error ? error.message : 'The document session could not open.');
         }
       });
 
     return () => {
       active = false;
+      opening.abort(new DOMException('The document route changed.', 'AbortError'));
       for (const off of unsubscribe) off();
       next?.destroy();
       setSession(null);
     };
   }, [docId, identity, isAboutDocument(docId) ? null : access]);
 
-  return { session, status, peers, hydrated };
+  return { session, status, peers, hydrated, error };
 }

@@ -25,18 +25,34 @@ async function proposeFromInPageAgent(session, commandId) {
   }, commandId);
 }
 
+async function waitForAbsent(session, selector, { timeout = 10_000 } = {}) {
+  const deadline = Date.now() + timeout;
+  while (await session.count(selector)) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for ${selector} to disappear`);
+    }
+    await session.wait(50);
+  }
+}
+
 async function createDocument(session) {
   await session.goto('/');
-  try {
-    await session.waitForSelector('.new-doc .button.primary', { timeout: 8_000 });
-    if (await session.isVisible('.new-doc .button.primary')) {
-      await session.click('.new-doc .button.primary');
-      return;
-    }
-  } catch {
-    // The persistent rail becomes an overlay below the desktop posture.
+  const dataMode = await session.evaluate(() => document.documentElement.dataset.marksMode ?? 'local');
+  if (dataMode === 'service') {
+    // Anonymous service entry creates its editable public marketing page in
+    // the background. Do not race that creation by clicking a Home action
+    // while caller discovery is still resolving.
+    await session.waitForSelector('.app[data-marketing="true"] .cm-content', { timeout: 30_000 });
+    return;
   }
-  await session.waitForSelector('.home-actions .button.primary', { timeout: 15_000 });
+  await session.waitForSelector(
+    '.new-doc .button.primary, .home-actions .button.primary',
+    { timeout: 15_000 },
+  );
+  if (await session.isVisible('.new-doc .button.primary')) {
+    await session.click('.new-doc .button.primary');
+    return;
+  }
   await session.click('.home-actions .button.primary');
 }
 
@@ -77,6 +93,58 @@ export async function runSurface(session, { check }) {
 
   check('opening shell does not stay up', (await session.count('.opening-shell')) === 0);
 
+  const importRibbon = await session.evaluate(() => {
+    const selected = document.querySelector('.ribbon-tab[aria-selected="true"]');
+    const topLevel = [...document.querySelectorAll('.ribbon-tab')]
+      .map((tab) => tab.textContent?.trim() ?? '');
+    const expected = [
+      'import.notes-app',
+      'import.meeting',
+      'import.github-readme',
+      'import.url',
+      'document.import',
+    ];
+    return {
+      selected: selected?.textContent?.trim() ?? '',
+      topLevel,
+      commands: expected.map((id) => Boolean(document.querySelector(`[data-command-id="${id}"]`))),
+    };
+  });
+  check(
+    'desktop opens on the complete Start from template ribbon',
+    importRibbon.selected === 'Start from template' && importRibbon.commands.every(Boolean),
+    JSON.stringify(importRibbon),
+  );
+  const desktopDataMode = await session.evaluate(() => document.documentElement.dataset.marksMode ?? 'local');
+  check(
+    'anonymous desktop puts Log In second',
+    desktopDataMode !== 'service' || (
+      importRibbon.topLevel[0] === 'Start from template' &&
+      importRibbon.topLevel[1] === 'Log In'
+    ),
+    JSON.stringify(importRibbon.topLevel),
+  );
+  if (desktopDataMode === 'service') {
+    await session.evaluate(() => {
+      const login = [...document.querySelectorAll('.ribbon-tab')]
+        .find((tab) => tab.textContent?.trim() === 'Log In');
+      if (!(login instanceof HTMLButtonElement)) throw new Error('Log In ribbon control not found');
+      login.click();
+    });
+    await session.waitForSelector('[role="dialog"] .qr-mark', { timeout: 10_000 });
+    const desktopLogin = await session.evaluate(() => ({
+      title: document.querySelector('[role="dialog"] h2')?.textContent?.trim() ?? '',
+      scan: document.querySelector('[role="dialog"]')?.textContent?.includes('Scan with your phone') ?? false,
+    }));
+    check(
+      'desktop Log In opens the phone QR flow',
+      desktopLogin.title === 'Log In' && desktopLogin.scan,
+      JSON.stringify(desktopLogin),
+    );
+    await session.click('[role="dialog"] button[aria-label="Close"]');
+    await waitForAbsent(session, '[role="dialog"]');
+  }
+
   const materialState = await session.evaluate(() => ({
     tier: document.documentElement.dataset.surfaceTier,
     engine: document.documentElement.dataset.surfaceEngine,
@@ -109,7 +177,7 @@ export async function runSurface(session, { check }) {
 
   check('document renders blocks', (await session.count('.marks-preview .marks-block')) >= 1);
   check('desktop ribbon is registry-driven',
-    (await session.count('.ribbon-body [data-command-id="format.bold"]')) >= 1 &&
+    (await session.count('.ribbon-body [data-command-id="import.url"]')) === 1 &&
     (await session.count('.quick-access [data-command-id="format.bold"]')) >= 1);
 
   await session.click('.ribbon-tab');
@@ -228,7 +296,28 @@ export async function runSurface(session, { check }) {
   });
   check('selection toolbar preserves ribbon tab hit targets', homeTabOwnsHitTarget);
 
-  await session.click('.ribbon-tab:nth-child(2)');
+  await session.evaluate(() => {
+    const importTab = [...document.querySelectorAll('.ribbon-tab')]
+      .find((tab) => tab.textContent?.trim() === 'Start from template');
+    if (!(importTab instanceof HTMLButtonElement)) throw new Error('Start from template ribbon tab not found');
+    importTab.click();
+  });
+  await session.wait(100);
+  const importUrlOwnsHitTarget = await session.evaluate(() => {
+    const button = document.querySelector('[data-command-id="import.url"]');
+    if (!(button instanceof HTMLButtonElement)) return false;
+    const rect = button.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    return hit === button || hit?.closest('[data-command-id="import.url"]') === button;
+  });
+  check('floating document actions preserve template command hit targets', importUrlOwnsHitTarget);
+
+  await session.evaluate(() => {
+    const home = [...document.querySelectorAll('.ribbon-tab')]
+      .find((tab) => tab.textContent?.trim() === 'Home');
+    if (!(home instanceof HTMLButtonElement)) throw new Error('Home ribbon tab not found');
+    home.click();
+  });
   await session.wait(100);
   if (
     (await session.count('button[data-command-id="input.dictate"]')) === 0 &&
@@ -292,25 +381,33 @@ export async function runSurface(session, { check }) {
   );
   await session.setOffline(false);
 
-  const contextLoss = await session.evaluate(() => {
+  const contextLossProbe = await session.evaluate(() => {
     const canvas = document.querySelector('.surface-material-canvas[data-ready="true"]');
-    if (!canvas) return { applicable: false, tier: document.documentElement.dataset.surfaceTier };
+    if (!canvas) return { applicable: false };
+    canvas.setAttribute('data-context-loss-probe', 'true');
+    const initialTier = document.documentElement.dataset.surfaceTier;
+    const initialEngine = document.documentElement.dataset.surfaceEngine;
     canvas.dispatchEvent(new Event('webglcontextlost', { cancelable: true }));
+    return { applicable: true, initialTier, initialEngine };
+  });
+  await session.wait(350);
+  const contextLoss = await session.evaluate((probe) => {
     const canvases = [...document.querySelectorAll('.surface-material-canvas')];
+    const failed = document.querySelector('[data-context-loss-probe="true"]');
     return {
-      applicable: true,
+      ...probe,
       tier: document.documentElement.dataset.surfaceTier,
       engine: document.documentElement.dataset.surfaceEngine,
+      failedReady: failed?.hasAttribute('data-ready') ?? null,
       canvases: canvases.length,
       visibleCanvases: canvases.filter((node) => getComputedStyle(node).display !== 'none').length,
     };
-  });
+  }, contextLossProbe);
   check(
-    'WebGL context loss removes canvases',
+    'GPU context loss disables the failed canvas and selects a fallback',
     !contextLoss.applicable || (
-      contextLoss.tier === 'foundation' &&
-      contextLoss.engine === 'css' &&
-      (contextLoss.visibleCanvases === 0 || contextLoss.canvases === 0)
+      contextLoss.failedReady === false &&
+      (contextLoss.engine !== contextLoss.initialEngine || contextLoss.tier !== contextLoss.initialTier)
     ),
     JSON.stringify(contextLoss),
   );
@@ -356,6 +453,13 @@ export async function runSurface(session, { check }) {
     bookSplit.previewLeft >= bookSplit.editorLeft + bookSplit.editorW - 8,
     JSON.stringify(bookSplit));
 
+  await session.evaluate(() => {
+    const home = [...document.querySelectorAll('.ribbon-tab')]
+      .find((tab) => tab.textContent?.trim() === 'Home');
+    if (!(home instanceof HTMLButtonElement)) throw new Error('Home ribbon tab not found');
+    home.click();
+  });
+  await session.wait(100);
   await session.click('.preview-pane');
   await session.wait(100);
   check('book fold split keeps compose until the app rail changes the view',
@@ -430,10 +534,78 @@ export async function runSurface(session, { check }) {
   }
 
   await session.goto(`${documentPath}?marks-posture=phone`);
-  await session.waitForSelector('.phone-nav', { timeout: 20_000 });
+  await session.waitForSelector('.phone-ribbon', { timeout: 20_000 });
+  await session.waitForSelector('.phone-ribbon-deck[aria-label="Start from template commands"]', { timeout: 20_000 });
   check('phone uses a focused composer instead of desktop ribbon',
-    (await session.count('.phone-nav')) === 1 && (await session.count('.ribbon-body')) === 0);
-  await session.waitForSelector('.workspace.phone-ghost .marks-preview .marks-block', { timeout: 20_000 });
+    (await session.count('.phone-ribbon')) === 1 && (await session.count('.ribbon-body')) === 0);
+  const phoneDataMode = await session.evaluate(() => document.documentElement.dataset.marksMode ?? 'local');
+  if (phoneDataMode === 'service') {
+    await session.waitForSelector(
+      '.app[data-marketing="true"] .workspace.mode-preview .marks-preview .marks-block',
+      { timeout: 20_000 },
+    );
+  }
+  const phoneImport = await session.evaluate(() => ({
+    dataMode: document.documentElement.dataset.marksMode ?? 'local',
+    marketing: document.querySelector('.app')?.getAttribute('data-marketing') ?? '',
+    mode: [...(document.querySelector('.workspace')?.classList ?? [])]
+      .find((name) => name.startsWith('mode-')) ?? '',
+    selected: document.querySelector('.phone-ribbon-tabs [role="tab"][aria-selected="true"]')?.textContent?.trim() ?? '',
+    topLevel: [...document.querySelectorAll('.phone-ribbon-tabs [role="tab"]')]
+      .map((tab) => tab.textContent?.trim() ?? ''),
+    editor: Boolean(document.querySelector('.editor-pane')),
+    renderedBlocks: document.querySelectorAll('.preview-pane .marks-preview .marks-block').length,
+    commands: [
+      'import.notes-app',
+      'import.meeting',
+      'import.github-readme',
+      'import.url',
+      'document.import',
+    ].map((id) => Boolean(document.querySelector(`.phone-ribbon [data-command-id="${id}"]`))),
+  }));
+  check(
+    'phone opens on the complete Start from template ribbon',
+    phoneImport.selected === 'Start from template' && phoneImport.commands.every(Boolean),
+    JSON.stringify(phoneImport),
+  );
+  check(
+    'anonymous phone puts Log In second',
+    phoneImport.dataMode !== 'service' || (
+      phoneImport.topLevel[0] === 'Start from template' &&
+      phoneImport.topLevel[1] === 'Log In'
+    ),
+    JSON.stringify(phoneImport.topLevel),
+  );
+  check(
+    'service phone public marketing document opens in Preview with Start from template selected',
+    phoneImport.dataMode !== 'service' || (
+      phoneImport.marketing === 'true' &&
+      phoneImport.mode === 'mode-preview' &&
+      phoneImport.selected === 'Start from template' &&
+      !phoneImport.editor &&
+      phoneImport.renderedBlocks >= 1
+    ),
+    JSON.stringify(phoneImport),
+  );
+  await session.evaluate(() => {
+    const view = [...document.querySelectorAll('.phone-ribbon-tabs [role="tab"]')]
+      .find((button) => button.textContent?.trim() === 'View');
+    if (!(view instanceof HTMLButtonElement)) throw new Error('phone View tab not found');
+    view.click();
+  });
+  await session.waitForSelector(
+    '.phone-ribbon-deck[aria-label="View commands"] [data-command-id="view.editor"]',
+    { timeout: 10_000 },
+  );
+  await session.click('.phone-ribbon [data-command-id="view.editor"]');
+  await session.waitForSelector(
+    '.workspace.mode-edit.phone-ghost .editor-pane .cm-content',
+    { timeout: 20_000 },
+  );
+  await session.waitForSelector(
+    '.workspace.mode-edit.phone-ghost .preview-pane.preview-ghost .marks-preview .marks-block',
+    { timeout: 20_000 },
+  );
   const phoneGhost = await session.evaluate(() => {
     const root = document.querySelector('.workspace');
     const preview = document.querySelector('.preview-pane');
@@ -524,47 +696,80 @@ export async function runSurface(session, { check }) {
     ghostPan.ok && ghostPan.bound === 'true' && ghostPan.draggingAfterDown && ghostPan.shift === 'end' && ghostPan.translate === '0%',
     JSON.stringify(ghostPan));
   await session.evaluate(() => {
-    const preview = [...document.querySelectorAll('.phone-nav > button')]
-      .find((button) => button.textContent?.includes('Preview'));
-    if (!(preview instanceof HTMLButtonElement)) throw new Error('phone Preview command not found');
-    preview.click();
+    const view = [...document.querySelectorAll('.phone-ribbon-tabs [role="tab"]')]
+      .find((button) => button.textContent?.trim() === 'View');
+    if (!(view instanceof HTMLButtonElement)) throw new Error('phone View tab not found');
+    view.click();
   });
-  await session.wait(250);
+  await session.waitForSelector(
+    '.phone-ribbon-deck[aria-label="View commands"] [data-command-id="view.preview"]',
+    { timeout: 10_000 },
+  );
+  await session.click('.phone-ribbon [data-command-id="view.preview"]');
+  await session.waitForSelector(
+    '.workspace.mode-preview .preview-pane .marks-preview .marks-block',
+    { timeout: 10_000 },
+  );
   check('phone preview mode removes the ghost overlay',
     (await session.count('.workspace.phone-ghost, .preview-ghost')) === 0 &&
     (await session.isVisible('.preview-pane')) &&
     !(await session.isVisible('.editor-pane')));
+  await session.click('.phone-ribbon [data-command-id="view.editor"]');
+  await session.waitForSelector(
+    '.workspace.mode-edit.phone-ghost .editor-pane .cm-content',
+    { timeout: 10_000 },
+  );
   await session.evaluate(() => {
-    const write = [...document.querySelectorAll('.phone-nav > button')]
-      .find((button) => button.textContent?.includes('Write'));
-    if (!(write instanceof HTMLButtonElement)) throw new Error('phone Write command not found');
-    write.click();
+    const more = [...document.querySelectorAll('.phone-ribbon-tabs [role="tab"]')]
+      .find((button) => button.textContent?.trim() === 'More');
+    if (!(more instanceof HTMLButtonElement)) throw new Error('phone More tab not found');
+    more.click();
   });
-  await session.waitForSelector('.workspace.phone-ghost', { timeout: 10_000 });
-  await session.click('.phone-nav > button:last-child');
-  await session.wait(150);
-  const dataMode = await session.evaluate(() => document.documentElement.dataset.marksMode ?? 'local');
-  const pairingCount = await session.count('.phone-sheet [data-command-id="identity.pairing"]');
-  check('phone page sheet applies phone-confirmation eligibility',
-    dataMode === 'service' ? pairingCount === 1 : pairingCount === 0,
-    `${dataMode}: ${pairingCount}`);
+  await session.waitForSelector('.phone-ribbon-deck[aria-label="More commands"]', { timeout: 10_000 });
+  const pairingCount = await session.count('.phone-ribbon [data-command-id="identity.pairing"]');
+  const buriedLoginCount = await session.count('.phone-ribbon-deck[aria-label="More commands"] [data-command-id="identity.keep"]');
+  check('phone More does not duplicate anonymous login',
+    pairingCount === 0 && buriedLoginCount === 0,
+    `${phoneDataMode}: ${pairingCount}`);
+  if (phoneDataMode === 'service') {
+    await session.evaluate(() => {
+      const login = [...document.querySelectorAll('.phone-ribbon-tabs [role="tab"]')]
+        .find((button) => button.textContent?.trim() === 'Log In');
+      if (!(login instanceof HTMLButtonElement)) throw new Error('phone Log In control not found');
+      login.click();
+    });
+    await session.waitForSelector('[role="dialog"]', { timeout: 10_000 });
+    const mobileLogin = await session.evaluate(() => ({
+      laptop: document.querySelector('[role="dialog"]')?.textContent?.includes('Open this page on a laptop') ?? false,
+      soloDisclosure: document.querySelectorAll('[role="dialog"] .keep-solo-disclosure').length,
+      soloButton: [...document.querySelectorAll('[role="dialog"] button')]
+        .some((button) => /phone only|only this phone/i.test(button.textContent ?? '')),
+    }));
+    check(
+      'phone Log In is laptop-first with no phone-only registration',
+      mobileLogin.laptop && mobileLogin.soloDisclosure === 0 && !mobileLogin.soloButton,
+      JSON.stringify(mobileLogin),
+    );
+    await session.click('[role="dialog"] button[aria-label="Close"]');
+    await waitForAbsent(session, '[role="dialog"]');
+  }
   await session.evaluate(() => {
-    const review = [...document.querySelectorAll('.phone-nav > button')]
+    const review = [...document.querySelectorAll('.phone-ribbon-tabs [role="tab"]')]
       .find((button) => button.textContent?.trim() === 'Review');
-    if (!(review instanceof HTMLButtonElement)) throw new Error('phone Review command not found');
+    if (!(review instanceof HTMLButtonElement)) throw new Error('phone Review tab not found');
     review.click();
   });
-  await session.waitForSelector('.phone-sheet[aria-label="Document intelligence commands"]');
+  await session.waitForSelector('.phone-ribbon-deck[aria-label="Review commands"]');
   if (ribbonWildEnabled) {
-    check('phone review sheet exposes all five possibility tools',
-      (await session.count('.phone-sheet [data-command-id^="wild."]')) === 5);
-    await session.click('.phone-sheet [data-command-id="wild.context-half-life"]');
+    check('phone Review ribbon exposes all five possibility tools',
+      (await session.count('.phone-ribbon [data-command-id^="wild."]')) === 5);
+    await session.click('.phone-ribbon [data-command-id="wild.context-half-life"]');
     await session.waitForSelector('.wild-studio[data-shell="phone"][data-wild-capability="half-life"]');
-    check('possibility layer becomes a focused phone sheet',
+    check('possibility layer becomes a focused phone surface',
       (await session.isVisible('.wild-studio[data-shell="phone"]')));
   } else {
-    check('disabled ribbon-wild stays absent from the phone review sheet',
-      (await session.count('.phone-sheet [data-command-id^="wild."]')) === 0);
+    check('disabled ribbon-wild stays absent from the phone Review ribbon',
+      (await session.count('.phone-ribbon [data-command-id^="wild."]')) === 0);
     const wildAssets = await session.evaluate(() => performance.getEntriesByType('resource')
       .map((entry) => entry.name)
       .filter((name) => /\/assets\/(?:WildStudio|WildTelemetry|wild|observations)-/.test(name)));
@@ -576,6 +781,9 @@ export async function runSurface(session, { check }) {
 
 export const SURFACE_CHECK_NAMES = [
   'opening shell does not stay up',
+  'desktop opens on the complete Start from template ribbon',
+  'anonymous desktop puts Log In second',
+  'desktop Log In opens the phone QR flow',
   'surface tier is explicit',
   'scrolling document bodies stay opaque',
   'reduced glass removes shader and blur',
@@ -600,12 +808,13 @@ export const SURFACE_CHECK_NAMES = [
   'source-changing agent work paints a live causal lightpath',
   'successful source commands capture a reversible counterfactual',
   'selection toolbar preserves ribbon tab hit targets',
+  'floating document actions preserve template command hit targets',
   'voice input is honest',
   'select-all in the preview stays inside the document',
   'preview right-click opens the marks menu',
   'theme toggles',
   'connectivity state is honest',
-  'WebGL context loss removes canvases',
+  'GPU context loss disables the failed canvas and selects a fallback',
   'book fold uses a view rail and a full-width ribbon',
   'unfolded app rail is thinner than the Material 3 80dp rail',
   'book fold ribbon spans its chrome container',
@@ -621,13 +830,17 @@ export const SURFACE_CHECK_NAMES = [
   'laptop fold split is a real stacked hinge canvas',
   'possibility layer respects the unfolded laptop posture',
   'phone uses a focused composer instead of desktop ribbon',
+  'phone opens on the complete Start from template ribbon',
+  'anonymous phone puts Log In second',
+  'service phone public marketing document opens in Preview with Start from template selected',
   'phone write keeps a full-width editor under a right-hand ghost preview',
   'phone ghost viewfinder is clipped and pointer-transparent',
   'phone two-finger pan snaps the ghost to the other page half',
   'phone preview mode removes the ghost overlay',
-  'phone page sheet applies phone-confirmation eligibility',
-  'disabled ribbon-wild stays absent from the phone review sheet',
+  'phone More does not duplicate anonymous login',
+  'phone Log In is laptop-first with no phone-only registration',
+  'disabled ribbon-wild stays absent from the phone Review ribbon',
   'disabled ribbon-wild requests no lazy code or style assets',
-  'phone review sheet exposes all five possibility tools',
-  'possibility layer becomes a focused phone sheet',
+  'phone Review ribbon exposes all five possibility tools',
+  'possibility layer becomes a focused phone surface',
 ];

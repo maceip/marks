@@ -63,7 +63,7 @@ export function PairingInspect({ state, pairing, onNotify }: PairingInspectProps
 
   const submitWords = async () => {
     if (!service) {
-      onNotify('No pairing fragment', 'Local mode does not look up a four-word code.', 'neutral');
+      onNotify('No login request', 'Local mode cannot look up a login code.', 'neutral');
       return;
     }
     setBusy(true);
@@ -83,24 +83,24 @@ export function PairingInspect({ state, pairing, onNotify }: PairingInspectProps
       onNotify(
         action === 'bootstrap' ? SERVICE_ERROR_COPY[404].title : SERVICE_ERROR_COPY[401].title,
         action === 'bootstrap'
-          ? 'Bootstrap creates the first principal on an unseen controller. No service is attached.'
-          : 'Approve needs a controller session on the phone. This tab is not signed in.',
+          ? 'A connected service is required to create an account.'
+          : 'Log in on this phone before approving another browser.',
         action === 'bootstrap' ? SERVICE_ERROR_COPY[404].tone : SERVICE_ERROR_COPY[401].tone,
       );
       return;
     }
     if (!details || !proof) {
-      onNotify('No pairing fragment', 'Scan the QR or type the four words first.', 'neutral');
+      onNotify('No login request', 'Scan the QR code or enter the login code first.', 'neutral');
       return;
     }
     setBusy(true);
     try {
       if (action === 'bootstrap') {
         await bootstrapPairing(details, proof);
-        onNotify('Phone is the controller', 'The original tab will keep the workspace and sign in.', 'success');
+        onNotify('Account Created', 'Return to the original browser; it will finish logging in.', 'success');
       } else {
         await approvePairing(details, proof);
-        onNotify('Device approved', 'The original tab will finalize and drop scratch.', 'success');
+        onNotify('Login Approved', 'Return to the original browser; it will finish logging in.', 'success');
       }
     } catch (error) {
       onNotify(copyForFailure(error).title, copyForFailure(error).detail, copyForFailure(error).tone);
@@ -116,27 +116,27 @@ export function PairingInspect({ state, pairing, onNotify }: PairingInspectProps
         <span>
           <strong>
             {details
-              ? 'Pairing ready'
+              ? 'Ready to Log In'
               : resolvedState === 'invalid'
-                ? 'Authentication failed'
-                : 'Waiting for a scan'}
+                ? 'Login Failed'
+                : 'Waiting for a QR Code'}
           </strong>
           {details
-            ? 'This phone can create the first controller or approve an existing one. Identifiers are not shown as a person.'
+            ? 'Create an account if you are new to Marks, or approve the login if you already have one.'
             : resolvedState === 'invalid'
               ? SERVICE_ERROR_COPY[401].detail
-              : 'Scan the QR, paste the secure link, or type the four words.'}
+              : 'Scan the QR code, open the secure link, or enter the four-word login code.'}
         </span>
       </div>
 
       <label className="pairing-words-entry">
-        <strong>Four words</strong>
+        <strong>Login code</strong>
         <input
           type="text"
           autoCapitalize="none"
           autoCorrect="off"
           spellCheck={false}
-          placeholder="four words from the other device"
+          placeholder="four words from the other browser"
           value={words}
           onChange={(event) => setWords(event.target.value)}
         />
@@ -144,36 +144,36 @@ export function PairingInspect({ state, pairing, onNotify }: PairingInspectProps
 
       <ul className="account-list">
         <li>
-          <strong>Inspect</strong>
+          <strong>Login request</strong>
           <small>
             {details
-              ? `Expires soon. Pending device is bound. Origin is ${details.origin}.`
-              : 'Origin, pending device, and expiry. A guessed id without the secret is the same as a missing one.'}
+              ? `This request expires soon and came from ${details.origin}.`
+              : 'Open the secure login request from your other browser.'}
           </small>
         </li>
         <li>
-          <strong>First phone</strong>
-          <small>Bootstrap creates one principal. A 409 means another request won — do not retry into a second account.</small>
+          <strong>New to Marks</strong>
+          <small>Create an account and log in the other browser.</small>
         </li>
         <li>
-          <strong>Existing phone</strong>
+          <strong>Already have an account</strong>
           <small>
             {controller
-              ? 'This phone already has a controller key. Approve enrolls the other browser.'
-              : 'Approve enrolls this browser. The original tab then finalizes and drops scratch.'}
+              ? 'Approve the login to use your account on the other browser.'
+              : 'Log in on this phone before approving another browser.'}
           </small>
         </li>
       </ul>
 
       <div className="dialog-actions pairing-actions">
         <button type="button" className="button" disabled={busy} onClick={() => void submitWords()}>
-          Use words
+          Use Login Code
         </button>
         <button type="button" className="button" disabled={busy || !details} onClick={() => void run('bootstrap')}>
-          First phone
+          Create Account
         </button>
         <button type="button" className="button primary" disabled={busy || !details} onClick={() => void run('approve')}>
-          Approve
+          Approve Log In
         </button>
       </div>
     </div>

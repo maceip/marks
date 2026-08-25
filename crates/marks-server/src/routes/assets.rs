@@ -20,12 +20,26 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::io::{self, Write};
 use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio_util::io::ReaderStream;
 
 const MAX_ASSETS_PER_DOCUMENT: u64 = 1_000;
+const ASSET_GET_TIMEOUT: Duration = Duration::from_secs(10);
 const BUNDLE_CHUNK_BYTES: usize = 128 * 1024;
 const BUNDLE_CHANNEL_DEPTH: usize = 8;
+/// Asset verification happens before response headers are committed and while
+/// the request owns both an export permit and the shared asset mutation guard.
+/// A wedged filesystem read must not retain either resource forever.
+const BUNDLE_VERIFICATION_TIMEOUT: Duration = Duration::from_secs(30);
+/// A response that cannot accept one bounded ZIP chunk is no longer making
+/// useful progress. Releasing its worker also releases the export permit and
+/// asset mutation guard instead of pinning both to a non-reading client.
+const BUNDLE_SEND_STALL_TIMEOUT: Duration = Duration::from_secs(15);
+/// Even a minimally-draining peer cannot retain server resources forever.
+const BUNDLE_MAX_RUNTIME: Duration = Duration::from_secs(2 * 60);
+const BUNDLE_SEND_RETRY_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Clone)]
 struct AssetRow {
@@ -282,7 +296,8 @@ pub async fn get(
     Path((document, asset)): Path<(String, String)>,
 ) -> ApiResult<Response> {
     let document_id = DocumentId::new(document).map_err(|_| ApiError::not_found())?;
-    let mutation_guard = app.assets.mutation_guard().await;
+    let deadline = tokio::time::Instant::now() + ASSET_GET_TIMEOUT;
+    let mutation_guard = app.assets.mutation_guard_before(deadline).await?;
     let row = app.db.read(|conn| {
         load_live_document(conn, &document_id)?;
         load_asset(conn, &document_id, &asset)
@@ -292,6 +307,7 @@ pub async fn get(
         .open_stream(
             row.hash,
             usize::try_from(row.bytes).map_err(|_| ApiError::internal())?,
+            deadline,
         )
         .await?;
     drop(mutation_guard);
@@ -388,18 +404,13 @@ pub async fn export_bundle(
         .iter()
         .map(|asset| (asset.row.hash, asset.expected_bytes))
         .collect::<Vec<_>>();
-    tokio::task::spawn_blocking(move || {
+    let verification = tokio::task::spawn_blocking(move || {
         for (hash, expected_bytes) in verification_assets {
             verification_store.verify_content(hash, expected_bytes)?;
         }
         Ok::<(), io::Error>(())
-    })
-    .await
-    .map_err(|_| ApiError::internal())?
-    .map_err(|error| {
-        tracing::error!(target: "marks_server::assets", %error, "portable export asset verification failed");
-        ApiError::internal()
-    })?;
+    });
+    await_bundle_verification(verification, BUNDLE_VERIFICATION_TIMEOUT).await?;
 
     let (sender, receiver) = mpsc::channel(BUNDLE_CHANNEL_DEPTH);
     let error_sender = sender.clone();
@@ -415,7 +426,11 @@ pub async fn export_bundle(
             &stream_store,
         ) {
             tracing::error!(target: "marks_server::assets", %error, "portable export stream failed");
-            let _ = error_sender.blocking_send(Err(error));
+            // Never enter a second unbounded wait while reporting the first
+            // delivery failure. If the response channel is still writable the
+            // client sees the error; otherwise dropping every sender ends the
+            // truncated response and releases the worker-owned guards.
+            let _ = error_sender.try_send(Err(error));
         }
     });
     let stream = futures_util::stream::unfold(receiver, |mut receiver| async move {
@@ -441,6 +456,37 @@ struct BundleAsset {
     row: AssetRow,
     path: String,
     expected_bytes: usize,
+}
+
+async fn await_bundle_verification(
+    mut verification: tokio::task::JoinHandle<io::Result<()>>,
+    timeout: Duration,
+) -> ApiResult<()> {
+    match tokio::time::timeout(timeout, &mut verification).await {
+        Ok(Ok(Ok(()))) => Ok(()),
+        Ok(Ok(Err(error))) => {
+            tracing::error!(target: "marks_server::assets", %error, "portable export asset verification failed");
+            Err(ApiError::internal())
+        }
+        Ok(Err(error)) => {
+            tracing::error!(target: "marks_server::assets", %error, "portable export asset verification task failed");
+            Err(ApiError::internal())
+        }
+        Err(_) => {
+            // `spawn_blocking` cannot interrupt a syscall that already began,
+            // but aborting/dropping its handle detaches it. Returning from the
+            // request then releases the permit and mutation guard immediately.
+            verification.abort();
+            tracing::warn!(
+                target: "marks_server::assets",
+                timeout_ms = timeout.as_millis(),
+                "portable export asset verification timed out"
+            );
+            Err(ApiError::unavailable(
+                "portable export verification timed out",
+            ))
+        }
+    }
 }
 
 /// Rewrite every referenced capability URL in one Aho-Corasick pass. The old
@@ -534,13 +580,25 @@ fn zip_to_io(error: zip::result::ZipError) -> io::Error {
 struct BundleBodyWriter {
     sender: mpsc::Sender<Result<Bytes, io::Error>>,
     buffer: Vec<u8>,
+    send_stall_timeout: Duration,
+    operation_deadline: Instant,
 }
 
 impl BundleBodyWriter {
     fn new(sender: mpsc::Sender<Result<Bytes, io::Error>>) -> Self {
+        Self::with_limits(sender, BUNDLE_SEND_STALL_TIMEOUT, BUNDLE_MAX_RUNTIME)
+    }
+
+    fn with_limits(
+        sender: mpsc::Sender<Result<Bytes, io::Error>>,
+        send_stall_timeout: Duration,
+        max_runtime: Duration,
+    ) -> Self {
         Self {
             sender,
             buffer: Vec::with_capacity(BUNDLE_CHUNK_BYTES),
+            send_stall_timeout,
+            operation_deadline: Instant::now() + max_runtime,
         }
     }
 
@@ -552,9 +610,38 @@ impl BundleBodyWriter {
             &mut self.buffer,
             Vec::with_capacity(BUNDLE_CHUNK_BYTES),
         ));
-        self.sender.blocking_send(Ok(bytes)).map_err(|_| {
-            io::Error::new(io::ErrorKind::BrokenPipe, "portable export receiver closed")
-        })
+        let started_send = Instant::now();
+        if started_send >= self.operation_deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "portable export exceeded its runtime limit",
+            ));
+        }
+        let stall_deadline = started_send + self.send_stall_timeout;
+        let deadline = stall_deadline.min(self.operation_deadline);
+        let mut item = Ok(bytes);
+        loop {
+            match self.sender.try_send(item) {
+                Ok(()) => return Ok(()),
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "portable export receiver closed",
+                    ));
+                }
+                Err(mpsc::error::TrySendError::Full(returned)) => {
+                    item = returned;
+                    let now = Instant::now();
+                    if now >= deadline {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "portable export delivery stalled",
+                        ));
+                    }
+                    thread::sleep(BUNDLE_SEND_RETRY_INTERVAL.min(deadline - now));
+                }
+            }
+        }
     }
 
     fn finish(mut self) -> io::Result<()> {
@@ -627,6 +714,7 @@ pub(crate) fn hash_hex(hash: &[u8; 32]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::{RwLock, Semaphore};
 
     #[test]
     fn image_sniffing_ignores_claimed_mime() {
@@ -635,5 +723,73 @@ mod tests {
             Some("image/png")
         );
         assert_eq!(sniff_image_type(b"<svg onload=alert(1)>"), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stalled_bundle_delivery_releases_its_permit_and_asset_guard() {
+        let (sender, _receiver) = mpsc::channel(1);
+        sender
+            .try_send(Ok(Bytes::from_static(b"already full")))
+            .unwrap();
+
+        let permits = Arc::new(Semaphore::new(1));
+        let permit = permits.clone().try_acquire_owned().unwrap();
+        let gate = Arc::new(RwLock::new(()));
+        let guard = gate.clone().read_owned().await;
+        let worker = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let _guard = guard;
+            let mut writer = BundleBodyWriter::with_limits(
+                sender,
+                Duration::from_millis(25),
+                Duration::from_secs(1),
+            );
+            writer.write_all(&vec![0_u8; BUNDLE_CHUNK_BYTES])
+        });
+
+        let error = tokio::time::timeout(Duration::from_secs(1), worker)
+            .await
+            .expect("a non-reading response must not retain the worker")
+            .expect("bundle worker")
+            .expect_err("the full response channel must time out");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(permits.try_acquire().is_ok(), "export permit was released");
+        let _guard = tokio::time::timeout(Duration::from_secs(1), gate.write())
+            .await
+            .expect("asset guard was released");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stalled_bundle_verification_releases_its_permit_and_asset_guard() {
+        let permits = Arc::new(Semaphore::new(1));
+        let permit = permits.clone().try_acquire_owned().unwrap();
+        let gate = Arc::new(RwLock::new(()));
+        let guard = gate.clone().read_owned().await;
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let verification = tokio::task::spawn_blocking(move || {
+            let _ = started_tx.send(());
+            let _ = release_rx.recv();
+            Ok(())
+        });
+        started_rx.await.expect("verification worker started");
+
+        let error = await_bundle_verification(verification, Duration::from_millis(25))
+            .await
+            .expect_err("an uncooperative verification must time out");
+        assert_eq!(error.status, StatusCode::SERVICE_UNAVAILABLE);
+
+        // These resources are owned by the request, outside the detached
+        // blocking worker. The timeout return lets the handler drop them even
+        // though the underlying syscall may still be in progress.
+        drop(guard);
+        drop(permit);
+        assert!(permits.try_acquire().is_ok(), "export permit was released");
+        let _guard = tokio::time::timeout(Duration::from_secs(1), gate.write())
+            .await
+            .expect("asset guard was released");
+
+        release_tx.send(()).expect("release verification worker");
     }
 }

@@ -166,7 +166,14 @@
 .keep-stage small { display: block; margin-top: 4px; color: var(--color-fg-muted); font-size: 11px; line-height: 1.5; }
 .keep-solo { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--material-border); border-radius: 16px; background: var(--color-bg-sunken); }
 .keep-solo small { color: var(--color-fg-muted); font-size: 11px; line-height: 1.5; }
-.keep-solo .button { justify-self: start; }
+.keep-solo .button { justify-self: start; min-height: 40px; }
+.mobile-login-path { display: grid; gap: 12px; }
+.mobile-login-path > .button { justify-self: start; }
+.laptop-login-stage > .icon { justify-self: center; }
+.keep-solo-disclosure { padding: 0; background: transparent; }
+.keep-solo-disclosure summary { padding: 12px; color: var(--color-fg-muted); font-size: 11px; font-weight: 650; cursor: pointer; }
+.keep-solo-disclosure[open] { padding: 0 12px 12px; }
+.keep-solo-disclosure[open] summary { margin: 0 -12px; }
 /* A QR must stay light-page/dark-module in every theme or cameras cannot
    read it; these dedicated colors deliberately ignore theme changes. */
 .qr-mark { width: 112px; height: 112px; border-radius: 12px; background: var(--color-qr-page); box-shadow: var(--elevation-sm); }

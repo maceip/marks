@@ -9,14 +9,23 @@ use bytes::Bytes;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
+use std::future::Future;
 use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::time::Duration;
 use tokio::sync::{Mutex, OwnedMutexGuard, OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
+use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
 const COPY_BUFFER_BYTES: usize = 1024 * 1024;
 const CONTENT_GATE_SHARDS: usize = 64;
+const ASSET_PUT_TIMEOUT: Duration = Duration::from_secs(30);
+const ASSET_REMOVE_TIMEOUT: Duration = Duration::from_secs(10);
+const REMOVAL_ACTIVE: u8 = 0;
+const REMOVAL_CANCELLED: u8 = 1;
+const REMOVAL_COMMITTED: u8 = 2;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SweepReport {
@@ -57,6 +66,15 @@ impl AssetStore {
         self.mutation_gate.clone().read_owned().await
     }
 
+    pub async fn mutation_guard_before(
+        &self,
+        deadline: Instant,
+    ) -> ApiResult<OwnedRwLockReadGuard<()>> {
+        tokio::time::timeout_at(deadline, self.mutation_guard())
+            .await
+            .map_err(|_| ApiError::unavailable("asset storage timed out"))
+    }
+
     pub async fn backup_guard(&self) -> OwnedRwLockWriteGuard<()> {
         self.mutation_gate.clone().write_owned().await
     }
@@ -71,10 +89,8 @@ impl AssetStore {
 
     pub async fn put(&self, hash: [u8; 32], bytes: Bytes) -> ApiResult<()> {
         let root = self.root.clone();
-        tokio::task::spawn_blocking(move || put_blocking(&root, hash, &bytes))
-            .await
-            .map_err(|_| ApiError::internal())?
-            .map_err(|_| ApiError::internal())
+        let task = tokio::task::spawn_blocking(move || put_blocking(&root, hash, &bytes));
+        await_filesystem_task(task, ASSET_PUT_TIMEOUT, "publish asset", None).await
     }
 
     pub async fn read(&self, hash: [u8; 32], expected_bytes: usize) -> ApiResult<Vec<u8>> {
@@ -93,28 +109,42 @@ impl AssetStore {
         &self,
         hash: [u8; 32],
         expected_bytes: usize,
+        deadline: Instant,
     ) -> ApiResult<tokio::fs::File> {
         let path = content_path(&self.root, &hash);
-        let file = tokio::fs::File::open(path)
-            .await
-            .map_err(|_| ApiError::internal())?;
-        let metadata = file.metadata().await.map_err(|_| ApiError::internal())?;
-        if !metadata.is_file() || metadata.len() != expected_bytes as u64 {
-            return Err(ApiError::internal());
-        }
-        Ok(file)
+        await_readonly_filesystem(
+            async move {
+                let file = tokio::fs::File::open(path).await?;
+                let metadata = file.metadata().await?;
+                if !metadata.is_file() || metadata.len() != expected_bytes as u64 {
+                    return Err(std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "asset stream metadata mismatch",
+                    ));
+                }
+                Ok(file)
+            },
+            deadline,
+            "open asset stream",
+        )
+        .await
     }
 
     pub async fn remove(&self, hash: [u8; 32]) -> ApiResult<()> {
         let path = content_path(&self.root, &hash);
-        tokio::task::spawn_blocking(move || match fs::remove_file(path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error),
-        })
+        let cancellation = Arc::new(AtomicU8::new(REMOVAL_ACTIVE));
+        let _cancel_on_drop = CancelRemovalOnDrop(cancellation.clone());
+        let worker_cancellation = cancellation.clone();
+        let task = tokio::task::spawn_blocking(move || {
+            remove_blocking(&path, worker_cancellation.as_ref())
+        });
+        await_filesystem_task(
+            task,
+            ASSET_REMOVE_TIMEOUT,
+            "reclaim asset",
+            Some(cancellation),
+        )
         .await
-        .map_err(|_| ApiError::internal())?
-        .map_err(|_| ApiError::internal())
     }
 
     pub(crate) fn copy_verified_to(
@@ -187,6 +217,33 @@ impl AssetStore {
                     continue;
                 }
                 let name = entry.file_name().to_string_lossy().into_owned();
+                if let Some(hash) = decode_remove_safety(&prefix, &name) {
+                    let safety = entry.path();
+                    let canonical = content_path(&self.root, &hash);
+                    if referenced.contains(&hash) && !canonical.exists() {
+                        let expected_bytes =
+                            usize::try_from(entry.metadata()?.len()).map_err(|_| {
+                                std::io::Error::new(
+                                    ErrorKind::InvalidData,
+                                    "asset removal safety link is too large",
+                                )
+                            })?;
+                        verify_path(
+                            &safety,
+                            hash,
+                            expected_bytes,
+                            "asset removal safety link is corrupt",
+                        )?;
+                        match fs::hard_link(&safety, &canonical) {
+                            Ok(()) => {}
+                            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+                            Err(error) => return Err(error),
+                        }
+                    }
+                    fs::remove_file(safety)?;
+                    report.stale_staging = report.stale_staging.saturating_add(1);
+                    continue;
+                }
                 if name.starts_with(".upload-") || name.starts_with(".copy-") {
                     fs::remove_file(entry.path())?;
                     report.stale_staging = report.stale_staging.saturating_add(1);
@@ -209,6 +266,93 @@ impl AssetStore {
     }
 }
 
+struct CancelRemovalOnDrop(Arc<AtomicU8>);
+
+impl Drop for CancelRemovalOnDrop {
+    fn drop(&mut self) {
+        // This also runs when an outer aggregate request deadline drops
+        // `AssetStore::remove` before its own timeout fires.
+        let _ = self.0.compare_exchange(
+            REMOVAL_ACTIVE,
+            REMOVAL_CANCELLED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+}
+
+async fn await_readonly_filesystem<T>(
+    work: impl Future<Output = std::io::Result<T>>,
+    deadline: Instant,
+    operation: &'static str,
+) -> ApiResult<T> {
+    let timeout = deadline.saturating_duration_since(Instant::now());
+    match tokio::time::timeout_at(deadline, work).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(error)) => {
+            tracing::error!(target: "marks_server::assets", operation, %error, "asset filesystem read failed");
+            Err(ApiError::internal())
+        }
+        Err(_) => {
+            // Tokio may have delegated open/metadata to its blocking pool, but
+            // dropping this read-only future is safe: a late completion owns no
+            // mutation guard and cannot change canonical asset state.
+            tracing::warn!(
+                target: "marks_server::assets",
+                operation,
+                timeout_ms = timeout.as_millis(),
+                "asset filesystem read timed out"
+            );
+            Err(ApiError::unavailable("asset storage timed out"))
+        }
+    }
+}
+
+async fn await_filesystem_task<T>(
+    mut task: JoinHandle<std::io::Result<T>>,
+    timeout: Duration,
+    operation: &'static str,
+    cancellation: Option<Arc<AtomicU8>>,
+) -> ApiResult<T> {
+    match tokio::time::timeout(timeout, &mut task).await {
+        Ok(Ok(Ok(value))) => Ok(value),
+        Ok(Ok(Err(error))) => {
+            tracing::error!(target: "marks_server::assets", operation, %error, "asset filesystem operation failed");
+            Err(ApiError::internal())
+        }
+        Ok(Err(error)) => {
+            tracing::error!(target: "marks_server::assets", operation, %error, "asset filesystem worker failed");
+            Err(ApiError::internal())
+        }
+        Err(_) => {
+            if let Some(cancellation) = cancellation {
+                // If the worker already committed the canonical unlink, every
+                // remaining action is confined to its private safety link. If
+                // this transition wins, the worker must either skip unlink or
+                // restore the canonical name before touching that safety link.
+                let _ = cancellation.compare_exchange(
+                    REMOVAL_ACTIVE,
+                    REMOVAL_CANCELLED,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
+            }
+            // A blocking syscall already in progress cannot be interrupted,
+            // but the request no longer awaits its JoinHandle. Uploads publish
+            // immutable hash-addressed bytes; removals retain a safety link and
+            // restore the canonical path if cancellation races their unlink.
+            task.abort();
+            tracing::warn!(
+                target: "marks_server::assets",
+                operation,
+                timeout_ms = timeout.as_millis(),
+                "asset filesystem operation timed out"
+            );
+            Err(ApiError::unavailable("asset storage timed out"))
+        }
+    }
+}
+
 fn is_lower_hex(byte: u8) -> bool {
     byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
 }
@@ -223,6 +367,14 @@ fn decode_content_hash(prefix: &str, name: &str) -> Option<[u8; 32]> {
         *byte = u8::from_str_radix(&encoded[index * 2..index * 2 + 2], 16).ok()?;
     }
     Some(hash)
+}
+
+fn decode_remove_safety(prefix: &str, name: &str) -> Option<[u8; 32]> {
+    let encoded = name.strip_prefix(".remove-")?;
+    if encoded.len() < 63 || encoded.as_bytes().get(62) != Some(&b'-') {
+        return None;
+    }
+    decode_content_hash(prefix, &encoded[..62])
 }
 
 fn read_blocking(root: &Path, hash: [u8; 32], expected_bytes: usize) -> std::io::Result<Vec<u8>> {
@@ -315,6 +467,15 @@ fn copy_verified_blocking(
 }
 
 fn put_blocking(root: &Path, hash: [u8; 32], bytes: &[u8]) -> std::io::Result<()> {
+    put_blocking_with_hook(root, hash, bytes, || {})
+}
+
+fn put_blocking_with_hook(
+    root: &Path,
+    hash: [u8; 32],
+    bytes: &[u8],
+    before_publish: impl FnOnce(),
+) -> std::io::Result<()> {
     let actual: [u8; 32] = Sha256::digest(bytes).into();
     if actual != hash {
         return Err(std::io::Error::new(
@@ -349,6 +510,7 @@ fn put_blocking(root: &Path, hash: [u8; 32], bytes: &[u8]) -> std::io::Result<()
     }
     drop(file);
 
+    before_publish();
     match fs::hard_link(&temp, &destination) {
         Ok(()) => {
             fs::remove_file(&temp)?;
@@ -363,6 +525,113 @@ fn put_blocking(root: &Path, hash: [u8; 32], bytes: &[u8]) -> std::io::Result<()
             let _ = fs::remove_file(&temp);
             Err(error)
         }
+    }
+}
+
+fn remove_blocking(path: &Path, state: &AtomicU8) -> std::io::Result<()> {
+    remove_blocking_with_hooks(path, state, || {}, || {})
+}
+
+/// Reclaim through a private hard link so a timed-out worker never performs a
+/// late, irreversible unlink against a path that a new same-hash upload may
+/// already rely on. The timeout and worker race through a three-state commit:
+/// cancellation wins before commit and requires restoration; commit wins only
+/// after the canonical unlink and leaves the worker confined to its safety
+/// path from then on.
+fn remove_blocking_with_hooks(
+    path: &Path,
+    state: &AtomicU8,
+    before_unlink: impl FnOnce(),
+    after_unlink: impl FnOnce(),
+) -> std::io::Result<()> {
+    if state.load(Ordering::Acquire) == REMOVAL_CANCELLED {
+        return Err(std::io::Error::new(
+            ErrorKind::TimedOut,
+            "asset removal was cancelled",
+        ));
+    }
+    let Some(parent) = path.parent() else {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "asset path has no parent",
+        ));
+    };
+    static NEXT_REMOVE_TEMP: AtomicU64 = AtomicU64::new(1);
+    let Some(canonical_name) = path.file_name() else {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "asset path has no filename",
+        ));
+    };
+    let safety = parent.join(format!(
+        ".remove-{}-{}-{}",
+        canonical_name.to_string_lossy(),
+        std::process::id(),
+        NEXT_REMOVE_TEMP.fetch_add(1, Ordering::Relaxed)
+    ));
+    match fs::hard_link(path, &safety) {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    }
+
+    before_unlink();
+    if state.load(Ordering::Acquire) == REMOVAL_CANCELLED {
+        let _ = fs::remove_file(&safety);
+        return Err(std::io::Error::new(
+            ErrorKind::TimedOut,
+            "asset removal was cancelled",
+        ));
+    }
+
+    let removed = fs::remove_file(path);
+    after_unlink();
+    match state.compare_exchange(
+        REMOVAL_ACTIVE,
+        REMOVAL_COMMITTED,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    ) {
+        Ok(_) | Err(REMOVAL_COMMITTED) => {
+            // Once committed, a timeout may release the per-hash guard: the
+            // worker only removes its private link from this point onward.
+            let cleanup = fs::remove_file(&safety);
+            match removed {
+                Ok(()) => cleanup,
+                Err(error) if error.kind() == ErrorKind::NotFound => cleanup,
+                Err(error) => {
+                    let _ = cleanup;
+                    Err(error)
+                }
+            }
+        }
+        Err(REMOVAL_CANCELLED) => {
+            // The deadline won while hard_link/unlink was in progress. A new
+            // upload may already have published the same immutable hash; in
+            // that case AlreadyExists is exactly the safe restored state.
+            match fs::hard_link(&safety, path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+                Err(error)
+                    if error.kind() == ErrorKind::NotFound
+                        && path.try_exists().unwrap_or(false) =>
+                {
+                    // Startup reconciliation may already have restored the
+                    // safety link and removed its private name.
+                }
+                Err(error) => {
+                    // Keep the private link as a recovery copy if the
+                    // canonical name cannot be restored.
+                    return Err(error);
+                }
+            }
+            let _ = fs::remove_file(&safety);
+            Err(std::io::Error::new(
+                ErrorKind::TimedOut,
+                "asset removal was cancelled",
+            ))
+        }
+        Err(_) => Err(std::io::Error::other("invalid asset removal state")),
     }
 }
 
@@ -414,11 +683,19 @@ fn content_path(root: &Path, hash: &[u8; 32]) -> PathBuf {
 mod tests {
     use super::*;
 
+    fn test_root(label: &str) -> PathBuf {
+        static NEXT_TEST: AtomicU64 = AtomicU64::new(1);
+        std::env::temp_dir().join(format!(
+            "marks-assets-{label}-{}-{}",
+            std::process::id(),
+            NEXT_TEST.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
     #[tokio::test]
     async fn content_path_is_atomic_deduplicated_and_verified() {
-        let root = std::env::temp_dir().join(format!("marks-assets-test-{}", std::process::id()));
-        let copied_root =
-            std::env::temp_dir().join(format!("marks-assets-copy-test-{}", std::process::id()));
+        let root = test_root("content");
+        let copied_root = test_root("copy");
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&copied_root);
         let store = AssetStore::open(root.clone()).unwrap();
@@ -450,5 +727,197 @@ mod tests {
         store.remove(hash).await.unwrap();
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(copied_root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn timed_out_put_releases_guards_and_late_publication_deduplicates() {
+        let root = test_root("put-timeout");
+        let store = Arc::new(AssetStore::open(root.clone()).unwrap());
+        let bytes = Bytes::from_static(b"immutable late publication");
+        let hash: [u8; 32] = Sha256::digest(&bytes).into();
+        let mutation_guard = store.mutation_guard().await;
+        let content_guard = store.content_guard(hash).await;
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let worker_root = root.clone();
+        let worker_bytes = bytes.clone();
+        let task = tokio::task::spawn_blocking(move || {
+            let result = put_blocking_with_hook(&worker_root, hash, &worker_bytes, || {
+                let _ = started_tx.send(());
+                let _ = release_rx.recv();
+            });
+            let _ = done_tx.send(result.is_ok());
+            result
+        });
+        started_rx.await.expect("put worker reached publication");
+        let error = await_filesystem_task(
+            task,
+            Duration::from_millis(25),
+            "test asset publication",
+            None,
+        )
+        .await
+        .expect_err("wedged publication must time out");
+        assert_eq!(error.status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
+
+        drop(content_guard);
+        drop(mutation_guard);
+        let backup_guard = tokio::time::timeout(Duration::from_secs(1), store.backup_guard())
+            .await
+            .expect("asset mutation guard released");
+        drop(backup_guard);
+
+        let next_mutation = store.mutation_guard().await;
+        let next_content = tokio::time::timeout(Duration::from_secs(1), store.content_guard(hash))
+            .await
+            .expect("per-hash guard released");
+        store.put(hash, bytes.clone()).await.unwrap();
+        drop(next_content);
+        drop(next_mutation);
+
+        release_tx.send(()).expect("release late put worker");
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), done_rx)
+                .await
+                .expect("late put completed")
+                .expect("late put proof channel")
+        );
+        store.verify_content(hash, bytes.len()).unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn stalled_readonly_open_releases_mutation_guard_at_deadline() {
+        let root = test_root("open-timeout");
+        let store = Arc::new(AssetStore::open(root.clone()).unwrap());
+        let mutation_guard = store.mutation_guard().await;
+
+        let error = await_readonly_filesystem(
+            std::future::pending::<std::io::Result<()>>(),
+            Instant::now() + Duration::from_millis(25),
+            "test asset open",
+        )
+        .await
+        .expect_err("wedged read-only open must time out");
+        assert_eq!(error.status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
+
+        drop(mutation_guard);
+        let backup_guard = tokio::time::timeout(Duration::from_secs(1), store.backup_guard())
+            .await
+            .expect("asset GET mutation guard released");
+        drop(backup_guard);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn request_deadline_bounds_mutation_guard_acquisition() {
+        let root = test_root("guard-timeout");
+        let store = Arc::new(AssetStore::open(root.clone()).unwrap());
+        let backup_guard = store.backup_guard().await;
+
+        let error = store
+            .mutation_guard_before(Instant::now() + Duration::from_millis(25))
+            .await
+            .expect_err("exclusive backup guard must not strand an asset request");
+        assert_eq!(error.status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
+
+        drop(backup_guard);
+        let mutation_guard = tokio::time::timeout(Duration::from_secs(1), store.mutation_guard())
+            .await
+            .expect("guard remains usable after request timeout");
+        drop(mutation_guard);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dropping_a_remove_future_cancels_only_an_uncommitted_unlink() {
+        let active = Arc::new(AtomicU8::new(REMOVAL_ACTIVE));
+        drop(CancelRemovalOnDrop(active.clone()));
+        assert_eq!(active.load(Ordering::Acquire), REMOVAL_CANCELLED);
+
+        let committed = Arc::new(AtomicU8::new(REMOVAL_COMMITTED));
+        drop(CancelRemovalOnDrop(committed.clone()));
+        assert_eq!(committed.load(Ordering::Acquire), REMOVAL_COMMITTED);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn timed_out_remove_restores_or_preserves_a_same_hash_republication() {
+        let root = test_root("remove-timeout");
+        let store = Arc::new(AssetStore::open(root.clone()).unwrap());
+        let bytes = Bytes::from_static(b"same hash survives late unlink");
+        let hash: [u8; 32] = Sha256::digest(&bytes).into();
+        store.put(hash, bytes.clone()).await.unwrap();
+        let mutation_guard = store.mutation_guard().await;
+        let content_guard = store.content_guard(hash).await;
+
+        let state = Arc::new(AtomicU8::new(REMOVAL_ACTIVE));
+        let worker_state = state.clone();
+        let (unlinked_tx, unlinked_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let path = content_path(&root, &hash);
+        let task = tokio::task::spawn_blocking(move || {
+            let result = remove_blocking_with_hooks(
+                &path,
+                worker_state.as_ref(),
+                || {},
+                || {
+                    let _ = unlinked_tx.send(());
+                    let _ = release_rx.recv();
+                },
+            );
+            let _ = done_tx.send(result.as_ref().err().map(std::io::Error::kind));
+            result
+        });
+        unlinked_rx
+            .await
+            .expect("remove worker unlinked canonical path");
+        let error = await_filesystem_task(
+            task,
+            Duration::from_millis(25),
+            "test asset reclaim",
+            Some(state),
+        )
+        .await
+        .expect_err("wedged reclaim must time out");
+        assert_eq!(error.status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
+
+        drop(content_guard);
+        drop(mutation_guard);
+        let backup_guard = tokio::time::timeout(Duration::from_secs(1), store.backup_guard())
+            .await
+            .expect("asset mutation guard released");
+        drop(backup_guard);
+
+        // Model a process restart before the detached worker gets a chance to
+        // restore. The safety filename binds the hash, so startup reconciliation
+        // repairs the referenced canonical path before admitting traffic.
+        let restarted = AssetStore::open(root.clone()).unwrap();
+        let report = restarted
+            .sweep_unreferenced(&HashSet::from([hash]))
+            .unwrap();
+        assert_eq!(report.stale_staging, 1);
+        restarted.verify_content(hash, bytes.len()).unwrap();
+
+        let next_mutation = store.mutation_guard().await;
+        let next_content = tokio::time::timeout(Duration::from_secs(1), store.content_guard(hash))
+            .await
+            .expect("per-hash guard released");
+        store.put(hash, bytes.clone()).await.unwrap();
+        drop(next_content);
+        drop(next_mutation);
+
+        release_tx.send(()).expect("release late remove worker");
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), done_rx)
+                .await
+                .expect("late remove completed")
+                .expect("late remove proof channel"),
+            Some(ErrorKind::TimedOut)
+        );
+        store.verify_content(hash, bytes.len()).unwrap();
+        let _ = fs::remove_dir_all(root);
     }
 }

@@ -127,7 +127,7 @@ export function AgentPill({ documentId, linkedSurface = null }: AgentPillProps) 
     receipt: HostedAgentToolResult,
     signal: AbortSignal,
   ) => retryIdempotent(
-    () => submitHostedAgentToolResult(runId, receipt),
+    () => submitHostedAgentToolResult(runId, receipt, { signal }),
     signal,
   ), []);
 
@@ -392,12 +392,15 @@ export function AgentPill({ documentId, linkedSurface = null }: AgentPillProps) 
       message: 'Sending only this instruction and the available command catalog to Hosted OpenAI…',
     });
     try {
-      const accepted = await retryIdempotent(() => createHostedAgentRun({
-        requestId,
-        documentId,
-        prompt: request,
-        tools,
-      }), controller.signal);
+      const accepted = await retryIdempotent(
+        () => createHostedAgentRun({
+          requestId,
+          documentId,
+          prompt: request,
+          tools,
+        }, { signal: controller.signal }),
+        controller.signal,
+      );
       if (controller.signal.aborted) return;
       activeRef.current.hostedRunId = accepted.runId;
       const record: ActiveHostedRunRecord = {
@@ -443,14 +446,18 @@ export function AgentPill({ documentId, linkedSurface = null }: AgentPillProps) 
       return;
     }
     let live = true;
-    void getHostedAgentCapabilities()
+    const controller = new AbortController();
+    void getHostedAgentCapabilities({ signal: controller.signal })
       .then((next) => {
         if (live) setCapabilities(next);
       })
       .catch(() => {
         if (live) setCapabilities(null);
       });
-    return () => { live = false; };
+    return () => {
+      live = false;
+      controller.abort(new DOMException('Agent capability probe closed.', 'AbortError'));
+    };
   }, [center.environment.workspaceKind]);
 
   useEffect(() => {

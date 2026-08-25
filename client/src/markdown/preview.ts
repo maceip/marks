@@ -1,14 +1,16 @@
 import DOMPurify, { type Config } from 'dompurify';
 import MarkdownWorker from '../workers/markdown.worker?worker';
-import type { TextEdit } from '../text/change';
+import { applyTextEdits, type TextEdit } from '../text/change';
 import { hydrateLocalAssetImages, revokeLocalAssetImages } from '../data/assets';
 import { watchDiagrams } from './mermaid';
 import { hydrateCrossDocumentBlocks } from './cross-document.ts';
 import type { BlockPatch, Heading, RenderRequest, RenderResponse, RenderStats } from './types';
+import { WorkerSupervisor, type WorkerFailure } from './worker-supervisor';
 
 /** First paint inserts this many blocks before yielding to the browser. */
 const FIRST_PAINT_BLOCKS = 48;
 const IDLE_PAINT_BLOCKS = 40;
+const RENDER_DEADLINE_MS = 20_000;
 let mathStyles: Promise<unknown> | null = null;
 
 function loadMathStylesWhenNeeded(blocks: BlockPatch[]): void {
@@ -42,13 +44,21 @@ function sanitize(html: string): string {
  * inside them survive an edit elsewhere in the document.
  */
 export class PreviewRenderer {
-  private readonly worker = new MarkdownWorker();
+  private readonly worker: WorkerSupervisor<RenderRequest, RenderResponse>;
   private nodes = new Map<string, HTMLElement>();
 
   private seq = 0;
   private inFlight: { seq: number; submittedAt: number } | null = null;
   private queuedFull: { text: string; submittedAt: number } | null = null;
-  private queuedEdits: { edits: TextEdit[]; submittedAt: number } | null = null;
+  private queuedEdits: {
+    edits: TextEdit[];
+    submittedAt: number;
+    baseChars: number;
+    chars: number;
+  } | null = null;
+  private sourceText = '';
+  private workerGeneration = '';
+  private workerTerminal = false;
   private destroyed = false;
   private idleHandle = 0;
   private readonly unwatchDiagrams: () => void;
@@ -57,7 +67,15 @@ export class PreviewRenderer {
   private headingsListener: ((headings: Heading[]) => void) | null = null;
 
   constructor(private readonly container: HTMLElement) {
-    this.worker.onmessage = (event: MessageEvent<RenderResponse>) => this.onRendered(event.data);
+    this.worker = new WorkerSupervisor<RenderRequest, RenderResponse>(
+      () => new MarkdownWorker({ name: 'marks-preview' }),
+      {
+        deadlineMs: RENDER_DEADLINE_MS,
+        onMessage: (response) => this.onRendered(response),
+        onRecover: (failure) => this.onWorkerRecovery(failure),
+        onTerminal: (failure) => this.onWorkerTerminal(failure),
+      },
+    );
     this.unwatchDiagrams = watchDiagrams(container);
   }
 
@@ -75,18 +93,29 @@ export class PreviewRenderer {
    * backlog of stale renders.
    */
   update(edits: readonly TextEdit[]): void {
-    if (this.destroyed || edits.length === 0) return;
+    if (this.destroyed || this.workerTerminal || edits.length === 0) return;
+    const baseChars = this.sourceText.length;
+    this.sourceText = applyTextEdits(this.sourceText, edits);
     if (!this.queuedEdits) {
-      this.queuedEdits = { edits: [], submittedAt: performance.now() };
+      this.queuedEdits = {
+        edits: [],
+        submittedAt: performance.now(),
+        baseChars,
+        chars: this.sourceText.length,
+      };
     }
     this.queuedEdits.edits.push(...edits.map((edit) => ({ ...edit })));
+    this.queuedEdits.chars = this.sourceText.length;
     this.pump();
   }
 
   /** Drop all caches and re-render from scratch (theme changes, doc switches). */
   invalidate(text: string): void {
+    if (this.destroyed || this.workerTerminal) return;
     this.cancelIdle();
-    this.post({ type: 'reset' });
+    this.sourceText = text;
+    this.workerGeneration = '';
+    this.post({ type: 'reset' }, false);
     this.nodes.clear();
     this.container.replaceChildren();
     // `text` already includes every edit queued before this reset.
@@ -96,28 +125,45 @@ export class PreviewRenderer {
   }
 
   private pump(): void {
-    if (this.inFlight) return;
+    if (this.inFlight || this.destroyed || this.workerTerminal) return;
+    if (this.queuedEdits && !this.workerGeneration) {
+      // A worker restart or full invalidation has no delta base. Every queued
+      // edit is already represented in sourceText, so replace it with one
+      // authoritative full render.
+      this.queuedEdits = null;
+      this.queuedFull = { text: this.sourceText, submittedAt: performance.now() };
+    }
     const queued = this.queuedFull ?? this.queuedEdits;
     if (!queued) return;
     this.seq += 1;
-    this.inFlight = { seq: this.seq, submittedAt: queued.submittedAt };
+    const seq = this.seq;
+    this.inFlight = { seq, submittedAt: queued.submittedAt };
+    let sent = false;
     if (this.queuedFull) {
       const { text } = this.queuedFull;
       this.queuedFull = null;
-      this.post({ type: 'render', seq: this.seq, text });
+      sent = this.post({ type: 'render', seq, text }, true);
     } else if (this.queuedEdits) {
-      const { edits } = this.queuedEdits;
+      const { edits, baseChars, chars } = this.queuedEdits;
       this.queuedEdits = null;
-      this.post({ type: 'patch', seq: this.seq, edits });
+      sent = this.post({
+        type: 'patch',
+        seq,
+        edits,
+        generation: this.workerGeneration,
+        baseChars,
+        chars,
+      }, true);
     }
+    if (!sent && this.inFlight?.seq === seq) this.inFlight = null;
   }
 
-  private post(message: RenderRequest): void {
-    this.worker.postMessage(message);
+  private post(message: RenderRequest, expectResponse: boolean): boolean {
+    return this.worker.post(message, expectResponse);
   }
 
   private onRendered(response: RenderResponse): void {
-    if (this.destroyed) return;
+    if (this.destroyed || this.workerTerminal) return;
     const request = this.inFlight;
     this.inFlight = null;
 
@@ -126,6 +172,19 @@ export class PreviewRenderer {
       this.pump();
       return;
     }
+
+    if (response.type === 'resync') {
+      this.workerGeneration = response.generation;
+      this.queuedEdits = null;
+      this.queuedFull = { text: this.sourceText, submittedAt: request.submittedAt };
+      // Reset parsing and DOM-presence caches before sending the authoritative
+      // source. The existing DOM stays visible until its replacement arrives.
+      this.post({ type: 'reset' }, false);
+      this.pump();
+      return;
+    }
+
+    this.workerGeneration = response.generation;
 
     const patchStart = performance.now();
     loadMathStylesWhenNeeded(response.blocks);
@@ -147,6 +206,44 @@ export class PreviewRenderer {
     });
 
     this.pump();
+  }
+
+  private onWorkerRecovery(failure: WorkerFailure): void {
+    if (this.destroyed || this.workerTerminal) return;
+    console.error('[marks] markdown worker failed; restarting', failure.error);
+    this.inFlight = null;
+    this.workerGeneration = '';
+    this.queuedEdits = null;
+    this.queuedFull = { text: this.sourceText, submittedAt: performance.now() };
+    queueMicrotask(() => {
+      if (this.destroyed || this.workerTerminal) return;
+      this.post({ type: 'reset' }, false);
+      this.pump();
+    });
+  }
+
+  private onWorkerTerminal(failure: WorkerFailure): void {
+    if (this.destroyed || this.workerTerminal) return;
+    this.workerTerminal = true;
+    this.inFlight = null;
+    this.queuedEdits = null;
+    this.queuedFull = null;
+    this.cancelIdle();
+    console.error('[marks] markdown worker stopped after recovery failed', failure.error);
+    revokeLocalAssetImages(this.container);
+    this.nodes.clear();
+    const node = document.createElement('div');
+    node.className = 'marks-block';
+    node.dataset.key = 'worker-terminal-error';
+    node.dataset.line = '0';
+    node.dataset.sourceStart = '0';
+    node.dataset.sourceEnd = String(this.sourceText.length);
+    node.innerHTML = sanitize(
+      '<div class="marks-callout marks-callout-danger"><p>Preview stopped responding. Reload this page to try again.</p></div>',
+    );
+    this.nodes.set('worker-terminal-error', node);
+    this.container.replaceChildren(node);
+    this.headingsListener?.([]);
   }
 
   /** Keyed reconciliation: unchanged runs of blocks cost zero DOM operations. */
@@ -247,7 +344,7 @@ export class PreviewRenderer {
     this.cancelIdle();
     this.unwatchDiagrams();
     revokeLocalAssetImages(this.container);
-    this.worker.terminate();
+    this.worker.destroy();
     this.nodes.clear();
     this.statsListener = null;
     this.headingsListener = null;

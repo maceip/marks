@@ -38,6 +38,7 @@ EOF
 BIN=""
 STATIC_DIR=""
 LISTEN="127.0.0.1:3000"
+LISTEN_SET=0
 URL=""
 RECEIPT="${MARKS_CI_RECEIPT:-}"
 SKIP_UI=0
@@ -63,6 +64,7 @@ while [ $# -gt 0 ]; do
     --listen)
       LISTEN=${2:?Error: --listen needs host:port.
   scripts/run-service-ci.sh --bin target/debug/marks-server --listen 127.0.0.1:3000 --static-dir client/dist}
+      LISTEN_SET=1
       shift 2
       ;;
     --url)
@@ -109,13 +111,28 @@ if [ -z "$URL" ] && [ -z "$BIN" ]; then
   exit 2
 fi
 
+if [ -n "$URL" ] && { [ -n "$BIN" ] || [ -n "$STATIC_DIR" ] || [ "$LISTEN_SET" -eq 1 ]; }; then
+  echo "Error: --url cannot be combined with --bin, --static-dir, or --listen." >&2
+  echo "  Choose an attached server (--url) or a process started by this harness (--bin)." >&2
+  exit 2
+fi
+
+if [ "$SKIP_UI" -eq 1 ] && [ "$SKIP_COLLAB" -eq 1 ]; then
+  echo "Error: --skip-ui and --skip-collab would run no proof." >&2
+  exit 2
+fi
+
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SERVER_PID=""
 SERVER_LOG=""
+RUN_SUCCEEDED=0
 cleanup() {
   if [ -n "$SERVER_PID" ]; then
     kill "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
+  fi
+  if [ "$RUN_SUCCEEDED" -ne 1 ] && [ -n "$RECEIPT" ]; then
+    rm -f -- "$RECEIPT"
   fi
 }
 trap cleanup EXIT
@@ -147,8 +164,12 @@ if [ -z "$URL" ]; then
   MARKS_STATIC_DIR="$STATIC_DIR" \
     "$BIN" >"$SERVER_LOG" 2>&1 &
   SERVER_PID=$!
-  bash "$ROOT/scripts/wait-for-server.sh" "$URL/healthz" "$SERVER_PID" 60 "$SERVER_LOG"
 fi
+
+# Read liveness is insufficient for a workflow that immediately creates and
+# journals documents. /readyz proves the process's FULL-sync SQLite writer has
+# completed a recent commit. Apply the same deadline to attached --url runs.
+bash "$ROOT/scripts/wait-for-server.sh" "$URL/readyz" "$SERVER_PID" 60 "$SERVER_LOG"
 
 if [ -z "$RECEIPT" ]; then
   RECEIPT=$(mktemp "${TMPDIR:-/tmp}/marks-ci-receipt.XXXXXX")
@@ -157,10 +178,24 @@ fi
 if [ "$SKIP_UI" -eq 0 ]; then
   echo "service-mode UI against $URL"
   node "$ROOT/scripts/ci-service-ui.mjs" --url "$URL" --browser "$BROWSER" --receipt "$RECEIPT"
+  UI_RESULT="passed"
 else
   echo "skipping service-mode UI"
   rm -f "$RECEIPT"
   RECEIPT=""
+  UI_RESULT="skipped"
+fi
+
+if [ "$SKIP_UI" -eq 0 ] && [ "$BROWSER" = "chromium" ]; then
+  echo "welcome recovery UI against $URL"
+  node "$ROOT/scripts/ci-welcome-ui.mjs" --url "$URL"
+  WELCOME_RESULT="passed"
+elif [ "$SKIP_UI" -eq 1 ]; then
+  echo "skipping welcome recovery UI with service-mode UI"
+  WELCOME_RESULT="skipped"
+else
+  echo "welcome recovery UI is covered by the Chromium lane"
+  WELCOME_RESULT="not-applicable"
 fi
 
 if [ "$SKIP_COLLAB" -eq 0 ]; then
@@ -174,8 +209,11 @@ if [ "$SKIP_COLLAB" -eq 0 ]; then
     cd "$ROOT"
     MARKS_URL="$URL" cargo test -p marks-server --test live_service --locked -- --ignored --nocapture
   )
+  COLLAB_RESULT="passed"
 else
   echo "skipping native two-peer room"
+  COLLAB_RESULT="skipped"
 fi
 
-echo "service-mode + multi-peer CI checks passed against $URL"
+RUN_SUCCEEDED=1
+echo "service CI checks passed against $URL (ui=$UI_RESULT, welcome=$WELCOME_RESULT, native-collab=$COLLAB_RESULT)"

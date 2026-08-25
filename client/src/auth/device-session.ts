@@ -72,7 +72,7 @@ export async function redeemEnrolledDevice(
   const session = sessionFromUnknown(await redeem.json());
   if (!session) return null;
   cacheSession(session);
-  await markDeviceEnrolled(session.deviceId);
+  void markDeviceEnrolled(session.deviceId).catch(() => undefined);
   void requestDurableStorage();
   return session;
 }

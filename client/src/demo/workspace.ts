@@ -1,9 +1,10 @@
-import { ABOUT_DOCUMENT, ABOUT_DOCUMENT_ID, ABOUT_DOCUMENT_TITLE } from '../content/about.ts';
+import { ABOUT_DOCUMENT_ID, ABOUT_DOCUMENT_TITLE } from '../content/about.ts';
+import { ABOUT_DOCUMENT } from '../content/marketing-markdown.ts';
 import type { DocumentMeta } from '../lib/api';
 
 export { ABOUT_DOCUMENT_ID, ABOUT_DOCUMENT_TITLE };
 
-export type TemplateId = 'blank' | 'brief' | 'meeting' | 'launch';
+export type TemplateId = 'blank' | 'notes' | 'brief' | 'meeting' | 'github-readme' | 'launch';
 
 export interface DocumentTemplate {
   id: TemplateId;
@@ -17,6 +18,15 @@ export interface LocalDocumentDraft {
   title?: string;
   content?: string;
   templateId?: TemplateId;
+  /** Semantic action key used to recover a service create across reloads. */
+  requestScope?: string;
+  /** Stable retry key for a service-side atomic create. Ignored in local mode. */
+  requestId?: string;
+}
+
+export interface MaterializedDocumentDraft {
+  title?: string;
+  content: string;
 }
 
 const WORKSPACE_KEY = 'marks:ui-workspace:v1';
@@ -33,6 +43,22 @@ export const DOCUMENT_TEMPLATES: DocumentTemplate[] = [
     description: 'A quiet page with nothing in your way.',
     accent: 'navy',
     content: '',
+  },
+  {
+    id: 'notes',
+    name: 'Notes app',
+    description: 'A lightweight running page for quick notes and pinned items.',
+    accent: 'navy',
+    content: `# Notes
+
+## Pinned
+
+- Add a pinned note
+
+## Today
+
+- Add a note
+`,
   },
   {
     id: 'brief',
@@ -72,10 +98,10 @@ Describe the change you want to create and why it matters now.
   },
   {
     id: 'meeting',
-    name: 'Working session',
+    name: 'Meeting',
     description: 'Decisions, open questions, and owners without ceremony.',
     accent: 'green',
-    content: `# Working session
+    content: `# Meeting
 
 **Date:** ${new Intl.DateTimeFormat('en', { dateStyle: 'long' }).format(new Date())}
 
@@ -94,6 +120,41 @@ What should be different when this session ends?
 ## Actions
 
 - [ ] Owner — next step
+`,
+  },
+  {
+    id: 'github-readme',
+    name: 'GitHub README',
+    description: 'Overview, installation, usage, development, and license.',
+    accent: 'green',
+    content: `# Project name
+
+One clear sentence about what this project does and who it is for.
+
+## Installation
+
+\`\`\`sh
+# Add the install command
+\`\`\`
+
+## Usage
+
+\`\`\`sh
+# Add the smallest useful example
+\`\`\`
+
+## Development
+
+- [ ] Document prerequisites
+- [ ] Add test and build commands
+
+## Contributing
+
+Issues and pull requests are welcome.
+
+## License
+
+Add the project license.
 `,
   },
   {
@@ -300,6 +361,18 @@ function deriveTitle(markdown: string, fallback: string): string {
   return heading?.slice(0, 90) || fallback;
 }
 
+export function materializeDocumentDraft(
+  draft: LocalDocumentDraft = {},
+): MaterializedDocumentDraft {
+  const template = DOCUMENT_TEMPLATES.find((item) => item.id === draft.templateId);
+  const content = draft.content ?? template?.content ?? '';
+  const explicitTitle = draft.title?.trim();
+  return {
+    title: explicitTitle || (template ? deriveTitle(content, template.name) : undefined),
+    content,
+  };
+}
+
 export function writeLocalDocumentText(id: string, markdown: string): void {
   localStorage.setItem(textKey(id), markdown);
   const documents = loadLocalDocuments();
@@ -315,19 +388,18 @@ export function writeLocalDocumentText(id: string, markdown: string): void {
 }
 
 export function createLocalDocument(draft: LocalDocumentDraft = {}): DocumentMeta {
-  const template = DOCUMENT_TEMPLATES.find((item) => item.id === draft.templateId);
-  const content = draft.content ?? template?.content ?? '';
+  const materialized = materializeDocumentDraft(draft);
   const now = Date.now();
   const id = `local-${crypto.randomUUID()}`;
   const document: DocumentMeta = {
     id,
-    title: draft.title?.trim() || deriveTitle(content, template?.name ?? 'Untitled'),
+    title: materialized.title ?? deriveTitle(materialized.content, 'Untitled'),
     engine: 'esbt',
-    chars: content.length,
+    chars: materialized.content.length,
     created_at: now,
     updated_at: now,
   };
-  localStorage.setItem(textKey(id), content);
+  localStorage.setItem(textKey(id), materialized.content);
   saveDocuments([document, ...loadLocalDocuments()]);
   return document;
 }

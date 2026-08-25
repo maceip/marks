@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { persistLockName, withPersistLock, writeSnapshotUnderLock } from './persist-lock.ts';
+import {
+  PersistLockPoisonedError,
+  PersistLockTimeoutError,
+  persistLockName,
+  withPersistLock,
+  writeSnapshotUnderLock,
+} from './persist-lock.ts';
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -92,4 +98,90 @@ test('a later exporter sees replica state that changed while the first writer he
   );
   await Promise.all([first, second]);
   assert.equal(disk, 'AB');
+});
+
+test('a non-cooperative write times out and permanently poisons its document lane', async () => {
+  const name = 'marks:persist:esbt:hung-write';
+  const startedAt = Date.now();
+  await assert.rejects(
+    withPersistLock(name, () => new Promise(() => undefined), { timeoutMs: 5 }),
+    PersistLockTimeoutError,
+  );
+  assert(Date.now() - startedAt < 250, 'hung persistence exceeded its absolute deadline');
+
+  let laterWorkRan = false;
+  await assert.rejects(
+    withPersistLock(name, async () => {
+      laterWorkRan = true;
+    }),
+    PersistLockPoisonedError,
+  );
+  assert.equal(laterWorkRan, false);
+});
+
+test('a caller stuck behind a non-cooperative process holder is bounded and never overlaps it', async () => {
+  const name = 'marks:persist:esbt:hung-queue';
+  let firstStarted = false;
+  const first = withPersistLock(
+    name,
+    () => {
+      firstStarted = true;
+      return new Promise(() => undefined);
+    },
+    { timeoutMs: 30 },
+  );
+  await delay(1);
+
+  let secondStarted = false;
+  const second = withPersistLock(
+    name,
+    async () => {
+      secondStarted = true;
+    },
+    { timeoutMs: 5 },
+  );
+  await assert.rejects(second, PersistLockTimeoutError);
+  await assert.rejects(first, PersistLockTimeoutError);
+  assert.equal(firstStarted, true);
+  assert.equal(secondStarted, false);
+});
+
+test('a non-cooperative Web Lock request is bounded before write work starts', async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  const request = () => new Promise<never>(() => undefined);
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: { locks: { request } },
+  });
+  try {
+    let workRan = false;
+    await assert.rejects(
+      withPersistLock(
+        'marks:persist:esbt:hung-web-lock',
+        async () => {
+          workRan = true;
+        },
+        { timeoutMs: 5 },
+      ),
+      PersistLockTimeoutError,
+    );
+    assert.equal(workRan, false);
+  } finally {
+    if (descriptor) Object.defineProperty(globalThis, 'navigator', descriptor);
+    else Reflect.deleteProperty(globalThis, 'navigator');
+  }
+});
+
+test('one poisoned document lane does not block another document', async () => {
+  const poisoned = 'marks:persist:esbt:isolated-poison';
+  await assert.rejects(
+    withPersistLock(poisoned, () => new Promise(() => undefined), { timeoutMs: 5 }),
+    PersistLockTimeoutError,
+  );
+
+  let ran = false;
+  await withPersistLock('marks:persist:esbt:healthy-neighbor', async () => {
+    ran = true;
+  });
+  assert.equal(ran, true);
 });

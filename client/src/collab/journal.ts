@@ -1,4 +1,5 @@
-import { get as idbGet, set as idbSet, update as idbUpdate } from 'idb-keyval';
+import { del as idbDelete, get as idbGet, set as idbSet, update as idbUpdate } from 'idb-keyval';
+import { runWithTimeout } from '../browser/network.ts';
 import { persistLockName, withPersistLock } from '../browser/persist-lock.ts';
 import type { MutationKind } from './protocol.ts';
 import { JOURNAL_RETAINED_THRESHOLD } from './profile.ts';
@@ -6,6 +7,7 @@ import type { DocumentCapabilities } from './types.ts';
 
 export { JOURNAL_RETAINED_THRESHOLD } from './profile.ts';
 export const JOURNAL_PRUNE_INTERVAL_MS = 10 * 60 * 1000;
+export const JOURNAL_OPEN_TIMEOUT_MS = 3_000;
 
 export interface JournalMutation {
   id: string;
@@ -51,6 +53,58 @@ export async function readReplicaJournal(docId: string): Promise<ReplicaJournalR
   return normalizeRecord(await idbGet<unknown>(journalCacheKey(docId)));
 }
 
+export class ReplicaJournalUnavailableError extends Error {
+  readonly reason: unknown;
+
+  constructor(reason: unknown) {
+    super(
+      "Marks could not safely read this page's offline edits. Reload and try again; the durable local copy was left untouched.",
+    );
+    this.name = 'ReplicaJournalUnavailableError';
+    this.reason = reason;
+  }
+}
+
+/**
+ * Opening a replica is fail-closed: an unreadable journal may contain edits
+ * that have not reached the server, so it must never be treated as an empty
+ * journal. The caller gets a bounded, recoverable opening error instead.
+ */
+export async function readReplicaJournalForOpen(
+  docId: string,
+  options: {
+    timeoutMs?: number;
+    read?: (documentId: string) => Promise<ReplicaJournalRecord | null>;
+  } = {},
+): Promise<ReplicaJournalRecord | null> {
+  const read = options.read ?? readReplicaJournal;
+  try {
+    return await runWithTimeout(
+      () => read(docId),
+      options.timeoutMs ?? JOURNAL_OPEN_TIMEOUT_MS,
+    );
+  } catch (error) {
+    throw new ReplicaJournalUnavailableError(error);
+  }
+}
+
+/**
+ * Do not construct or connect a replica until its durable local state has
+ * been read successfully. Keeping the continuation behind this gate makes it
+ * impossible for a read failure to be reinterpreted as an empty journal.
+ */
+export async function openWithReplicaJournal<T>(
+  docId: string,
+  continueOpening: (stored: ReplicaJournalRecord | null) => Promise<T>,
+  options: {
+    timeoutMs?: number;
+    read?: (documentId: string) => Promise<ReplicaJournalRecord | null>;
+  } = {},
+): Promise<T> {
+  const stored = await readReplicaJournalForOpen(docId, options);
+  return continueOpening(stored);
+}
+
 /** Replace a journal under the per-document lock (primarily import/tests). */
 export async function writeReplicaJournal(
   docId: string,
@@ -58,6 +112,13 @@ export async function writeReplicaJournal(
 ): Promise<void> {
   await withPersistLock(persistLockName('esbt', docId), async () => {
     await idbSet(journalCacheKey(docId), cloneRecord(record));
+  });
+}
+
+/** Remove one unusable journal without disturbing any other local document. */
+export async function deleteReplicaJournal(docId: string): Promise<void> {
+  await withPersistLock(persistLockName('esbt', docId), async () => {
+    await idbDelete(journalCacheKey(docId));
   });
 }
 

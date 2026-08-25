@@ -15,14 +15,17 @@ use marks_auth::{DocumentAction, DocumentId, authorize_document_action};
 use reqwest::{Client, StatusCode, Url, redirect::Policy};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::sync::Arc;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+use tokio::sync::Semaphore;
 
 const MAX_LINKS: usize = 32;
 const MAX_URL_BYTES: usize = 2_048;
 const MAX_REDIRECTS: usize = 3;
 const MAX_CROSSREF_BYTES: usize = 1024 * 1024;
+const DNS_LOOKUP_TIMEOUT: Duration = Duration::from_secs(4);
+const MAX_BLOCKING_DNS_LOOKUPS: usize = 8;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -279,7 +282,7 @@ async fn check_url(raw: String) -> Value {
     }
 }
 
-enum CheckError {
+pub(crate) enum CheckError {
     Blocked,
     Unavailable,
 }
@@ -315,7 +318,7 @@ async fn follow_url(raw: &str) -> Result<(StatusCode, String, bool), CheckError>
     Err(CheckError::Unavailable)
 }
 
-fn parse_public_url(raw: &str) -> Result<Url, CheckError> {
+pub(crate) fn parse_public_url(raw: &str) -> Result<Url, CheckError> {
     if raw.len() > MAX_URL_BYTES {
         return Err(CheckError::Blocked);
     }
@@ -332,32 +335,7 @@ fn parse_public_url(raw: &str) -> Result<Url, CheckError> {
 }
 
 async fn pinned_request(url: &Url, head: bool) -> Result<reqwest::Response, CheckError> {
-    let host = url.host_str().ok_or(CheckError::Blocked)?;
-    let port = url.port_or_known_default().ok_or(CheckError::Blocked)?;
-    let literal_ip = host
-        .strip_prefix('[')
-        .and_then(|host| host.strip_suffix(']'))
-        .unwrap_or(host)
-        .parse::<IpAddr>()
-        .ok();
-    let address = match literal_ip {
-        Some(address) if public_ip(address) => SocketAddr::new(address, port),
-        Some(_) => return Err(CheckError::Blocked),
-        None => tokio::net::lookup_host((host, port))
-            .await
-            .map_err(|_| CheckError::Unavailable)?
-            .find(|address| public_ip(address.ip()))
-            .ok_or(CheckError::Blocked)?,
-    };
-    let mut client = Client::builder()
-        .redirect(Policy::none())
-        .no_proxy()
-        .connect_timeout(Duration::from_secs(4))
-        .timeout(Duration::from_secs(8));
-    if literal_ip.is_none() {
-        client = client.resolve(host, address);
-    }
-    let client = client.build().map_err(|_| CheckError::Unavailable)?;
+    let client = pinned_client(url).await?;
     let request = if head {
         client.head(url.clone())
     } else {
@@ -371,6 +349,75 @@ async fn pinned_request(url: &Url, head: bool) -> Result<reqwest::Response, Chec
             "text/html,application/xhtml+xml;q=0.8,*/*;q=0.1",
         )
         .header(reqwest::header::USER_AGENT, "Marks-Link-Inspector/0.1")
+        .send()
+        .await
+        .map_err(|_| CheckError::Unavailable)
+}
+
+/// Resolve a URL to a public address and return a client pinned to that exact
+/// resolution. Callers must repeat this for every redirect hop.
+async fn pinned_client(url: &Url) -> Result<Client, CheckError> {
+    let host = url.host_str().ok_or(CheckError::Blocked)?;
+    let port = url.port_or_known_default().ok_or(CheckError::Blocked)?;
+    let literal_ip = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host)
+        .parse::<IpAddr>()
+        .ok();
+    let address = match literal_ip {
+        Some(address) if public_ip(address) => SocketAddr::new(address, port),
+        Some(_) => return Err(CheckError::Blocked),
+        None => bounded_lookup_host(host, port)
+            .await?
+            .into_iter()
+            .find(|address| public_ip(address.ip()))
+            .ok_or(CheckError::Blocked)?,
+    };
+    let mut client = Client::builder()
+        .redirect(Policy::none())
+        .no_proxy()
+        .connect_timeout(Duration::from_secs(4))
+        .timeout(Duration::from_secs(8));
+    if literal_ip.is_none() {
+        client = client.resolve(host, address);
+    }
+    client.build().map_err(|_| CheckError::Unavailable)
+}
+
+/// The platform resolver can block below Tokio and cannot be cancelled safely.
+/// A hard waiter deadline plus a process-wide semaphore bounds both latency and
+/// the number of orphaned resolver calls if the OS resolver wedges.
+async fn bounded_lookup_host(host: &str, port: u16) -> Result<Vec<SocketAddr>, CheckError> {
+    static LOOKUPS: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    let permit = LOOKUPS
+        .get_or_init(|| Arc::new(Semaphore::new(MAX_BLOCKING_DNS_LOOKUPS)))
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| CheckError::Unavailable)?;
+    let host = host.to_owned();
+    let lookup = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        (host.as_str(), port)
+            .to_socket_addrs()
+            .map(|addresses| addresses.collect::<Vec<_>>())
+    });
+    tokio::time::timeout(DNS_LOOKUP_TIMEOUT, lookup)
+        .await
+        .map_err(|_| CheckError::Unavailable)?
+        .map_err(|_| CheckError::Unavailable)?
+        .map_err(|_| CheckError::Unavailable)
+}
+
+pub(crate) async fn pinned_public_get(url: &Url) -> Result<reqwest::Response, CheckError> {
+    pinned_client(url)
+        .await?
+        .get(url.clone())
+        .header(
+            reqwest::header::ACCEPT,
+            "text/html,application/xhtml+xml,text/plain;q=0.8",
+        )
+        .header(reqwest::header::USER_AGENT, "Marks-Importer/0.1")
         .send()
         .await
         .map_err(|_| CheckError::Unavailable)

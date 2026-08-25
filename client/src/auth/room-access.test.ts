@@ -92,6 +92,34 @@ test('scratch authority is explicit on snapshot and admission requests', async (
   assert.equal(ticket.roomUrl, 'ws://localhost:5173/collab/esbt/document_1234');
 });
 
+test('a scratch visitor accepts the public editor role without becoming an owner', async () => {
+  const capability = encodeBase64Url(new Uint8Array(32).fill(7));
+  const access = createMarksDocumentAccess({
+    authority: () => ({
+      kind: 'scratch',
+      credential: {
+        version: 1,
+        scratchId: 'scratch_123456',
+        capability,
+        expiresAtMs: 50_000,
+      },
+    }),
+    origin: 'https://marks.example',
+    fetch: async () => Response.json({
+      roomUrl: '/collab/esbt/document_1234',
+      ticketId: 'ticket_public1234',
+      ticketSecret,
+      role: 'editor',
+      siteId: '9',
+      displayIdentity: { participantId: 'guest-public', displayName: 'Anonymous Otter' },
+    }),
+  });
+
+  const ticket = await access.admit('document_1234', undefined, new AbortController().signal);
+  assert.equal(ticket.authority, 'scratch');
+  assert.equal(ticket.role, 'editor');
+});
+
 test('room admission rejects credential-bearing and cross-origin URLs', async () => {
   for (const roomUrl of [
     'wss://evil.example/collab/esbt/document_1234',
@@ -144,7 +172,7 @@ test('admission rejects missing, unknown, or authority-incompatible roles', asyn
         capability: encodeBase64Url(new Uint8Array(32).fill(7)),
         expiresAtMs: 50_000,
       },
-    }, 'editor'],
+    }, 'viewer'],
   ] as const) {
     const access = createMarksDocumentAccess({
       authority: () => authority,

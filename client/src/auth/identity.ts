@@ -1,4 +1,5 @@
 import { applyServiceCallerHeaders, ensureServiceCaller, setActiveCaller } from './caller.ts';
+import { fetchWithTimeout, SERVICE_REQUEST_TIMEOUT_MS } from '../browser/network.ts';
 import {
   generateDeviceKey,
   loadDeviceKey,
@@ -74,15 +75,20 @@ async function readJson(response: Response): Promise<unknown> {
   }
 }
 
-export async function mintPairing(): Promise<PairingTicket> {
+function identityFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  return fetchWithTimeout(input, init, SERVICE_REQUEST_TIMEOUT_MS);
+}
+
+export async function mintPairing(signal?: AbortSignal): Promise<PairingTicket> {
   const caller = await ensureServiceCaller();
-  if (caller.kind !== 'scratch') throw new Error('pairing requires a temporary workspace');
+  if (caller.kind !== 'scratch') throw new Error('pairing requires an anonymous workspace');
   const headers = new Headers({ Accept: 'application/json' });
   applyServiceCallerHeaders(headers, caller);
-  const response = await fetch('/v1/auth/pairings', {
+  const response = await identityFetch('/v1/auth/pairings', {
     method: 'POST',
     credentials: 'same-origin',
     headers,
+    signal,
   });
   if (!response.ok) throw new Error(`pairing mint failed: ${response.status}`);
   const body = (await response.json()) as Record<string, unknown>;
@@ -107,7 +113,7 @@ export async function mintPairing(): Promise<PairingTicket> {
 export async function lookupPairingWords(words: string): Promise<PairingDetails> {
   const canonical = normalizePairingWords(words);
   if (!canonical) throw new Error('pairing words must be four English words');
-  const response = await fetch('/v1/auth/pairings/lookup', {
+  const response = await identityFetch('/v1/auth/pairings/lookup', {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -118,7 +124,7 @@ export async function lookupPairingWords(words: string): Promise<PairingDetails>
 }
 
 export async function inspectPairing(pairingId: string, secret: string): Promise<PairingDetails> {
-  const response = await fetch(`/v1/auth/pairings/${pairingId}/inspect`, {
+  const response = await identityFetch(`/v1/auth/pairings/${pairingId}/inspect`, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -173,7 +179,7 @@ export async function bootstrapPairing(
     expiresAtMs: BigInt(details.expiresAtMs),
   };
   const signature = await signControllerBootstrap(key.privateKey, bootstrap);
-  const response = await fetch(`/v1/auth/pairings/${details.pairingId}/bootstrap`, {
+  const response = await identityFetch(`/v1/auth/pairings/${details.pairingId}/bootstrap`, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -201,7 +207,7 @@ export async function bootstrapPairing(
   if (!session) throw new Error('pairing bootstrap returned no session');
   cacheSession(session);
   setActiveCaller({ kind: 'session' });
-  await markController(controllerId, deviceId);
+  void markController(controllerId, deviceId).catch(() => undefined);
   void requestDurableStorage();
   return session;
 }
@@ -213,10 +219,10 @@ export async function bootstrapPairing(
  * scratch documents, and sets this tab's session cookie directly. There is
  * no pairing and no finalize step.
  */
-export async function selfBootstrap(): Promise<SessionInfo> {
+export async function selfBootstrap(signal?: AbortSignal): Promise<SessionInfo> {
   const caller = await ensureServiceCaller();
-  if (caller.kind !== 'scratch') throw new Error('keep requires a temporary workspace');
-  const key = await bindPendingDevice();
+  if (caller.kind !== 'scratch') throw new Error('login requires an anonymous workspace');
+  const key = await bindPendingDevice(signal);
   const controllerId = createOpaqueId('controller');
   const now = Date.now();
   const expiresAtMs = now + 90_000;
@@ -232,7 +238,7 @@ export async function selfBootstrap(): Promise<SessionInfo> {
   });
   const headers = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' });
   applyServiceCallerHeaders(headers, caller);
-  const response = await fetch(`/v1/auth/scratch/${caller.credential.scratchId}/bootstrap`, {
+  const response = await identityFetch(`/v1/auth/scratch/${caller.credential.scratchId}/bootstrap`, {
     method: 'POST',
     credentials: 'same-origin',
     headers,
@@ -248,6 +254,7 @@ export async function selfBootstrap(): Promise<SessionInfo> {
       },
       signature: encodeBase64Url(signature),
     }),
+    signal,
   });
   if (!response.ok) throw new Error(`self bootstrap failed: ${response.status}`);
   const session = sessionFromUnknown(await response.json());
@@ -255,7 +262,7 @@ export async function selfBootstrap(): Promise<SessionInfo> {
   cacheSession(session);
   setActiveCaller({ kind: 'session' });
   clearScratchCredential(sessionStorage);
-  await markController(controllerId, key.deviceId);
+  void markController(controllerId, key.deviceId).catch(() => undefined);
   void requestDurableStorage();
   return session;
 }
@@ -289,7 +296,7 @@ export async function approvePairing(
     expiresAtMs: BigInt(details.expiresAtMs),
   };
   const signature = await signDeviceGrant(key.privateKey, grant);
-  const response = await fetch(`/v1/auth/pairings/${details.pairingId}/approve`, {
+  const response = await identityFetch(`/v1/auth/pairings/${details.pairingId}/approve`, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -315,22 +322,29 @@ export async function approvePairing(
   if (!response.ok) throw new Error(`pairing approve failed: ${response.status}`);
 }
 
-export async function finalizePairing(pairingId: string): Promise<SessionInfo | 'pending' | 'gone'> {
+export async function finalizePairing(
+  pairingId: string,
+  signal?: AbortSignal,
+): Promise<SessionInfo | 'pending' | 'gone'> {
   const caller = await ensureServiceCaller({ forceProbe: false });
   if (caller.kind !== 'scratch') return 'gone';
   const headers = new Headers({ Accept: 'application/json' });
   applyServiceCallerHeaders(headers, caller);
-  const response = await fetch(`/v1/auth/pairings/${pairingId}/finalize`, {
+  const response = await identityFetch(`/v1/auth/pairings/${pairingId}/finalize`, {
     method: 'POST',
     credentials: 'same-origin',
     headers,
+    signal,
   });
   if (response.status === 201) {
     const session = sessionFromUnknown(await response.json());
     if (!session) return 'gone';
     cacheSession(session);
     setActiveCaller({ kind: 'session' });
-    await markDeviceEnrolled(session.deviceId);
+    // The HTTP-only session and in-memory caller are authoritative now. A
+    // blocked IndexedDB transaction must not delay that application-level
+    // promotion; return-visit enrollment can be retried independently.
+    void markDeviceEnrolled(session.deviceId).catch(() => undefined);
     void requestDurableStorage();
     return session;
   }
@@ -342,7 +356,7 @@ export async function finalizePairing(pairingId: string): Promise<SessionInfo | 
 }
 
 export async function fetchSession(): Promise<SessionInfo | null> {
-  const response = await fetch('/v1/auth/session', { credentials: 'same-origin' });
+  const response = await identityFetch('/v1/auth/session', { credentials: 'same-origin' });
   if (!response.ok) return null;
   const session = sessionFromUnknown(await response.json());
   if (session) cacheSession(session);
@@ -350,7 +364,7 @@ export async function fetchSession(): Promise<SessionInfo | null> {
 }
 
 export async function listDevices(): Promise<DeviceInventory> {
-  const response = await fetch('/v1/auth/devices', { credentials: 'same-origin' });
+  const response = await identityFetch('/v1/auth/devices', { credentials: 'same-origin' });
   if (!response.ok) throw new Error(`device list failed: ${response.status}`);
   return (await response.json()) as DeviceInventory;
 }
@@ -358,7 +372,7 @@ export async function listDevices(): Promise<DeviceInventory> {
 export async function logout(): Promise<void> {
   const session = getCachedSession() ?? (await fetchSession());
   if (!session) return;
-  const response = await fetch('/v1/auth/session', {
+  const response = await identityFetch('/v1/auth/session', {
     method: 'DELETE',
     credentials: 'same-origin',
     headers: { 'X-Marks-CSRF': session.csrf, Accept: 'application/json' },
@@ -373,7 +387,7 @@ export async function logout(): Promise<void> {
 export async function revokeDevice(deviceId: string): Promise<void> {
   const session = getCachedSession() ?? (await fetchSession());
   if (!session) throw new Error('revoke requires a live session');
-  const response = await fetch(`/v1/auth/devices/${deviceId}`, {
+  const response = await identityFetch(`/v1/auth/devices/${deviceId}`, {
     method: 'DELETE',
     credentials: 'same-origin',
     headers: { 'X-Marks-CSRF': session.csrf, Accept: 'application/json' },

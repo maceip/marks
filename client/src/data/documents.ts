@@ -1,24 +1,17 @@
 import { aboutDocumentMeta, isAboutDocument } from '../content/about';
-import {
-  createLocalDocument,
-  deleteLocalDocument,
-  duplicateLocalDocument,
-  getLocalDocument,
-  loadLocalDocuments,
-  loadLocalTrash,
-  purgeLocalDocument,
-  renameLocalDocument,
-  restoreLocalDocument,
-  seedAboutDocumentText,
-  WORKSPACE_EVENT,
-  type LocalDocumentDraft,
-} from '../demo/workspace';
+import { runWithTimeout, SERVICE_REQUEST_TIMEOUT_MS } from '../browser/network.ts';
+import type { LocalDocumentDraft } from '../demo/workspace';
 import type { DocumentMeta } from '../lib/api';
 import { UI_DATA_MODE } from '../lib/product';
 import { ServiceError } from '../lib/service-errors';
 import { loadServiceApi } from '../lib/service-api.ts';
 
 const DOCUMENT_REPOSITORY_EVENT = 'marks:document-repository-change';
+const LOCAL_WORKSPACE_EVENT = 'marks:workspace-change';
+
+function loadWorkspace(): Promise<typeof import('../demo/workspace')> {
+  return runWithTimeout(() => import('../demo/workspace'), SERVICE_REQUEST_TIMEOUT_MS);
+}
 
 export function signalDocumentRepositoryChange(): void {
   window.dispatchEvent(new CustomEvent(DOCUMENT_REPOSITORY_EVENT));
@@ -32,7 +25,7 @@ export interface DocumentRepository {
   get(id: string): Promise<DocumentMeta | null>;
   create(draft?: LocalDocumentDraft): Promise<DocumentMeta>;
   rename(id: string, title: string): Promise<DocumentMeta | null>;
-  duplicate(id: string, markdown?: string): Promise<DocumentMeta | null>;
+  duplicate(id: string, markdown?: string, requestId?: string): Promise<DocumentMeta | null>;
   remove(id: string): Promise<void>;
   listTrash(): Promise<DocumentMeta[]>;
   restore(id: string): Promise<DocumentMeta | null>;
@@ -49,29 +42,29 @@ function createDocumentRepository(): DocumentRepository {
     return {
       mode: 'local',
       async list() {
-        return loadLocalDocuments();
+        return (await loadWorkspace()).loadLocalDocuments();
       },
       async get(id) {
-        return getLocalDocument(id);
+        return (await loadWorkspace()).getLocalDocument(id);
       },
       async create(draft) {
-        return createLocalDocument(draft);
+        return (await loadWorkspace()).createLocalDocument(draft);
       },
       async rename(id, title) {
-        return renameLocalDocument(id, title);
+        return (await loadWorkspace()).renameLocalDocument(id, title);
       },
       async duplicate(id, markdown) {
-        return duplicateLocalDocument(id, markdown);
+        return (await loadWorkspace()).duplicateLocalDocument(id, markdown);
       },
       async remove(id) {
         if (isAboutDocument(id)) throw new Error('the built-in About document cannot be trashed');
-        deleteLocalDocument(id);
+        (await loadWorkspace()).deleteLocalDocument(id);
       },
       async listTrash() {
-        return loadLocalTrash();
+        return (await loadWorkspace()).loadLocalTrash();
       },
       async restore(id) {
-        return restoreLocalDocument(id);
+        return (await loadWorkspace()).restoreLocalDocument(id);
       },
       async purge(id) {
         const [{ purgeLocalReviewMetadata }, { purgeLocalDocumentAssets }] = await Promise.all([
@@ -82,12 +75,12 @@ function createDocumentRepository(): DocumentRepository {
           purgeLocalReviewMetadata(id),
           purgeLocalDocumentAssets(id),
         ]);
-        purgeLocalDocument(id);
+        (await loadWorkspace()).purgeLocalDocument(id);
       },
       subscribe(listener) {
         const onChange = () => listener();
-        window.addEventListener(WORKSPACE_EVENT, onChange);
-        return () => window.removeEventListener(WORKSPACE_EVENT, onChange);
+        window.addEventListener(LOCAL_WORKSPACE_EVENT, onChange);
+        return () => window.removeEventListener(LOCAL_WORKSPACE_EVENT, onChange);
       },
     };
   }
@@ -96,13 +89,11 @@ function createDocumentRepository(): DocumentRepository {
     mode: 'service',
     async list() {
       const { documents } = await (await loadServiceApi()).listDocuments();
-      seedAboutDocumentText();
       const about = aboutDocumentMeta();
       return [about, ...documents.filter((document) => !isAboutDocument(document.id))];
     },
     async get(id) {
       if (isAboutDocument(id)) {
-        seedAboutDocumentText();
         return aboutDocumentMeta();
       }
       try {
@@ -118,9 +109,11 @@ function createDocumentRepository(): DocumentRepository {
       }
     },
     async create(draft) {
+      const materialized = (await loadWorkspace()).materializeDocumentDraft(draft);
       const { document } = await (await loadServiceApi()).createDocument({
-        title: draft?.title,
-        markdown: draft?.content,
+        title: materialized.title,
+        markdown: materialized.content,
+        requestId: draft?.requestId,
       });
       signalDocumentRepositoryChange();
       return document;
@@ -135,9 +128,9 @@ function createDocumentRepository(): DocumentRepository {
         throw error;
       }
     },
-    async duplicate(id) {
+    async duplicate(id, _markdown, requestId) {
       try {
-        const { document } = await (await loadServiceApi()).duplicateDocument(id);
+        const { document } = await (await loadServiceApi()).duplicateDocument(id, requestId);
         signalDocumentRepositoryChange();
         return document;
       } catch (error) {

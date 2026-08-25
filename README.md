@@ -1,4 +1,6 @@
-<a href="https://marks.secure.build"><img width="256" src="docs/screenshots/split-light.png" alt="Marks split workspace" /></a>
+<a href="https://marks.secure.build">
+<img width="256" src="https://github.com/user-attachments/assets/f66e8cde-a9af-479c-91d1-df2c68107087" />
+</a>
 
 [not ready for production // do not use ]
 # marks
@@ -102,10 +104,17 @@ people to expect:
 - **Offline editing**, with local persistence, multi-tab replica sync, and automatic resync
 - **Voice input** where the browser exposes SpeechRecognition
 - **Document-scoped copy / paste / select-all / right-click**, including HTML→markdown paste
+- **Public anonymous collaboration by opaque page slug** — every service-mode
+  anonymous page is saved immediately, joins without sharing settings, and
+  records a persistence milestone after its seventh committed edit
+- **Start-from-template ribbon** with Notes, Meeting, and GitHub README,
+  followed by Log In for anonymous clients, protected web-page→Markdown
+  import, browser-Wasm PDF drop/picker conversion, and Word plus table-only
+  Excel conversion
 - **Light/dark themes, compact density, reduced glass and reduced motion**, with
   explicit phone, foldable, tablet, and desktop postures
-- **Export** to `.md`; the Rust server will add revocable,
-  permission-checked share links
+- **Export** to `.md`, public anonymous page URLs, and revocable,
+  permission-checked account share links
 
 ## Architecture
 
