@@ -81,7 +81,18 @@ export function Benchmark({ onBack }: BenchmarkProps) {
     setError(null);
     setPhase('Starting…');
 
-    const worker = new BenchWorker();
+    let worker: Worker;
+    try {
+      worker = new BenchWorker();
+    } catch (workerError) {
+      setError(
+        workerError instanceof Error
+          ? workerError.message
+          : 'The benchmark worker could not start.',
+      );
+      setPhase(null);
+      return;
+    }
     workerRef.current = worker;
     const supervisor = superviseBenchmarkWorker(worker, {
       onMessage: (message) => {

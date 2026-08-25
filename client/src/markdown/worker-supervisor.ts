@@ -31,7 +31,7 @@ const systemTimer: WorkerTimer = {
  * surfaced as terminal. Any valid response replenishes that recovery budget.
  */
 export class WorkerSupervisor<Request, Response> {
-  private worker: Worker | null;
+  private worker: Worker | null = null;
   private deadlineHandle: unknown = null;
   private awaitingResponse = false;
   private failuresWithoutResponse = 0;
@@ -49,7 +49,18 @@ export class WorkerSupervisor<Request, Response> {
     this.options = options;
     this.maxRecoveries = options.maxRecoveries ?? 1;
     this.timer = options.timer ?? systemTimer;
-    this.worker = this.spawn();
+    try {
+      this.worker = this.spawn();
+    } catch (error) {
+      this.stopped = true;
+      const failure: WorkerFailure = {
+        kind: 'error',
+        error: asError(error, 'Markdown worker could not start'),
+      };
+      // Let an owner finish assigning this supervisor before its terminal
+      // callback renders fallback UI.
+      queueMicrotask(() => this.options.onTerminal(failure));
+    }
   }
 
   post(message: Request, expectResponse: boolean): boolean {

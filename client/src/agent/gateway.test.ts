@@ -174,3 +174,22 @@ test('SSE parsing abandons a stream that stops producing bytes', { timeout: 1_00
     (error: unknown) => error instanceof DOMException && error.name === 'TimeoutError',
   );
 });
+
+test('SSE timeout does not await a non-cooperative stream cancel', { timeout: 1_000 }, async () => {
+  let cancels = 0;
+  const stalled = new ReadableStream<Uint8Array>({
+    start() {},
+    cancel() {
+      cancels += 1;
+      return new Promise(() => undefined);
+    },
+  });
+  const events = parseEventStream(stalled, undefined, 5);
+  const started = Date.now();
+  await assert.rejects(
+    events.next(),
+    (error: unknown) => error instanceof DOMException && error.name === 'TimeoutError',
+  );
+  assert.equal(cancels, 1);
+  assert.ok(Date.now() - started < 500);
+});

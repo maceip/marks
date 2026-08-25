@@ -93,6 +93,9 @@ const MAX_VV_QUERY_BYTES = 4_096;
 const UNDO_MERGE_MS = 500;
 const MARKDOWN_CHECKPOINT_MS = 220;
 export const FINAL_CHECKPOINT_RELEASE_MS = PERSIST_LOCK_TIMEOUT_MS + 250;
+export const SOCKET_HANDSHAKE_TIMEOUT_MS = 10_000;
+export const SOCKET_INITIAL_SYNC_TIMEOUT_MS = 10_000;
+export const SOCKET_COMMIT_TIMEOUT_MS = 15_000;
 
 const userKey = (siteId: string) => `${siteId}-cm-user`;
 const fromCrdt = Annotation.define<boolean>();
@@ -177,6 +180,8 @@ export class EsbtEngine implements CollabSession {
 
   private saveTimer: number | null = null;
   private markdownTimer: number | null = null;
+  private socketDeadlineTimer: number | null = null;
+  private socketDeadlineTarget: WebSocket | null = null;
   private readonly unsubscribers: Array<() => void> = [];
   private readonly changeListeners = new Set<(change: DocumentChange) => void>();
   private readonly statusListeners = new Set<(status: ConnectionStatus) => void>();
@@ -964,10 +969,15 @@ export class EsbtEngine implements CollabSession {
     socket.binaryType = 'arraybuffer';
     this.socket = socket;
     this.serverSynced = false;
+    this.armSocketDeadline(socket, SOCKET_HANDSHAKE_TIMEOUT_MS);
 
-    socket.addEventListener('message', (event) => this.onMessage(event.data as ArrayBuffer));
+    socket.addEventListener('message', (event) => {
+      if (this.socket === socket) this.onMessage(event.data as ArrayBuffer);
+    });
     socket.addEventListener('open', () => {
+      if (this.socket !== socket) return;
       this.reconnectDelay = RECONNECT_MIN_MS;
+      this.armSocketDeadline(socket, SOCKET_INITIAL_SYNC_TIMEOUT_MS);
       this.send(MSG_PRESENCE_DELTA, this.ephemeral.encodeAll());
     });
     socket.addEventListener('close', (event) => this.onDisconnect(socket, event.code));
@@ -976,6 +986,7 @@ export class EsbtEngine implements CollabSession {
 
   private onDisconnect(socket: WebSocket, code?: number): void {
     if (this.socket !== socket) return;
+    this.clearSocketDeadline(socket);
     this.socket = null;
     this.serverSynced = false;
     if (this.destroyed || this.storageFatal) return;
@@ -992,6 +1003,31 @@ export class EsbtEngine implements CollabSession {
       this.applyPermissionRole(null);
     }
     this.scheduleReconnect();
+  }
+
+  private armSocketDeadline(socket: WebSocket, timeoutMs: number): void {
+    this.clearSocketDeadline();
+    if (this.socket !== socket || this.destroyed || this.storageFatal) return;
+    this.socketDeadlineTarget = socket;
+    this.socketDeadlineTimer = window.setTimeout(() => {
+      if (this.socket !== socket || this.socketDeadlineTarget !== socket) return;
+      // Neither WebSocket construction nor `close()` is guaranteed to produce
+      // an event when the network stack is wedged. Enter the ordinary retry
+      // path ourselves, then make a best-effort transport close.
+      this.onDisconnect(socket);
+      try {
+        socket.close(1013, 'connection progress timeout');
+      } catch {
+        // The exact socket is already detached and scheduled for retry.
+      }
+    }, timeoutMs);
+  }
+
+  private clearSocketDeadline(socket?: WebSocket): void {
+    if (socket && this.socketDeadlineTarget !== socket) return;
+    if (this.socketDeadlineTimer !== null) window.clearTimeout(this.socketDeadlineTimer);
+    this.socketDeadlineTimer = null;
+    this.socketDeadlineTarget = null;
   }
 
   private scheduleReconnect(): void {
@@ -1018,6 +1054,21 @@ export class EsbtEngine implements CollabSession {
   private handleOffline = (): void => {
     this.admissionAbort?.abort();
     this.admissionAbort = null;
+    const socket = this.socket;
+    if (socket) {
+      this.clearSocketDeadline(socket);
+      this.socket = null;
+      this.serverSynced = false;
+      try {
+        socket.close();
+      } catch {
+        // The browser is already offline; online recovery constructs a new socket.
+      }
+    }
+    if (this.reconnectTimer !== null) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     if (this.access) this.setStatus('offline');
   };
 
@@ -1030,6 +1081,7 @@ export class EsbtEngine implements CollabSession {
     this.flushLocalSave();
     // Emit tombstones while the transport is still available, then close it.
     this.activity.pagehide();
+    this.clearSocketDeadline();
     this.socket?.close();
     this.socket = null;
   };
@@ -1119,6 +1171,7 @@ export class EsbtEngine implements CollabSession {
         break;
       case MSG_SYNCED:
         this.serverSynced = true;
+        this.clearSocketDeadline(this.socket ?? undefined);
         this.synchronizeWithServer();
         break;
       case MSG_COMMITTED:
@@ -1171,7 +1224,10 @@ export class EsbtEngine implements CollabSession {
   }
 
   private sendMutation(mutation: JournalMutation): void {
+    const socket = this.socket;
+    if (!socket || socket.readyState !== WebSocket.OPEN || !this.serverSynced) return;
     this.send(MSG_MUTATION, encodeMutation(mutation.id, mutation.kind, mutation.bytes));
+    this.armSocketDeadline(socket, SOCKET_COMMIT_TIMEOUT_MS);
   }
 
   private handleCommitted(payload: Uint8Array): void {
@@ -1203,6 +1259,12 @@ export class EsbtEngine implements CollabSession {
           this.localSaved = true;
           this.counters.snapshotBytes = record.snapshot.byteLength;
           if (this.destroyed || this.storageFatal) return;
+          const socket = this.socket;
+          if (socket && this.pendingMutations.size > 0) {
+            this.armSocketDeadline(socket, SOCKET_COMMIT_TIMEOUT_MS);
+          } else {
+            this.clearSocketDeadline(socket ?? undefined);
+          }
           void this.maybePrune(receipt.version);
           if (this.pendingMutations.size === 0) this.sendMissingSince(receipt.version);
           else if (this.serverSynced) this.setStatus('saving');
@@ -1220,8 +1282,17 @@ export class EsbtEngine implements CollabSession {
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN || payload.byteLength === 0) return;
     const message = frame(tag, payload);
-    socket.send(message);
-    this.counters.sent += message.byteLength;
+    try {
+      socket.send(message);
+      this.counters.sent += message.byteLength;
+    } catch {
+      this.onDisconnect(socket);
+      try {
+        socket.close();
+      } catch {
+        // The exact transport was already detached into the retry path.
+      }
+    }
   }
 
   private scheduleLocalSave(): void {
@@ -1452,6 +1523,7 @@ export class EsbtEngine implements CollabSession {
       }
       this.admissionAbort?.abort();
       this.admissionAbort = null;
+      this.clearSocketDeadline();
       this.serverSynced = false;
       const socket = this.socket;
       this.socket = null;
@@ -1564,6 +1636,7 @@ export class EsbtEngine implements CollabSession {
     window.removeEventListener('beforeunload', this.handlePageHide);
     this.admissionAbort?.abort();
     this.admissionAbort = null;
+    this.clearSocketDeadline();
     if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
     if (this.snapshotReplyTimer !== null) clearTimeout(this.snapshotReplyTimer);
     if (this.presenceHeartbeat !== null) clearInterval(this.presenceHeartbeat);

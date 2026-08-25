@@ -54,6 +54,28 @@ class FakeWorker {
   }
 }
 
+test('an initial worker construction failure reaches terminal UI asynchronously', async () => {
+  const terminal: WorkerFailure[] = [];
+  const supervisor = new WorkerSupervisor<object, string>(
+    () => {
+      throw new DOMException('worker blocked', 'SecurityError');
+    },
+    {
+      deadlineMs: 25,
+      onMessage: () => assert.fail('a worker that never started cannot respond'),
+      onRecover: () => assert.fail('initial construction has no live worker to recover'),
+      onTerminal: (failure) => terminal.push(failure),
+    },
+  );
+
+  assert.equal(supervisor.post({ seq: 1 }, true), false);
+  assert.deepEqual(terminal, []);
+  await Promise.resolve();
+  assert.equal(terminal.length, 1);
+  assert.equal(terminal[0]?.kind, 'error');
+  assert.equal(terminal[0]?.error.name, 'SecurityError');
+});
+
 test('a render deadline replaces the worker and a response replenishes recovery', () => {
   const timer = new ManualTimer();
   const workers: FakeWorker[] = [];

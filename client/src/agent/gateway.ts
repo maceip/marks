@@ -272,8 +272,16 @@ export async function* parseEventStream(
       if (parsed) yield parsed;
     }
   } finally {
-    await reader.cancel().catch(() => undefined);
-    reader.releaseLock();
+    // Cancellation is advisory: a hostile or broken stream source may return
+    // a promise that never settles. Generator completion (and the UI busy
+    // state owned by its caller) must not wait behind transport cleanup.
+    void reader.cancel().catch(() => undefined);
+    try {
+      reader.releaseLock();
+    } catch {
+      // A still-pending read can retain the lock until its best-effort cancel
+      // is observed. The bounded consumer is already detached from it.
+    }
   }
 }
 

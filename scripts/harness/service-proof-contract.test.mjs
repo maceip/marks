@@ -90,6 +90,8 @@ test('anonymous and copied-slug failures leave opening shells with a retry surfa
   const journal = read('client/src/collab/journal.ts');
   const network = read('client/src/browser/network.ts');
   const metadata = read('client/src/hooks/useDocumentMeta.ts');
+  const benchmark = read('client/src/pages/Benchmark.tsx');
+  const workerSupervisor = read('client/src/markdown/worker-supervisor.ts');
 
   assert.match(caller, /SERVICE_REQUEST_TIMEOUT_MS/);
   assert.match(pendingDevice, /fetchWithTimeout/);
@@ -116,6 +118,9 @@ test('anonymous and copied-slug failures leave opening shells with a retry surfa
   assert.match(engine, /openWithReplicaJournal\(options\.docId,[\s\S]*?new EsbtEngine/);
   assert.match(engine, /void deleteReplicaJournal\(this\.docId\)\.catch/);
   assert.doesNotMatch(engine, /await deleteReplicaJournal\(this\.docId\)/);
+  assert.match(benchmark, /try \{[\s\S]*?worker = new BenchWorker\(\)/);
+  assert.match(workerSupervisor, /try \{[\s\S]*?this\.worker = this\.spawn\(\)[\s\S]*?catch/);
+  assert.match(workerSupervisor, /queueMicrotask\(\(\) => this\.options\.onTerminal\(failure\)\)/);
 });
 
 test('incremental CI is conservative, gated, cached, and keeps full browser coverage', () => {

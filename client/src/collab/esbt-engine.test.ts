@@ -133,3 +133,59 @@ test('teardown releases a replica when the final checkpoint never cooperates', a
   await delay(0);
   assert.equal(destroyed, 1);
 });
+
+test('a silent WebSocket is detached and retried at its progress deadline', { timeout: 1_000 }, async () => {
+  const engine = new EsbtEngine({
+    docId: 'silent-socket',
+    user,
+    access: {
+      fetchSnapshot: async () => new Response(null, { status: 204 }),
+      admit: async () => { throw new Error('not used'); },
+    },
+  });
+  let closes = 0;
+  let reconnects = 0;
+  const socket = {
+    close: () => { closes += 1; },
+  } as unknown as WebSocket;
+  const state = engine as unknown as {
+    socket: WebSocket | null;
+    armSocketDeadline(socket: WebSocket, timeoutMs: number): void;
+    scheduleReconnect(): void;
+  };
+  state.socket = socket;
+  state.scheduleReconnect = () => { reconnects += 1; };
+  state.armSocketDeadline(socket, 5);
+
+  await delay(20);
+  assert.equal(state.socket, null);
+  assert.equal(closes, 1);
+  assert.equal(reconnects, 1);
+  assert.equal(engine.status(), 'offline');
+  engine.destroy();
+});
+
+test('protocol progress clears the exact socket watchdog', { timeout: 1_000 }, async () => {
+  const engine = new EsbtEngine({
+    docId: 'healthy-socket',
+    user,
+    access: {
+      fetchSnapshot: async () => new Response(null, { status: 204 }),
+      admit: async () => { throw new Error('not used'); },
+    },
+  });
+  let closes = 0;
+  const socket = { close: () => { closes += 1; } } as unknown as WebSocket;
+  const state = engine as unknown as {
+    socket: WebSocket | null;
+    armSocketDeadline(socket: WebSocket, timeoutMs: number): void;
+    clearSocketDeadline(socket?: WebSocket): void;
+  };
+  state.socket = socket;
+  state.armSocketDeadline(socket, 5);
+  state.clearSocketDeadline(socket);
+  await delay(20);
+  assert.equal(state.socket, socket);
+  assert.equal(closes, 0);
+  engine.destroy();
+});
