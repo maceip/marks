@@ -63,6 +63,12 @@ test('mobile and service proofs fail fast without sharing a mutable client artif
   assert.match(mobileProof, /fetch\(`\$\{origin\}\/readyz`/);
   assert.match(mobileProof, /marks-server did not become ready within 15 seconds/);
   assert.match(mobileProof, /loaded data-marks-mode=\$\{mode\}/);
+  assert.match(mobileProof, /function recordFatal\(error\)/);
+  assert.match(mobileProof, /server\.signalCode/);
+  assert.match(mobileProof, /Math\.min\(1_000, remaining\)/);
+  assert.match(mobileProof, /server\.kill\('SIGKILL'\)/);
+  assert.match(mobileProof, /await stop\(\)/);
+  assert.doesNotMatch(mobileProof, /process\.exit\(/);
   assert.doesNotMatch(mobileProof, /join\(root, 'client', 'dist'\)/);
 
   const serviceProof = read('scripts/ci-service-ui.mjs');
@@ -78,15 +84,26 @@ test('anonymous and copied-slug failures leave opening shells with a retry surfa
   const api = read('client/src/lib/api.ts');
   const roomAccess = read('client/src/auth/room-access.ts');
   const engine = read('client/src/collab/esbt-engine.ts');
+  const network = read('client/src/browser/network.ts');
+  const metadata = read('client/src/hooks/useDocumentMeta.ts');
 
   assert.match(caller, /SERVICE_REQUEST_TIMEOUT_MS/);
   assert.match(pendingDevice, /fetchWithTimeout/);
   assert.match(api, /IMPORT_REQUEST_TIMEOUT_MS/);
   assert.match(roomAccess, /fetchWithTimeout/);
+  assert.match(network, /await response\.arrayBuffer\(\)/);
+  assert.match(network, /Promise\.race\(\[completed, aborted\]\)/);
   assert.match(sessionHook, /setError\(error instanceof Error/);
+  assert.match(metadata, /setError\('Marks could not reach the document service in time\.'/);
   assert.match(app, /Page could not open/);
   assert.match(app, /Document connection failed/);
   assert.match(app, /Try again/);
+  assert.ok(
+    app.indexOf('metadataError || sessionError') < app.indexOf('resolved && !supported'),
+    'transport failures render before authoritative unavailable documents',
+  );
+  assert.match(app, /ensureServiceCaller\(\{ forceProbe: true \}\)[\s\S]*?setServiceCallerError/);
+  assert.match(engine, /runWithTimeout\([\s\S]*?readReplicaJournal/);
   assert.match(engine, /void deleteReplicaJournal\(this\.docId\)\.catch/);
   assert.doesNotMatch(engine, /await deleteReplicaJournal\(this\.docId\)/);
 });

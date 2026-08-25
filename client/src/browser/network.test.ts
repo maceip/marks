@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { fetchWithTimeout, snapshotFetchTimeoutMs } from './network.ts';
+import { fetchWithTimeout, runWithTimeout, snapshotFetchTimeoutMs } from './network.ts';
 
 test('offline snapshot fetch does not wait', () => {
   assert.equal(snapshotFetchTimeoutMs('offline', true), 0);
@@ -37,5 +37,38 @@ test('service fetches preserve caller cancellation', async () => {
   await assert.rejects(
     request,
     (error: unknown) => error instanceof DOMException && error.name === 'AbortError',
+  );
+});
+
+test('service fetches keep the deadline through a stalled response body', async () => {
+  const headersOnlyFetch: typeof fetch = async () => new Response(
+    new ReadableStream({
+      pull() {
+        return new Promise(() => undefined);
+      },
+    }),
+  );
+  await assert.rejects(
+    fetchWithTimeout('/headers-only', {}, 5, headersOnlyFetch),
+    (error: unknown) => error instanceof DOMException && error.name === 'TimeoutError',
+  );
+});
+
+test('service fetches return a replayable bounded response body', async () => {
+  const response = await fetchWithTimeout(
+    '/complete',
+    {},
+    1_000,
+    async () => Response.json({ ready: true }, { status: 201, headers: { 'X-Proof': 'bounded' } }),
+  );
+  assert.equal(response.status, 201);
+  assert.equal(response.headers.get('X-Proof'), 'bounded');
+  assert.deepEqual(await response.json(), { ready: true });
+});
+
+test('generic browser work rejects even when the operation ignores its signal', async () => {
+  await assert.rejects(
+    runWithTimeout(() => new Promise(() => undefined), 5),
+    (error: unknown) => error instanceof DOMException && error.name === 'TimeoutError',
   );
 });

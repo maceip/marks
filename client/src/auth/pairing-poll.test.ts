@@ -63,3 +63,25 @@ test('closing the login dialog aborts an in-flight finalize request', async () =
   controller.abort(new DOMException('Dialog closed.', 'AbortError'));
   await assert.rejects(polling, (error: unknown) => error instanceof DOMException && error.name === 'AbortError');
 });
+
+test('pairing expiry rejects a finalizer that ignores cancellation', async () => {
+  const startedAt = Date.now();
+  const result = await pollPairingUntilSettled({
+    expiresAtMs: startedAt + 10,
+    signal: new AbortController().signal,
+    finalize: () => new Promise(() => undefined),
+  });
+  assert.equal(result, 'gone');
+  assert(Date.now() - startedAt < 250, 'hard expiry does not await a non-cooperative request');
+});
+
+test('dialog cancellation rejects a finalizer that ignores cancellation', async () => {
+  const controller = new AbortController();
+  const polling = pollPairingUntilSettled({
+    expiresAtMs: Date.now() + 60_000,
+    signal: controller.signal,
+    finalize: () => new Promise(() => undefined),
+  });
+  controller.abort(new DOMException('Dialog closed.', 'AbortError'));
+  await assert.rejects(polling, (error: unknown) => error instanceof DOMException && error.name === 'AbortError');
+});

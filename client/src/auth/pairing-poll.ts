@@ -1,3 +1,5 @@
+import { runWithTimeout } from '../browser/network.ts';
+
 export type PairingPollResult<T> = T | 'pending' | 'gone';
 
 export interface PairingPollOptions<T> {
@@ -46,26 +48,19 @@ export async function pollPairingUntilSettled<T>(
     const remaining = options.expiresAtMs - now();
     if (remaining <= 0) return 'gone';
 
-    const request = new AbortController();
-    let expired = false;
-    const cancel = () => request.abort(options.signal.reason);
-    options.signal.addEventListener('abort', cancel, { once: true });
-    const expiryTimer = globalThis.setTimeout(() => {
-      expired = true;
-      request.abort(new DOMException('The pairing expired.', 'TimeoutError'));
-    }, Math.max(1, remaining));
-
     let result: PairingPollResult<T> = 'pending';
     try {
-      result = await options.finalize(request.signal);
-    } catch {
+      result = await runWithTimeout(options.finalize, remaining, options.signal);
+    } catch (error) {
       if (options.signal.aborted) throw abortError(options.signal);
-      if (expired || now() >= options.expiresAtMs) return 'gone';
+      if (
+        (error instanceof DOMException && error.name === 'TimeoutError') ||
+        now() >= options.expiresAtMs
+      ) {
+        return 'gone';
+      }
       // A transient request timeout/offline edge gets one later retry. There
       // is never another request in flight until this one has settled.
-    } finally {
-      globalThis.clearTimeout(expiryTimer);
-      options.signal.removeEventListener('abort', cancel);
     }
 
     if (result !== 'pending') return result;

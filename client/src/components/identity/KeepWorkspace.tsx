@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { getActiveCaller } from '../../auth/caller';
 import { pollPairingUntilSettled } from '../../auth/pairing-poll.ts';
 import { bindPendingDevice } from '../../auth/pending-device';
+import { runWithTimeout, SERVICE_REQUEST_TIMEOUT_MS } from '../../browser/network.ts';
 import {
   finalizePairing,
   mintPairing,
@@ -64,8 +65,16 @@ export function KeepWorkspace({ onNotify, onOpenPhone, onPromoted, phone = false
     void (async () => {
       setStatus('minting');
       try {
-        await bindPendingDevice();
-        const minted = await mintPairing();
+        await runWithTimeout(
+          (signal) => bindPendingDevice(signal),
+          SERVICE_REQUEST_TIMEOUT_MS,
+          controller.signal,
+        );
+        const minted = await runWithTimeout(
+          (signal) => mintPairing(signal),
+          SERVICE_REQUEST_TIMEOUT_MS,
+          controller.signal,
+        );
         if (cancelled) return;
         setTicket(minted);
         setStatus('waiting');
@@ -101,7 +110,10 @@ export function KeepWorkspace({ onNotify, onOpenPhone, onPromoted, phone = false
     }
     setKeeping(true);
     try {
-      await selfBootstrap();
+      await runWithTimeout(
+        (signal) => selfBootstrap(signal),
+        SERVICE_REQUEST_TIMEOUT_MS,
+      );
       setPairingOpen(false);
       setStatus('kept');
       onNotify(

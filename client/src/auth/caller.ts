@@ -1,5 +1,5 @@
 import { redeemEnrolledDevice } from './device-session.ts';
-import { fetchWithTimeout, SERVICE_REQUEST_TIMEOUT_MS } from '../browser/network.ts';
+import { fetchWithTimeout, runWithTimeout, SERVICE_REQUEST_TIMEOUT_MS } from '../browser/network.ts';
 import type { RoomAuthority } from './room-access.ts';
 import { cacheSession, clearCachedSession, hasSeenSession, sessionFromUnknown } from './session-cache.ts';
 import {
@@ -13,6 +13,7 @@ export type ServiceCaller = RoomAuthority;
 
 let cached: ServiceCaller | null = null;
 let inflight: Promise<ServiceCaller> | null = null;
+const listeners = new Set<(caller: ServiceCaller | null) => void>();
 
 export interface ResolveCallerInput {
   sessionLive: boolean;
@@ -52,6 +53,14 @@ export function resetServiceCallerForTests(): void {
 
 export function setActiveCaller(caller: ServiceCaller | null): void {
   cached = caller;
+  for (const listener of listeners) listener(caller);
+}
+
+export function subscribeActiveCaller(
+  listener: (caller: ServiceCaller | null) => void,
+): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
 }
 
 export interface EnsureServiceCallerOptions {
@@ -70,7 +79,7 @@ export async function ensureServiceCaller(
   inflight = resolveFromNetwork(options);
   try {
     const next = await inflight;
-    cached = next;
+    setActiveCaller(next);
     return next;
   } finally {
     inflight = null;
@@ -78,10 +87,25 @@ export async function ensureServiceCaller(
 }
 
 async function resolveFromNetwork(options: EnsureServiceCallerOptions): Promise<ServiceCaller> {
+  return runWithTimeout(
+    (signal) => resolveWithinDeadline(options, signal),
+    SERVICE_REQUEST_TIMEOUT_MS,
+  );
+}
+
+async function resolveWithinDeadline(
+  options: EnsureServiceCallerOptions,
+  signal: AbortSignal,
+): Promise<ServiceCaller> {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const deadline = Date.now() + SERVICE_REQUEST_TIMEOUT_MS;
   const boundedFetch = ((input: RequestInfo | URL, init: RequestInit = {}) =>
-    fetchWithTimeout(input, init, Math.max(1, deadline - Date.now()), fetchImpl)) as typeof fetch;
+    fetchWithTimeout(
+      input,
+      { ...init, signal },
+      Math.max(1, deadline - Date.now()),
+      fetchImpl,
+    )) as typeof fetch;
   const storage = options.storage ?? sessionStorage;
   const persistentStorage = options.persistentStorage;
 

@@ -7,6 +7,7 @@
 import { chromium, devices } from 'playwright';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { accessSync, constants, cpSync, mkdtempSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -22,13 +23,44 @@ const staticDir = join(work, 'service-dist');
 let server = null;
 let serverSpawnError = null;
 let stopped = false;
-const stop = () => {
-  if (stopped) return;
-  stopped = true;
-  server?.kill('SIGTERM');
-  rmSync(work, { recursive: true, force: true });
+let stopPromise = null;
+
+const childIsRunning = () => server && server.exitCode === null && server.signalCode === null;
+const wait = (milliseconds) => new Promise((resolveWait) => setTimeout(resolveWait, milliseconds));
+const waitForChildExit = async (milliseconds) => {
+  if (!childIsRunning()) return true;
+  return Promise.race([
+    once(server, 'exit').then(() => true),
+    wait(milliseconds).then(() => false),
+  ]);
 };
-process.on('exit', stop);
+const stop = async () => {
+  if (stopPromise) return stopPromise;
+  stopped = true;
+  stopPromise = (async () => {
+    let terminated = true;
+    try {
+      if (childIsRunning()) {
+        server.kill('SIGTERM');
+        terminated = await waitForChildExit(3_000);
+      }
+      if (!terminated && childIsRunning()) {
+        server.kill('SIGKILL');
+        terminated = await waitForChildExit(2_000);
+      }
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+    if (!terminated && childIsRunning()) {
+      throw new Error('marks-server did not terminate after SIGTERM and SIGKILL');
+    }
+  })();
+  return stopPromise;
+};
+process.once('exit', () => {
+  if (childIsRunning()) server.kill('SIGKILL');
+  rmSync(work, { recursive: true, force: true });
+});
 
 try {
   accessSync(bin, constants.X_OK);
@@ -59,7 +91,7 @@ try {
     );
   }
 } catch (error) {
-  stop();
+  await stop();
   throw error;
 }
 const port = await new Promise((resolvePort, rejectPort) => {
@@ -81,6 +113,21 @@ const port = await new Promise((resolvePort, rejectPort) => {
 const origin = `http://127.0.0.1:${port}`;
 
 const serverLog = [];
+let fatalError = null;
+let rejectFatal = null;
+const fatalFailure = new Promise((_, reject) => {
+  rejectFatal = reject;
+});
+void fatalFailure.catch(() => undefined);
+function recordFatal(error) {
+  if (fatalError) return;
+  fatalError = error instanceof Error ? error : new Error(String(error));
+  rejectFatal?.(fatalError);
+}
+function throwIfFatal() {
+  if (fatalError) throw fatalError;
+}
+
 server = spawn(bin, [], {
   env: {
     ...process.env,
@@ -96,20 +143,15 @@ server.stdout.on('data', (chunk) => serverLog.push(chunk));
 server.stderr.on('data', (chunk) => serverLog.push(chunk));
 server.once('error', (error) => {
   serverSpawnError = error;
+  recordFatal(new Error(`marks-server could not start: ${error.message}`));
 });
-const serverFailure = new Promise((_, reject) => {
-  server.once('error', (error) => {
-    reject(new Error(`marks-server could not start: ${error.message}`));
-  });
-  server.once('exit', (code, signal) => {
-    if (!stopped) {
-      reject(new Error(
-        `marks-server exited unexpectedly (code=${String(code)}, signal=${String(signal)})${serverOutput() ? `\n${serverOutput()}` : ''}`,
-      ));
-    }
-  });
+server.once('exit', (code, signal) => {
+  if (!stopped) {
+    recordFatal(new Error(
+      `marks-server exited unexpectedly (code=${String(code)}, signal=${String(signal)})${serverOutput() ? `\n${serverOutput()}` : ''}`,
+    ));
+  }
 });
-void serverFailure.catch(() => undefined);
 
 const RIBBON = '.phone-ribbon';
 
@@ -119,22 +161,28 @@ function serverOutput() {
 
 async function waitForServer() {
   const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
+  while (true) {
+    throwIfFatal();
     if (serverSpawnError) {
       throw new Error(`marks-server could not start: ${serverSpawnError.message}`);
     }
-    if (server.exitCode !== null) {
+    if (server.exitCode !== null || server.signalCode !== null) {
       throw new Error(
-        `marks-server exited with code ${server.exitCode} before becoming ready${serverOutput() ? `\n${serverOutput()}` : ''}`,
+        `marks-server exited before becoming ready (code=${String(server.exitCode)}, signal=${String(server.signalCode)})${serverOutput() ? `\n${serverOutput()}` : ''}`,
       );
     }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
     try {
       const response = await fetch(`${origin}/readyz`, {
-        signal: AbortSignal.timeout(1_000),
+        signal: AbortSignal.timeout(Math.max(1, Math.min(1_000, remaining))),
       });
       if (response.ok) return;
-    } catch {}
-    await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+    } catch {
+      throwIfFatal();
+    }
+    const pause = Math.min(250, deadline - Date.now());
+    if (pause > 0) await Promise.race([wait(pause), fatalFailure]);
   }
   throw new Error(
     `marks-server did not become ready within 15 seconds${serverOutput() ? `\n${serverOutput()}` : ''}`,
@@ -151,23 +199,24 @@ async function assertServiceMode(page, label) {
 }
 
 function rejectOnPageFailure(page, label, pageErrors) {
-  const failure = new Promise((_, reject) => {
-    page.once('pageerror', (error) => {
-      const detail = error.stack ?? error.message;
-      pageErrors.push(`${label}: ${detail}`);
-      reject(new Error(`${label} page error: ${detail}`));
-    });
-    page.once('crash', () => reject(new Error(`${label} page crashed`)));
+  page.once('pageerror', (error) => {
+    const detail = error.stack ?? error.message;
+    pageErrors.push(`${label}: ${detail}`);
+    recordFatal(new Error(`${label} page error: ${detail}`));
   });
-  void failure.catch(() => undefined);
-  return failure;
+  page.once('crash', () => {
+    const error = new Error(`${label} page crashed`);
+    pageErrors.push(error.message);
+    recordFatal(error);
+  });
+  return fatalFailure;
 }
 
 async function navigate(page, url, failure) {
   await Promise.race([
     page.goto(url, { waitUntil: 'domcontentloaded' }),
     failure,
-    serverFailure,
+    fatalFailure,
   ]);
 }
 
@@ -215,7 +264,7 @@ async function reachEditorByTouch(page, viewportWidth, failure) {
       ),
     ]),
     failure,
-    serverFailure,
+    fatalFailure,
   ]);
   await assertNoHorizontalOverflow(page, `${viewportWidth}px entry`);
   assert.equal(await page.locator('.home-surface').count(), 0, 'anonymous service entry never exposes workspace home');
@@ -251,15 +300,21 @@ async function reachEditorByTouch(page, viewportWidth, failure) {
   console.log('  ok   touch navigation reaches the editor');
 }
 
-try {
+async function runProof() {
   await waitForServer();
 
-  const browser = await chromium.launch({ args: CHROME_LAUNCH_ARGS, env: launchEnv() });
+  const browser = await chromium.launch({
+    args: CHROME_LAUNCH_ARGS,
+    env: launchEnv(),
+    timeout: 30_000,
+  });
   const pageErrors = [];
   try {
     // A current Android phone profile: touch, mobile UA, high DPR.
     const phone = await browser.newContext({ ...devices['Pixel 7'] });
     const page = await phone.newPage();
+    page.setDefaultTimeout(30_000);
+    page.setDefaultNavigationTimeout(30_000);
     const pageFailure = rejectOnPageFailure(page, 'primary phone', pageErrors);
     const created = page.waitForResponse(
       (response) =>
@@ -269,7 +324,7 @@ try {
     void created.catch(() => undefined);
     await navigate(page, `${origin}/`, pageFailure);
     await assertServiceMode(page, 'primary phone');
-    const createdResponse = await Promise.race([created, pageFailure, serverFailure]);
+    const createdResponse = await Promise.race([created, pageFailure, fatalFailure]);
     assert.equal(
       createdResponse.status(),
       201,
@@ -280,6 +335,8 @@ try {
     const sharedUrl = page.url();
     const linkedPhone = await browser.newContext({ ...devices['Pixel 7'] });
     const linkedPage = await linkedPhone.newPage();
+    linkedPage.setDefaultTimeout(30_000);
+    linkedPage.setDefaultNavigationTimeout(30_000);
     const linkedFailure = rejectOnPageFailure(linkedPage, 'copied mobile slug', pageErrors);
     await navigate(linkedPage, sharedUrl, linkedFailure);
     await assertServiceMode(linkedPage, 'copied mobile slug');
@@ -293,7 +350,7 @@ try {
         ),
       ]),
       linkedFailure,
-      serverFailure,
+      fatalFailure,
     ]);
     assert.equal(linkedPage.url(), sharedUrl, 'a copied slug opens the same public page');
     assert.equal(
@@ -350,6 +407,8 @@ try {
       deviceScaleFactor: 2,
     });
     const smallPage = await small.newPage();
+    smallPage.setDefaultTimeout(30_000);
+    smallPage.setDefaultNavigationTimeout(30_000);
     const smallFailure = rejectOnPageFailure(smallPage, '320px phone', pageErrors);
     const smallCreated = smallPage.waitForResponse(
       (response) =>
@@ -359,7 +418,7 @@ try {
     void smallCreated.catch(() => undefined);
     await navigate(smallPage, `${origin}/`, smallFailure);
     await assertServiceMode(smallPage, '320px phone');
-    const smallCreatedResponse = await Promise.race([smallCreated, smallFailure, serverFailure]);
+    const smallCreatedResponse = await Promise.race([smallCreated, smallFailure, fatalFailure]);
     assert.equal(
       smallCreatedResponse.status(),
       201,
@@ -368,18 +427,23 @@ try {
     await reachEditorByTouch(smallPage, 320, smallFailure);
     await small.close();
 
+    throwIfFatal();
     assert.deepEqual(pageErrors, [], `mobile pages threw: ${pageErrors.join('\n')}`);
   } finally {
     await browser.close();
   }
+  throwIfFatal();
+}
+
+try {
+  await Promise.race([runProof(), fatalFailure]);
+  throwIfFatal();
+  await stop();
   console.log('mobile browser UI checks passed');
-  // The spawned server's piped stdio would otherwise keep the event loop
-  // alive forever; tear down and exit explicitly.
-  stop();
-  process.exit(0);
 } catch (error) {
-  console.error(Buffer.concat(serverLog).toString());
+  const output = Buffer.concat(serverLog).toString();
+  await stop().catch((shutdownError) => console.error(shutdownError));
+  console.error(output);
   console.error(error);
-  stop();
-  process.exit(1);
+  process.exitCode = 1;
 }

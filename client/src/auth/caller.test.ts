@@ -5,6 +5,8 @@ import {
   ensureServiceCaller,
   resetServiceCallerForTests,
   resolveServiceCaller,
+  setActiveCaller,
+  subscribeActiveCaller,
 } from './caller.ts';
 import { encodeBase64Url } from './protocol.ts';
 import { loadScratchCredential, saveScratchCredential } from './scratch.ts';
@@ -73,6 +75,15 @@ test('scratch authority writes the MarksScratch capability header', () => {
     headers.get('Authorization'),
     `MarksScratch ${leftoverScratch.scratchId}.${leftoverScratch.capability}`,
   );
+});
+
+test('application auth subscribers observe a completed promotion', () => {
+  const observed: Array<'session' | 'scratch' | 'none'> = [];
+  const unsubscribe = subscribeActiveCaller((caller) => observed.push(caller?.kind ?? 'none'));
+  setActiveCaller({ kind: 'session' });
+  unsubscribe();
+  setActiveCaller(null);
+  assert.deepEqual(observed, ['session']);
 });
 
 test('ensureServiceCaller clears leftover scratch when a session cookie is live', async () => {

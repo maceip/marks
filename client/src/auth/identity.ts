@@ -79,7 +79,7 @@ function identityFetch(input: RequestInfo | URL, init: RequestInit = {}): Promis
   return fetchWithTimeout(input, init, SERVICE_REQUEST_TIMEOUT_MS);
 }
 
-export async function mintPairing(): Promise<PairingTicket> {
+export async function mintPairing(signal?: AbortSignal): Promise<PairingTicket> {
   const caller = await ensureServiceCaller();
   if (caller.kind !== 'scratch') throw new Error('pairing requires an anonymous workspace');
   const headers = new Headers({ Accept: 'application/json' });
@@ -88,6 +88,7 @@ export async function mintPairing(): Promise<PairingTicket> {
     method: 'POST',
     credentials: 'same-origin',
     headers,
+    signal,
   });
   if (!response.ok) throw new Error(`pairing mint failed: ${response.status}`);
   const body = (await response.json()) as Record<string, unknown>;
@@ -206,7 +207,7 @@ export async function bootstrapPairing(
   if (!session) throw new Error('pairing bootstrap returned no session');
   cacheSession(session);
   setActiveCaller({ kind: 'session' });
-  await markController(controllerId, deviceId);
+  void markController(controllerId, deviceId).catch(() => undefined);
   void requestDurableStorage();
   return session;
 }
@@ -218,10 +219,10 @@ export async function bootstrapPairing(
  * scratch documents, and sets this tab's session cookie directly. There is
  * no pairing and no finalize step.
  */
-export async function selfBootstrap(): Promise<SessionInfo> {
+export async function selfBootstrap(signal?: AbortSignal): Promise<SessionInfo> {
   const caller = await ensureServiceCaller();
   if (caller.kind !== 'scratch') throw new Error('login requires an anonymous workspace');
-  const key = await bindPendingDevice();
+  const key = await bindPendingDevice(signal);
   const controllerId = createOpaqueId('controller');
   const now = Date.now();
   const expiresAtMs = now + 90_000;
@@ -253,6 +254,7 @@ export async function selfBootstrap(): Promise<SessionInfo> {
       },
       signature: encodeBase64Url(signature),
     }),
+    signal,
   });
   if (!response.ok) throw new Error(`self bootstrap failed: ${response.status}`);
   const session = sessionFromUnknown(await response.json());
@@ -260,7 +262,7 @@ export async function selfBootstrap(): Promise<SessionInfo> {
   cacheSession(session);
   setActiveCaller({ kind: 'session' });
   clearScratchCredential(sessionStorage);
-  await markController(controllerId, key.deviceId);
+  void markController(controllerId, key.deviceId).catch(() => undefined);
   void requestDurableStorage();
   return session;
 }
@@ -339,7 +341,10 @@ export async function finalizePairing(
     if (!session) return 'gone';
     cacheSession(session);
     setActiveCaller({ kind: 'session' });
-    await markDeviceEnrolled(session.deviceId);
+    // The HTTP-only session and in-memory caller are authoritative now. A
+    // blocked IndexedDB transaction must not delay that application-level
+    // promotion; return-visit enrollment can be retried independently.
+    void markDeviceEnrolled(session.deviceId).catch(() => undefined);
     void requestDurableStorage();
     return session;
   }

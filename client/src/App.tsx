@@ -2,7 +2,12 @@ import type { EditorView } from '@codemirror/view';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CommandEnvironment } from './commands/types';
 import { bindPendingDevice, getOrCreatePendingDevice } from './auth/pending-device';
-import { ensureServiceCaller, getActiveCaller, type ServiceCaller } from './auth/caller';
+import {
+  ensureServiceCaller,
+  getActiveCaller,
+  subscribeActiveCaller,
+  type ServiceCaller,
+} from './auth/caller';
 import { createMarksDocumentAccess } from './auth/room-access';
 import { loadUser } from './collab/user';
 import type { AppDialog, ReviewSurface } from './components/overlays/AppOverlays';
@@ -143,6 +148,15 @@ export function App() {
   const [serviceCaller, setServiceCaller] = useState<ServiceCaller | null>(null);
   const [serviceCallerResolved, setServiceCallerResolved] = useState(UI_DATA_MODE !== 'service');
   const [serviceCallerError, setServiceCallerError] = useState<string | null>(null);
+  useEffect(() => subscribeActiveCaller((caller) => {
+    // A completed pairing can outlive its dialog. Keep the application state
+    // aligned with the authoritative caller even when that surface unmounts
+    // in the same turn as the server commits the session.
+    if (!caller) return;
+    setServiceCaller(caller);
+    setServiceCallerResolved(true);
+    setServiceCallerError(null);
+  }), []);
   useEffect(() => {
     void getOrCreatePendingDevice().catch(() => undefined);
   }, []);
@@ -207,7 +221,7 @@ export function App() {
 
   const documents = useDocuments(route.name !== 'benchmark' && route.name !== 'design-system');
   const docId = route.name === 'document' ? route.id : null;
-  const { meta, engine, supported, resolved } = useDocumentMeta(docId);
+  const { meta, engine, supported, resolved, error: metadataError } = useDocumentMeta(docId);
   const marketingDocument =
     isAboutDocument(docId) ||
     (meta?.id === docId && meta.public === true && meta.title === ABOUT_DOCUMENT_TITLE);
@@ -763,7 +777,18 @@ export function App() {
               .then(({ logout }) => logout())
               .then(() => {
                 setServiceCaller(null);
-                void ensureServiceCaller({ forceProbe: true }).then(setServiceCaller);
+                setServiceCallerResolved(false);
+                setServiceCallerError(null);
+                void ensureServiceCaller({ forceProbe: true })
+                  .then((caller) => {
+                    setServiceCaller(caller);
+                    setServiceCallerResolved(true);
+                    setServiceCallerError(null);
+                  })
+                  .catch(() => {
+                    setServiceCallerResolved(true);
+                    setServiceCallerError('Marks could not reach the document service in time.');
+                  });
                 notify('Signed out', 'This tab is anonymous again. Public page URLs still work.', 'success');
                 void documents.refresh();
               })
@@ -1091,6 +1116,16 @@ export function App() {
               </button>
             </div>
           </div>
+        ) : docId && resolved && (metadataError || sessionError) ? (
+          <div className="empty-state">
+            <div className="empty-card">
+              <h2>Document connection failed</h2>
+              <p>{metadataError ?? sessionError} Your URL is unchanged; try the connection again.</p>
+              <button type="button" className="button primary" onClick={() => location.reload()}>
+                Try again
+              </button>
+            </div>
+          </div>
         ) : docId && resolved && !supported ? (
           <div className="empty-state">
             <div className="empty-card">
@@ -1104,16 +1139,6 @@ export function App() {
               ) : (
                 <p>This document does not exist, was deleted, or is not available to this session.</p>
               )}
-            </div>
-          </div>
-        ) : docId && sessionError ? (
-          <div className="empty-state">
-            <div className="empty-card">
-              <h2>Document connection failed</h2>
-              <p>{sessionError} Your URL is unchanged; try the connection again.</p>
-              <button type="button" className="button primary" onClick={() => location.reload()}>
-                Try again
-              </button>
             </div>
           </div>
         ) : session ? (
@@ -1360,7 +1385,18 @@ export function App() {
             }}
             onSignedOut={() => {
               setServiceCaller(null);
-              void ensureServiceCaller({ forceProbe: true }).then(setServiceCaller);
+              setServiceCallerResolved(false);
+              setServiceCallerError(null);
+              void ensureServiceCaller({ forceProbe: true })
+                .then((caller) => {
+                  setServiceCaller(caller);
+                  setServiceCallerResolved(true);
+                  setServiceCallerError(null);
+                })
+                .catch(() => {
+                  setServiceCallerResolved(true);
+                  setServiceCallerError('Marks could not reach the document service in time.');
+                });
               void documents.refresh();
             }}
           />

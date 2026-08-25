@@ -26,7 +26,7 @@ export async function getOrCreatePendingDevice(): Promise<StoredDeviceKey> {
   return key;
 }
 
-export async function bindPendingDevice(): Promise<StoredDeviceKey> {
+export async function bindPendingDevice(signal?: AbortSignal): Promise<StoredDeviceKey> {
   const caller = await ensureServiceCaller();
   if (caller.kind !== 'scratch') {
     throw new Error('pending device bind requires scratch authority');
@@ -44,6 +44,7 @@ export async function bindPendingDevice(): Promise<StoredDeviceKey> {
         deviceId: key.deviceId,
         publicKey: encodeBase64Url(key.publicKeyRaw),
       }),
+      signal,
     },
     SERVICE_REQUEST_TIMEOUT_MS,
   );
