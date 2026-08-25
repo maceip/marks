@@ -18,7 +18,7 @@ async-trait = "0.1"
 bytes = "1"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io", "rt"] }
-tower-http = { version = "0.6", features = ["fs"] }
+tower-http = { version = "0.7", features = ["fs"] }
 tower = { version = "0.5", features = ["util"] }
 futures-util = "0.3"
 rusqlite = { version = "0.37", features = ["backup", "bundled"] }
