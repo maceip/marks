@@ -12,9 +12,11 @@ use marks_auth::{
 };
 use rusqlite::{Connection, params};
 
-/// Move every live scratch document onto the winning principal, bump each
-/// authorization epoch, revoke outstanding tickets, and write the owner ACL
-/// row the protocol requires.
+/// Move every scratch document, including recoverable tombstones, onto the
+/// winning principal; bump each authorization epoch, revoke outstanding
+/// tickets, transfer reserved sites, and write the owner ACL row the protocol
+/// requires. Claiming the workspace must not strand its trash behind a scratch
+/// capability that is invalid as soon as this transaction commits.
 pub fn claim_scratch_documents(
     conn: &Connection,
     scratch_id: &ScratchId,
@@ -22,8 +24,7 @@ pub fn claim_scratch_documents(
     browser_device_id: &DeviceId,
     now: u64,
 ) -> ApiResult<Vec<(String, u64)>> {
-    let mut statement =
-        conn.prepare("SELECT id FROM documents WHERE scratch_id = ?1 AND deleted_at IS NULL")?;
+    let mut statement = conn.prepare("SELECT id FROM documents WHERE scratch_id = ?1")?;
     let ids: Vec<String> = statement
         .query_map(params![scratch_id.as_str()], |row| row.get(0))?
         .collect::<Result<_, _>>()?;

@@ -614,8 +614,10 @@ const MIGRATIONS: &[(i64, &str)] = &[
         CHECK(anonymous_edit_count >= 0);
     ALTER TABLE documents ADD COLUMN persisted_at INTEGER;
 
-    -- Preserve the intended behavior for pre-migration anonymous pages. A
-    -- claimed page can be recognized by its historical scratch site row.
+    -- Preserve the intended behavior for pre-migration anonymous pages.
+    -- Promotion rewrites both documents.scratch_id and scratch-owned site
+    -- rows, so retained authorship/commit/asset provenance is the durable
+    -- historical signal for an already-claimed anonymous page.
     UPDATE documents
        SET public_edit = 1
      WHERE scratch_id IS NOT NULL
@@ -623,7 +625,161 @@ const MIGRATIONS: &[(i64, &str)] = &[
             SELECT 1 FROM document_sites s
              WHERE s.document_id = documents.id
                AND s.authority_kind = 'scratch'
+        )
+        OR EXISTS (
+            SELECT 1 FROM document_commits c
+             WHERE c.document_id = documents.id
+               AND c.actor_kind = 'scratch'
+        )
+        OR EXISTS (
+            SELECT 1 FROM document_updates u
+             WHERE u.document_id = documents.id
+               AND u.actor_kind = 'scratch'
+        )
+        OR EXISTS (
+            SELECT 1 FROM op_authors a
+             WHERE a.document_id = documents.id
+               AND a.actor_kind = 'scratch'
+        )
+        OR EXISTS (
+            SELECT 1 FROM op_author_ranges r
+             WHERE r.document_id = documents.id
+               AND r.actor_kind = 'scratch'
+        )
+        OR EXISTS (
+            SELECT 1 FROM document_assets a
+             WHERE a.document_id = documents.id
+               AND a.actor_kind = 'scratch'
         );
+
+    -- A real mutation is the first receipt row written for its document
+    -- revision; later rows at that revision are idempotent/no-op receipts.
+    -- This reconstructs the anonymous mutation count without counting retries.
+    UPDATE documents
+       SET anonymous_edit_count = MAX(
+            anonymous_edit_count,
+            (
+                SELECT COUNT(*)
+                  FROM document_commits c
+                 WHERE c.document_id = documents.id
+                   AND c.revision > 0
+                   AND c.actor_kind = 'scratch'
+                   AND c.rowid = (
+                        SELECT MIN(first_commit.rowid)
+                          FROM document_commits first_commit
+                         WHERE first_commit.document_id = c.document_id
+                           AND first_commit.revision = c.revision
+                   )
+            )
+       )
+     WHERE public_edit = 1;
+
+    UPDATE documents
+       SET persisted_at = COALESCE(
+            (
+                SELECT c.committed_at
+                  FROM document_commits c
+                 WHERE c.document_id = documents.id
+                   AND c.revision > 0
+                   AND c.actor_kind = 'scratch'
+                   AND c.rowid = (
+                        SELECT MIN(first_commit.rowid)
+                          FROM document_commits first_commit
+                         WHERE first_commit.document_id = c.document_id
+                           AND first_commit.revision = c.revision
+                   )
+                 ORDER BY c.revision
+                 LIMIT 1 OFFSET 6
+            ),
+            updated_at
+       )
+     WHERE public_edit = 1
+       AND persisted_at IS NULL
+       AND anonymous_edit_count > 6;
+    ",
+    ),
+    (
+        13,
+        "
+    -- Correct databases that may already have recorded migration 12 before
+    -- its historical backfill learned about promotion-rewritten provenance.
+    -- The MAX/COALESCE assignments are idempotent for databases on which the
+    -- complete migration-12 backfill already ran.
+    UPDATE documents
+       SET public_edit = 1
+     WHERE scratch_id IS NOT NULL
+        OR EXISTS (
+            SELECT 1 FROM document_sites s
+             WHERE s.document_id = documents.id
+               AND s.authority_kind = 'scratch'
+        )
+        OR EXISTS (
+            SELECT 1 FROM document_commits c
+             WHERE c.document_id = documents.id
+               AND c.actor_kind = 'scratch'
+        )
+        OR EXISTS (
+            SELECT 1 FROM document_updates u
+             WHERE u.document_id = documents.id
+               AND u.actor_kind = 'scratch'
+        )
+        OR EXISTS (
+            SELECT 1 FROM op_authors a
+             WHERE a.document_id = documents.id
+               AND a.actor_kind = 'scratch'
+        )
+        OR EXISTS (
+            SELECT 1 FROM op_author_ranges r
+             WHERE r.document_id = documents.id
+               AND r.actor_kind = 'scratch'
+        )
+        OR EXISTS (
+            SELECT 1 FROM document_assets a
+             WHERE a.document_id = documents.id
+               AND a.actor_kind = 'scratch'
+        );
+
+    UPDATE documents
+       SET anonymous_edit_count = MAX(
+            anonymous_edit_count,
+            (
+                SELECT COUNT(*)
+                  FROM document_commits c
+                 WHERE c.document_id = documents.id
+                   AND c.revision > 0
+                   AND c.actor_kind = 'scratch'
+                   AND c.rowid = (
+                        SELECT MIN(first_commit.rowid)
+                          FROM document_commits first_commit
+                         WHERE first_commit.document_id = c.document_id
+                           AND first_commit.revision = c.revision
+                   )
+            )
+       )
+     WHERE public_edit = 1;
+
+    UPDATE documents
+       SET persisted_at = COALESCE(
+            (
+                SELECT c.committed_at
+                  FROM document_commits c
+                 WHERE c.document_id = documents.id
+                   AND c.revision > 0
+                   AND c.actor_kind = 'scratch'
+                   AND c.rowid = (
+                        SELECT MIN(first_commit.rowid)
+                          FROM document_commits first_commit
+                         WHERE first_commit.document_id = c.document_id
+                           AND first_commit.revision = c.revision
+                   )
+                 ORDER BY c.revision
+                 LIMIT 1 OFFSET 6
+            ),
+            updated_at
+       )
+     WHERE public_edit = 1
+       AND persisted_at IS NULL
+       AND anonymous_edit_count > 6;
     ",
     ),
 ];
@@ -632,16 +788,279 @@ const MIGRATIONS: &[(i64, &str)] = &[
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_newer_schema_refuses_this_binary() {
-        let path = std::env::temp_dir().join(format!(
-            "marks-schema-guard-{}-{}.db3",
+    fn temp_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "marks-{name}-{}-{}.db3",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("clock")
                 .as_nanos()
-        ));
+        ))
+    }
+
+    fn remove_db(path: &Path) {
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(path.with_extension(format!("db3{suffix}")));
+        }
+    }
+
+    fn open_through(path: &Path, newest: i64) -> Connection {
+        let mut connection = Connection::open(path).expect("open fixture database");
+        configure(&connection, true).expect("configure fixture database");
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at INTEGER NOT NULL
+                 );",
+            )
+            .expect("create fixture migration table");
+        for (version, sql) in MIGRATIONS {
+            if *version > newest {
+                break;
+            }
+            let tx = connection
+                .transaction()
+                .expect("fixture migration transaction");
+            tx.execute_batch(sql).expect("apply fixture migration");
+            tx.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+                rusqlite::params![version, version * 1_000],
+            )
+            .expect("record fixture migration");
+            tx.commit().expect("commit fixture migration");
+        }
+        connection
+    }
+
+    fn insert_anonymous_history(connection: &Connection) {
+        connection
+            .execute(
+                "INSERT INTO principals (id, created_at) VALUES ('principal_migrated', 1)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO scratch_workspaces
+                    (id, capability_hash, expires_at, claimed_by, claimed_at)
+                 VALUES ('scratch_claimed', zeroblob(32), 999999, 'principal_migrated', 50)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO scratch_workspaces (id, capability_hash, expires_at)
+                 VALUES ('scratch_unclaimed', zeroblob(32), 999999)",
+                [],
+            )
+            .unwrap();
+        for (id, scratch, owner) in [
+            (
+                "document_claimed_anonymous",
+                None,
+                Some("principal_migrated"),
+            ),
+            (
+                "document_seeded_anonymous",
+                None,
+                Some("principal_migrated"),
+            ),
+            (
+                "document_unclaimed_anonymous",
+                Some("scratch_unclaimed"),
+                None,
+            ),
+            (
+                "document_native_principal",
+                None,
+                Some("principal_migrated"),
+            ),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO documents
+                        (id, scratch_id, owner_principal_id, title, title_explicit, engine, chars,
+                         auth_epoch, snapshot_revision, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?1, 1, 'esbt', 0, 1, 0, 10, 20)",
+                    rusqlite::params![id, scratch, owner],
+                )
+                .unwrap();
+        }
+        // Claiming rewrote this formerly scratch-owned site, so migration 12's
+        // original site predicate could not recognize the page afterwards.
+        connection
+            .execute(
+                "INSERT INTO document_sites
+                    (document_id, site_id, authority_kind, principal_id, created_at)
+                 VALUES ('document_claimed_anonymous', 1, 'principal', 'principal_migrated', 10)",
+                [],
+            )
+            .unwrap();
+        // Atomic Markdown seeding leaves durable scratch authorship even when
+        // the page was claimed before it opened a room.
+        connection
+            .execute(
+                "INSERT INTO op_authors
+                    (document_id, site, seq, actor_kind, actor_id, received_at)
+                 VALUES ('document_seeded_anonymous', '0', 1, 'scratch', 'scratch_claimed', 20)",
+                [],
+            )
+            .unwrap();
+
+        for (document, actor_kind, actor_id) in [
+            ("document_claimed_anonymous", "scratch", "scratch_claimed"),
+            (
+                "document_unclaimed_anonymous",
+                "scratch",
+                "scratch_unclaimed",
+            ),
+            (
+                "document_native_principal",
+                "principal",
+                "principal_migrated",
+            ),
+        ] {
+            for revision in 1_i64..=7 {
+                connection
+                    .execute(
+                        "INSERT INTO document_commits
+                            (document_id, message_id, payload_hash, kind, revision, actor_kind,
+                             actor_id, committed_at)
+                         VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, ?7)",
+                        rusqlite::params![
+                            document,
+                            vec![revision as u8; 16],
+                            vec![revision as u8; 32],
+                            revision,
+                            actor_kind,
+                            actor_id,
+                            100 + revision,
+                        ],
+                    )
+                    .unwrap();
+            }
+        }
+        // Later receipts at an existing revision are not additional edits.
+        connection
+            .execute(
+                "INSERT INTO document_commits
+                    (document_id, message_id, payload_hash, kind, revision, actor_kind,
+                     actor_id, committed_at)
+                 VALUES ('document_claimed_anonymous', ?1, ?2, 1, 7, 'scratch',
+                         'scratch_claimed', 108)",
+                rusqlite::params![vec![88_u8; 16], vec![88_u8; 32]],
+            )
+            .unwrap();
+        // Nor does a scratch no-op receipt at a principal-authored revision.
+        connection
+            .execute(
+                "INSERT INTO document_commits
+                    (document_id, message_id, payload_hash, kind, revision, actor_kind,
+                     actor_id, committed_at)
+                 VALUES ('document_claimed_anonymous', ?1, ?2, 1, 8, 'principal',
+                         'principal_migrated', 109)",
+                rusqlite::params![vec![89_u8; 16], vec![89_u8; 32]],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO document_commits
+                    (document_id, message_id, payload_hash, kind, revision, actor_kind,
+                     actor_id, committed_at)
+                 VALUES ('document_claimed_anonymous', ?1, ?2, 1, 8, 'scratch',
+                         'scratch_claimed', 110)",
+                rusqlite::params![vec![90_u8; 16], vec![90_u8; 32]],
+            )
+            .unwrap();
+    }
+
+    fn assert_anonymous_history_backfilled(db: &Db) {
+        db.read(|connection| {
+            for id in ["document_claimed_anonymous", "document_unclaimed_anonymous"] {
+                let row: (i64, i64, Option<i64>) = connection.query_row(
+                    "SELECT public_edit, anonymous_edit_count, persisted_at
+                     FROM documents WHERE id = ?1",
+                    [id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?;
+                assert_eq!(row, (1, 7, Some(107)), "incorrect backfill for {id}");
+            }
+            let seeded: (i64, i64, Option<i64>) = connection.query_row(
+                "SELECT public_edit, anonymous_edit_count, persisted_at
+                 FROM documents WHERE id = 'document_seeded_anonymous'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+            assert_eq!(seeded, (1, 0, None));
+            let native: (i64, i64, Option<i64>) = connection.query_row(
+                "SELECT public_edit, anonymous_edit_count, persisted_at
+                 FROM documents WHERE id = 'document_native_principal'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+            assert_eq!(native, (0, 0, None));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn anonymous_history_is_preserved_when_schema_11_upgrades() {
+        let path = temp_path("anonymous-migration-11");
+        let connection = open_through(&path, 11);
+        insert_anonymous_history(&connection);
+        drop(connection);
+
+        let db = Db::open(&path).expect("upgrade anonymous history");
+        assert_anonymous_history_backfilled(&db);
+        drop(db);
+        remove_db(&path);
+    }
+
+    #[test]
+    fn migration_13_repairs_a_database_that_recorded_the_old_12_backfill() {
+        let path = temp_path("anonymous-migration-12-repair");
+        let connection = open_through(&path, 11);
+        insert_anonymous_history(&connection);
+        connection
+            .execute_batch(
+                "ALTER TABLE documents ADD COLUMN public_edit INTEGER NOT NULL DEFAULT 0
+                    CHECK(public_edit IN (0, 1));
+                 ALTER TABLE documents ADD COLUMN anonymous_edit_count INTEGER NOT NULL DEFAULT 0
+                    CHECK(anonymous_edit_count >= 0);
+                 ALTER TABLE documents ADD COLUMN persisted_at INTEGER;
+                 UPDATE documents SET public_edit = 1
+                  WHERE scratch_id IS NOT NULL
+                     OR EXISTS (
+                        SELECT 1 FROM document_sites s
+                         WHERE s.document_id = documents.id
+                           AND s.authority_kind = 'scratch'
+                     );
+                 INSERT INTO schema_migrations(version, applied_at) VALUES (12, 12000);",
+            )
+            .expect("install original migration 12");
+        let before: (i64, i64, Option<i64>) = connection
+            .query_row(
+                "SELECT public_edit, anonymous_edit_count, persisted_at
+                 FROM documents WHERE id = 'document_claimed_anonymous'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(before, (0, 0, None));
+        drop(connection);
+
+        let db = Db::open(&path).expect("repair migration 12");
+        assert_anonymous_history_backfilled(&db);
+        drop(db);
+        remove_db(&path);
+    }
+
+    #[test]
+    fn a_newer_schema_refuses_this_binary() {
+        let path = temp_path("schema-guard");
         Db::open(&path).expect("initial migration");
         {
             let connection = Connection::open(&path).expect("raw connection");
@@ -656,8 +1075,6 @@ mod tests {
             Db::open(&path).is_err(),
             "a database migrated by a newer binary must refuse this one"
         );
-        for suffix in ["", "-wal", "-shm"] {
-            let _ = std::fs::remove_file(path.with_extension(format!("db3{suffix}")));
-        }
+        remove_db(&path);
     }
 }
