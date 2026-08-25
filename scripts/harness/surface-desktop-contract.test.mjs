@@ -28,3 +28,19 @@ test('service login restores the active Start tab before checking registry contr
     'a failed live assertion must report both observed command counts',
   );
 });
+
+test('fold-book command transitions wait for committed ribbon state and expose overflow commands', () => {
+  const bookStart = desktopFlow.indexOf('await session.goto(`${documentPath}?marks-posture=fold-book`)');
+  const bookEnd = desktopFlow.indexOf('// Reproduce the narrow unfolded book geometry', bookStart);
+  const bookFlow = desktopFlow.slice(bookStart, bookEnd);
+
+  assert.match(bookFlow, /\.workspace\.mode-split/);
+  assert.match(bookFlow, /\.ribbon-body\[data-ribbon-task="compose"\]/);
+  assert.match(bookFlow, /data-ribbon-tab="home"\]\[aria-selected="true"\]/);
+  assert.match(bookFlow, /\.workspace\.mode-preview/);
+  assert.match(bookFlow, /\.ribbon-body\[data-ribbon-task="inspect"\]/);
+  assert.match(bookFlow, /data-ribbon-tab="review"\]\[aria-selected="true"\]/);
+  assert.match(bookFlow, /\.foldable-ribbon \.ribbon-overflow-trigger/);
+  assert.match(bookFlow, /all five book-fold possibility commands/);
+  assert.doesNotMatch(bookFlow, /session\.wait\(\d+\)/);
+});

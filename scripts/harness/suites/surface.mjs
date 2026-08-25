@@ -630,7 +630,11 @@ export async function runSurface(session, { check }) {
     bookChrome.hingeTargets.length === 0,
     JSON.stringify(bookChrome));
   await session.click('.app-rail [data-command-id="view.split"]');
-  await session.wait(200);
+  await session.waitForSelector('.workspace.mode-split', { timeout: 10_000 });
+  await session.waitForSelector(
+    '.foldable-ribbon .ribbon-body[data-ribbon-task="compose"]',
+    { timeout: 10_000 },
+  );
   const bookSplit = await measureWorkspacePanes(session);
   check('book fold split does not use the phone ghost overlay',
     bookSplit.ghost === false && bookSplit.shell === 'fold-book',
@@ -649,39 +653,76 @@ export async function runSurface(session, { check }) {
     Math.abs(bookSplit.previewLeft - (bookSplit.segment0Width + bookSplit.hingeGap)) <= 3,
     JSON.stringify(bookSplit));
 
-  await session.evaluate(() => {
-    const home = [...document.querySelectorAll('.ribbon-tab')]
-      .find((tab) => tab.textContent?.trim() === 'Home');
-    if (!(home instanceof HTMLButtonElement)) throw new Error('Home ribbon tab not found');
-    home.click();
-  });
-  await session.wait(100);
+  const bookProfileExpanded = await session.evaluate(() =>
+    document.querySelector('.foldable-ribbon .ribbon-profile-toggle')?.getAttribute('aria-pressed') === 'true');
+  if (bookProfileExpanded) {
+    await session.click('.foldable-ribbon .ribbon-profile-toggle');
+    await session.waitForSelector(
+      '.foldable-ribbon .ribbon-profile-toggle[aria-pressed="false"]',
+      { timeout: 10_000 },
+    );
+  }
+  await session.click('.foldable-ribbon .ribbon-tab[data-ribbon-tab="home"]');
+  await session.waitForSelector(
+    '.foldable-ribbon .ribbon-tab[data-ribbon-tab="home"][aria-selected="true"]',
+    { timeout: 10_000 },
+  );
+  await session.waitForSelector(
+    '.foldable-ribbon .ribbon-body[data-ribbon-task="compose"] [data-command-id="format.bold"]',
+    { timeout: 10_000 },
+  );
   await session.click('.preview-pane');
-  await session.wait(100);
+  await session.waitForSelector(
+    '.foldable-ribbon .ribbon-body[data-ribbon-task="compose"] [data-command-id="format.bold"]',
+    { timeout: 10_000 },
+  );
   check('book fold split keeps compose until the app rail changes the view',
-    (await session.evaluate(() => document.querySelector('.ribbon-body')?.getAttribute('data-ribbon-task'))) === 'compose' &&
-    (await session.count('.ribbon-body [data-command-id="format.bold"]')) >= 1);
+    (await session.evaluate(() => document.querySelector('.foldable-ribbon .ribbon-body')?.getAttribute('data-ribbon-task'))) === 'compose' &&
+    (await session.count('.foldable-ribbon .ribbon-body [data-command-id="format.bold"]')) >= 1);
   await session.click('.app-rail [data-command-id="view.preview"]');
-  await session.wait(200);
+  await session.waitForSelector('.workspace.mode-preview', { timeout: 10_000 });
+  await session.waitForSelector(
+    '.foldable-ribbon .ribbon-body[data-ribbon-task="inspect"]',
+    { timeout: 10_000 },
+  );
+  await waitForAbsent(session, '.foldable-ribbon .ribbon-body [data-command-id="format.bold"]');
   check('book fold preview rail shows inspect commands',
-    (await session.evaluate(() => document.querySelector('.ribbon-body')?.getAttribute('data-ribbon-task'))) === 'inspect' &&
-    (await session.count('.ribbon-body [data-command-id="format.bold"]')) === 0);
+    (await session.evaluate(() => document.querySelector('.foldable-ribbon .ribbon-body')?.getAttribute('data-ribbon-task'))) === 'inspect' &&
+    (await session.count('.foldable-ribbon .ribbon-body [data-command-id="format.bold"]')) === 0);
   await session.click('.app-rail [data-command-id="view.split"]');
-  await session.wait(200);
+  await session.waitForSelector('.workspace.mode-split', { timeout: 10_000 });
+  await session.waitForSelector(
+    '.foldable-ribbon .ribbon-body[data-ribbon-task="compose"]',
+    { timeout: 10_000 },
+  );
 
-  await session.evaluate(() => {
-    const all = document.querySelector('.ribbon-profile-toggle');
-    if (all instanceof HTMLButtonElement && all.getAttribute('aria-pressed') !== 'true') all.click();
-    const review = [...document.querySelectorAll('.ribbon-tab')]
-      .find((button) => button.textContent?.trim() === 'Review');
-    if (!(review instanceof HTMLButtonElement)) throw new Error('Review ribbon tab not found');
-    review.click();
-  });
-  await session.wait(150);
+  const bookProfileCollapsed = await session.evaluate(() =>
+    document.querySelector('.foldable-ribbon .ribbon-profile-toggle')?.getAttribute('aria-pressed') !== 'true');
+  if (bookProfileCollapsed) {
+    await session.click('.foldable-ribbon .ribbon-profile-toggle');
+    await session.waitForSelector(
+      '.foldable-ribbon .ribbon-profile-toggle[aria-pressed="true"]',
+      { timeout: 10_000 },
+    );
+  }
+  await session.click('.foldable-ribbon .ribbon-tab[data-ribbon-tab="review"]');
+  await session.waitForSelector(
+    '.foldable-ribbon .ribbon-tab[data-ribbon-tab="review"][aria-selected="true"]',
+    { timeout: 10_000 },
+  );
+  if (await session.count('.foldable-ribbon .ribbon-overflow-trigger')) {
+    await session.click('.foldable-ribbon .ribbon-overflow-trigger');
+    await session.waitForSelector('.foldable-ribbon .ribbon-overflow-menu', { timeout: 10_000 });
+  }
   if (ribbonWildEnabled) {
+    await waitForPageState(
+      session,
+      () => document.querySelectorAll('.foldable-ribbon .ribbon-body [data-command-id^="wild."]').length === 5,
+      { timeout: 10_000, label: 'all five book-fold possibility commands' },
+    );
     check('book fold command library exposes all five possibility tools',
-      (await session.count('.ribbon-body [data-command-id^="wild."]')) === 5);
-    await session.click('.ribbon-body [data-command-id="wild.intent-horizon"]');
+      (await session.count('.foldable-ribbon .ribbon-body [data-command-id^="wild."]')) === 5);
+    await session.click('.foldable-ribbon .ribbon-body [data-command-id="wild.intent-horizon"]');
     await session.waitForSelector('.wild-studio[data-shell="fold-book"][data-wild-capability="intent"]');
     check('possibility layer respects the unfolded book posture',
       (await session.isVisible('.wild-studio[data-shell="fold-book"]')));
@@ -1117,6 +1158,16 @@ export async function runSurface(session, { check }) {
     ghostPan.ok && ghostPan.bound === 'true' && ghostPan.draggingAfterDown && ghostPan.shift === 'end' && ghostPan.translate === '0%',
     JSON.stringify(ghostPan));
 
+  // Edit retasks the phone ribbon to Compose/Home. Choose View again before
+  // invoking a View-owned command instead of racing that intentional effect.
+  await session.click('.phone-category-trigger');
+  await session.waitForSelector('#phone-ribbon-categories', { timeout: 10_000 });
+  await session.click('#phone-ribbon-categories [data-ribbon-tab="view"]');
+  await waitForAbsent(session, '#phone-ribbon-categories');
+  await session.waitForSelector(
+    '.phone-ribbon-deck[aria-label="View commands"] [data-command-id="view.ghost-overlay"]',
+    { timeout: 10_000 },
+  );
   await session.click('.phone-ribbon-deck [data-command-id="view.ghost-overlay"]');
   await session.waitForSelector('[role="dialog"] .ghost-overlay-dialog', { timeout: 10_000 });
   const ghostDialog = await session.evaluate(() => ({
@@ -1260,9 +1311,23 @@ export async function runSurface(session, { check }) {
 
   await session.click('.phone-category-trigger');
   await session.waitForSelector('#phone-ribbon-categories', { timeout: 10_000 });
+  const phoneCategoriesEssential = await session.evaluate(() =>
+    document.querySelector('#phone-ribbon-categories .phone-category-all')?.getAttribute('aria-checked') !== 'true');
+  if (phoneCategoriesEssential) {
+    await session.click('#phone-ribbon-categories .phone-category-all');
+    await session.waitForSelector(
+      '#phone-ribbon-categories .phone-category-all[aria-checked="true"]',
+      { timeout: 10_000 },
+    );
+  }
   await session.click('#phone-ribbon-categories [data-ribbon-tab="review"]');
   await session.waitForSelector('.phone-ribbon-deck[aria-label="Review commands"]');
   if (ribbonWildEnabled) {
+    await waitForPageState(
+      session,
+      () => document.querySelectorAll('.phone-ribbon [data-command-id^="wild."]').length === 5,
+      { timeout: 10_000, label: 'all five phone possibility commands' },
+    );
     check('phone Review ribbon exposes all five possibility tools',
       (await session.count('.phone-ribbon [data-command-id^="wild."]')) === 5);
     await session.click('.phone-ribbon [data-command-id="wild.context-half-life"]');

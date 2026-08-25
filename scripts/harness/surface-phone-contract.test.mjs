@@ -88,8 +88,40 @@ test('phone Option 2 contract has one picker, one scrolling deck, and persistent
   ));
 });
 
+test('phone possibility proof expands the command catalog before selecting Review', () => {
+  const finalPicker = phoneFlow.lastIndexOf("await session.click('.phone-category-trigger')");
+  const expandCatalog = phoneFlow.indexOf(
+    "await session.click('#phone-ribbon-categories .phone-category-all')",
+    finalPicker,
+  );
+  const expandedState = phoneFlow.indexOf(
+    '.phone-category-all[aria-checked="true"]',
+    expandCatalog,
+  );
+  const selectReview = phoneFlow.indexOf(
+    "await session.click('#phone-ribbon-categories [data-ribbon-tab=\"review\"]')",
+    expandedState,
+  );
+  const waitForPossibilities = phoneFlow.indexOf('all five phone possibility commands', selectReview);
+
+  assert.ok(finalPicker >= 0);
+  assert.ok(expandCatalog > finalPicker);
+  assert.ok(expandedState > expandCatalog);
+  assert.ok(selectReview > expandedState);
+  assert.ok(waitForPossibilities > selectReview);
+});
+
 test('phone surface proves the ghost command, dialog controls, and persisted switch', () => {
   const defaultOn = phoneFlow.indexOf('phone View deck exposes the default-on ghost overlay command');
+  const ghostPan = phoneFlow.indexOf('const ghostPan = await session.evaluate');
+  const reselectView = phoneFlow.indexOf(
+    "await session.click('#phone-ribbon-categories [data-ribbon-tab=\"view\"]')",
+    ghostPan,
+  );
+  const restoredViewDeck = phoneFlow.indexOf(
+    '.phone-ribbon-deck[aria-label="View commands"] [data-command-id="view.ghost-overlay"]',
+    reselectView,
+  );
   const invoke = phoneFlow.indexOf(
     "await session.click('.phone-ribbon-deck [data-command-id=\"view.ghost-overlay\"]')",
   );
@@ -111,7 +143,10 @@ test('phone surface proves the ghost command, dialog controls, and persisted swi
   const persistedOn = phoneFlow.indexOf('the enabled phone ghost preference to persist');
 
   assert.ok(defaultOn >= 0);
-  assert.ok(invoke > defaultOn);
+  assert.ok(ghostPan > defaultOn);
+  assert.ok(reselectView > ghostPan);
+  assert.ok(restoredViewDeck > reselectView);
+  assert.ok(invoke > restoredViewDeck);
   assert.ok(dialog > invoke);
   assert.ok(left > dialog);
   assert.ok(right > left);

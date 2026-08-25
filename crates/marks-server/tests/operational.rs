@@ -261,9 +261,22 @@ async fn artifact_identity_static_mime_and_security_headers_are_process_owned() 
     );
     assert_eq!(identity["profileCoherent"], true);
     assert_eq!(identity["engineCoherent"], true);
+    let embedded_plan: serde_json::Value =
+        serde_json::from_str(env!("MARKS_BUILD_PLAN_JSON")).unwrap();
+    assert_eq!(identity["buildRevision"], env!("MARKS_BUILD_REVISION"));
+    assert_eq!(identity["buildPlan"], embedded_plan);
     assert_eq!(
-        identity["releaseReady"], false,
-        "a development build is never a release receipt"
+        identity["serverSourceDirty"],
+        env!("MARKS_SOURCE_DIRTY") == "1"
+    );
+    let expected_release_ready = env!("MARKS_BUILD_REVISION") != "development"
+        && embedded_plan["deployable"] == true
+        && embedded_plan["client"]["dataMode"] == "service"
+        && identity["componentSourceDirty"] == false
+        && env!("MARKS_SOURCE_DIRTY") == "0";
+    assert_eq!(
+        identity["releaseReady"], expected_release_ready,
+        "a coherent verified fixture is release-ready exactly for a clean, revision-bound, deployable service cut"
     );
 
     let html = http.get(format!("{}/", server.base)).send().await.unwrap();

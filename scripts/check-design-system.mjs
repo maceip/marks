@@ -15,6 +15,10 @@ const port = 4197;
 // the old six-second poll window even though the production build is valid.
 const server = await preview({
   root: fileURLToPath(new URL('../client/', import.meta.url)),
+  // This proof serves the already-verified production artifact. Reloading the
+  // build config here would re-resolve a second product plan from ambient CI
+  // variables even though preview does not build or transform any modules.
+  configFile: false,
   logLevel: 'error',
   preview: {
     host: '127.0.0.1',
