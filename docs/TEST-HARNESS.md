@@ -69,8 +69,16 @@ npm run dev
 MARKS_URL=http://127.0.0.1:5173 npm run smoke:platforms
 
 # CI-shaped proof: live binary + service-mode UI + native two-peer room.
-VITE_MARKS_DATA_MODE=service VITE_MARKS_TEST_SERVICE_WORKER=1 npm run build
-cargo build -p marks-server
+plan=$(node --experimental-strip-types scripts/product-variant.ts resolve \
+  --variant stable --data-mode service --format canonical)
+digest=$(node --experimental-strip-types scripts/product-variant.ts resolve \
+  --variant stable --data-mode service --format sha256)
+VITE_MARKS_TEST_SERVICE_WORKER=1 npm run build:variant -- \
+  --variant stable --data-mode service \
+  --out-dir "$PWD/client/dist" --require-deployable
+MARKS_PRODUCT_VARIANT=stable MARKS_BUILD_PLAN_JSON="$plan" \
+  MARKS_BUILD_PLAN_SHA256="$digest" \
+  cargo build -p marks-server --locked --no-default-features
 MARKS_TEST_SERVICE_WORKER=1 npm run ci:service -- --bin target/debug/marks-server --static-dir client/dist --browser chromium
 MARKS_TEST_SERVICE_WORKER=1 npm run ci:service -- --bin target/debug/marks-server --static-dir client/dist --browser firefox
 MARKS_TEST_SERVICE_WORKER=1 npm run ci:service -- --bin target/debug/marks-server --static-dir client/dist --browser webkit

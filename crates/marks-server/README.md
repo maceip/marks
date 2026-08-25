@@ -17,6 +17,12 @@ receives site IDs and bytes only — never a session, an email, or a role.
 cargo run -p marks-server
 ```
 
+The Marks workspace requires Node.js 22.12 or newer as well as Rust. For an
+ordinary no-feature development build, `build.rs` invokes the checked-in Node
+variant resolver to obtain the canonical `stable`/local plan; it does not keep
+a second Rust copy of that default. Release builds and any build with
+nondefault Cargo features must supply an explicit resolver-produced plan.
+
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `MARKS_LISTEN` | `127.0.0.1:3000` | Bind address |
@@ -25,20 +31,23 @@ cargo run -p marks-server
 | `MARKS_STATIC_DIR` | unset | Built browser client to serve with an SPA fallback |
 | `MARKS_EVT_ENABLED` | off | Feature flag for the experimental Chrome EVT rail |
 | `MARKS_EVT_LOCATOR_KEY` | — | Hex HMAC key (≥32 bytes) for verified-email locators; required when EVT is on |
-| `MARKS_AGENT_PROVIDER` | `disabled` | Optional in-page planner: `disabled` or `openai` |
-| `MARKS_OPENAI_API_KEY_FILE` | — | OpenAI key file (regular file, ≤16 KiB, mode `0600` or stricter); required with the OpenAI provider |
-| `MARKS_OPENAI_MODEL` | — | Server-owned OpenAI model identifier; required with the OpenAI provider |
+| `MARKS_AGENT_PROVIDER` | `disabled` | Runtime policy in an `agent-chat` product build: `disabled` or `openai`; an active value is rejected by stable builds |
+| `MARKS_OPENAI_API_KEY_FILE` | — | OpenAI key file (regular file, ≤16 KiB, mode `0600` or stricter); required with the OpenAI provider in an agent-capable build |
+| `MARKS_OPENAI_MODEL` | — | Server-owned OpenAI model identifier; required with the OpenAI provider in an agent-capable build |
 
 The EVT redeem endpoint additionally refuses to run without a trusted issuer
 adapter; `MARKS_EVT_INSECURE_TEST_ADAPTER=1` enables the test-only shim that
 integration tests use to exercise the transaction path.
 
-The optional agent gateway is disabled unless all three provider settings are
-explicitly configured. The browser cannot provide or override the key, model,
-or endpoint and does not send Markdown source to the planner. Admission,
-timeouts, event retention, and output ceilings have additional bounded
-`MARKS_AGENT_*` variables documented in
-[`RIBBON-PRACTICAL-INTERFACES.md`](../../docs/RIBBON-PRACTICAL-INTERFACES.md).
+The stable product build physically omits the agent gateway. In a product
+variant compiled with Cargo feature `agent-chat`, the optional hosted provider
+is still disabled unless all three provider settings are explicitly configured.
+The browser cannot provide or override the key, model, or endpoint and does not
+send Markdown source to the planner. Admission, timeouts, event retention, and
+output ceilings have additional bounded `MARKS_AGENT_*` variables documented
+in [`RIBBON-PRACTICAL-INTERFACES.md`](../../docs/RIBBON-PRACTICAL-INTERFACES.md).
+The matching browser/server plan and Cargo invocation are documented in
+[`PRODUCT-VARIANTS.md`](../../docs/PRODUCT-VARIANTS.md).
 
 Production on `marks.secure.build` is documented in [`deploy/`](../../deploy/).
 
@@ -62,11 +71,13 @@ document's authorization epoch so live sockets re-resolve or close.
 Unknown, deleted, and unauthorized documents are one indistinguishable 404.
 Authentication failures are one indistinguishable 401.
 
-The session-only agent surface is `GET /v1/agent/capabilities`,
+In an `agent-chat` product build, the session-only agent surface is
+`GET /v1/agent/capabilities`,
 `POST /v1/agent/runs`, `GET /v1/agent/runs/{id}/events`,
 `POST /v1/agent/runs/{id}/tool-results`, and
 `DELETE /v1/agent/runs/{id}`. Mutations use the existing exact-origin and CSRF
-guards; run creation also performs the existing document read-ACL check.
+guards; run creation also performs the existing document read-ACL check. These
+routes are absent from the stable binary.
 
 Practical document intelligence adds three narrowly scoped, read-authorized
 surfaces: asset metadata listing, explicit public-link checking, and fixed-host
@@ -109,6 +120,12 @@ above it; rooms rehydrate by replaying exactly those bytes.
 ```bash
 cargo test -p marks-server
 ```
+
+The command above resolves the default stable/local plan and excludes agent
+code. Tests compiled with nondefault Cargo features require the matching
+explicit canonical product plan; see
+[`PRODUCT-VARIANTS.md`](../../docs/PRODUCT-VARIANTS.md). CI exercises both
+stable and agent-enabled builds.
 
 `tests/auth_flow.rs` drives scratch → pairing → bootstrap → finalize →
 CSRF logout → silent device recovery (with replays failing closed) and the

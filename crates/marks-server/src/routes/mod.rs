@@ -1,3 +1,4 @@
+#[cfg(feature = "agent-chat")]
 pub mod agent;
 pub mod assets;
 pub mod auth;
@@ -37,9 +38,23 @@ pub async fn ready(State(app): State<Arc<App>>) -> ApiResult<Response> {
             "database writer unavailable",
         ));
     }
+    if app.config.static_dir.is_some()
+        && (!app.artifact.static_artifact_verified || !app.artifact.static_build_plan_verified)
+    {
+        return Err(ApiError::new(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "server and static artifact build plans differ",
+        ));
+    }
     Ok(Json(json!({
         "ok": true,
         "databaseWriteAt": app.health.last_database_write_ms(),
+        "productVariant": app.artifact.product_variant,
+        "buildPlanSha256": app.artifact.build_plan_sha256,
+        "features": app.artifact.features,
+        "serverFeatures": app.artifact.server_features,
+        "staticBuildPlanVerified": app.artifact.static_build_plan_verified,
+        "releaseReady": app.artifact.release_ready,
     }))
     .into_response())
 }

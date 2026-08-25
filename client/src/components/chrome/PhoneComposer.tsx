@@ -17,7 +17,6 @@ import type {
 } from '../../commands/types.ts';
 import type { PhoneGhostControl } from '../../lib/phone-ghost';
 import type { Posture } from '../../lib/posture';
-import { AGENT_CHAT_ENABLED } from '../../lib/product';
 import type { UiActionId } from '../../lib/ui-actions';
 import type { ViewMode } from '../shell/TopBar';
 import { Glyph } from '../glyphs/Glyph';
@@ -131,7 +130,7 @@ export function PhoneComposer(props: PhoneComposerProps) {
   }, [center.environment.context, tabs]);
 
   useEffect(() => {
-    if (!AGENT_CHAT_ENABLED) return;
+    if (!__MARKS_FEATURES__.agentChat) return;
     const active = center.runs.findLast((run) =>
       (run.source === 'agent' || run.source === 'bridge') &&
       (run.status === 'proposed' || run.status === 'awaiting-approval' || run.status === 'running'));
@@ -197,7 +196,7 @@ export function PhoneComposer(props: PhoneComposerProps) {
                   type="button"
                   data-ribbon-tab={item.id}
                   aria-pressed={selectedTab?.id === item.id}
-                  className={`${item.contextual ? 'contextual ' : ''}${item.agentRaised ? 'agent-raised' : ''}`.trim()}
+                  className={`${item.contextual ? 'contextual ' : ''}${__MARKS_FEATURES__.agentChat && item.agentRaised ? 'agent-raised' : ''}`.trim()}
                   onClick={() => selectTab(item.id)}
                 >
                   <Glyph name={tabGlyph(item.id)} size={27} />
@@ -205,7 +204,7 @@ export function PhoneComposer(props: PhoneComposerProps) {
                     <strong>{phoneTabLabel(item)}</strong>
                     <small>{item.groups.map((group) => group.label).join(' · ')}</small>
                   </span>
-                  {item.agentRaised && <i className="agent-tab-dot" aria-label="Agent-relevant commands" />}
+                  {__MARKS_FEATURES__.agentChat && item.agentRaised && <i className="agent-tab-dot" aria-label="Agent-relevant commands" />}
                   <b aria-hidden="true"><Icon name={selectedTab?.id === item.id ? 'check' : 'chevron'} size={13} interactive={false} /></b>
                 </button>
               ))}
@@ -347,7 +346,7 @@ function PhoneCommand({
   return (
     <button
       type="button"
-      className={`${command.pressed ? 'active ' : ''}${command.contextual ? 'contextual ' : ''}${command.agentRaised ? 'agent-raised' : ''}`.trim()}
+      className={`${command.pressed ? 'active ' : ''}${command.contextual ? 'contextual ' : ''}${__MARKS_FEATURES__.agentChat && command.agentRaised ? 'agent-raised' : ''}`.trim()}
       data-command-id={command.id}
       disabled={!command.enabled}
       aria-pressed={command.pressed}

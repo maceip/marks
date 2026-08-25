@@ -3,6 +3,7 @@ node_modules/
 *.db3-shm
 *.db3-wal
 dist/
+/client/dist-variants/
 build/
 *.log
 .env

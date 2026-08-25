@@ -66,15 +66,17 @@ npm run preview      # static preview only; no API or collaboration backend
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `MARKS_SERVER` | `http://localhost:3000` | Rust API/WebSocket target used by the Vite development proxy |
+| `MARKS_PRODUCT_VARIANT` | `stable` | Checked-in product build variant (`stable`, `beta`, or a CI-only validation variant) |
 | `VITE_MARKS_DATA_MODE` | `local` | Set to `service` when building against a runnable document service |
-| `VITE_MARKS_AGENT_CHAT` | unset (disabled) | Set to `1` at build time to activate agent chat UI and browser agent command entry points |
-| `VITE_MARKS_RIBBON_WILD` | unset (disabled) | Set to `1` at build time to activate the ribbon possibility layer |
 
 `marks-server` reads its own environment (`MARKS_LISTEN`, `MARKS_DB`,
 `MARKS_ORIGIN`, `MARKS_STATIC_DIR`, `MARKS_EVT_ENABLED`); see
 [crates/marks-server/README.md](crates/marks-server/README.md). The
 `https://marks.secure.build` deploy (Caddy, systemd backoff, Knot) is in
-[deploy/](deploy/).
+[deploy/](deploy/). Feature catalog, variant, build-receipt, CI, and deployment
+target contracts are documented in
+[docs/PRODUCT-VARIANTS.md](docs/PRODUCT-VARIANTS.md). Ad hoc
+`VITE_MARKS_AGENT_CHAT` and `VITE_MARKS_RIBBON_WILD` inputs are rejected.
 
 ## Editing
 
@@ -312,11 +314,19 @@ launch, is in [docs/TEST-HARNESS.md](docs/TEST-HARNESS.md).
 
 The portable surface suite can run against the default local Vite app. The
 current connected service proof needs a service-mode build and an independently
-running Rust server binary:
+running Rust server binary resolved from the same product plan:
 
 ```bash
-VITE_MARKS_DATA_MODE=service VITE_MARKS_TEST_SERVICE_WORKER=1 npm run build
-cargo build -p marks-server
+plan=$(node --experimental-strip-types scripts/product-variant.ts resolve \
+  --variant stable --data-mode service --format canonical)
+digest=$(node --experimental-strip-types scripts/product-variant.ts resolve \
+  --variant stable --data-mode service --format sha256)
+VITE_MARKS_TEST_SERVICE_WORKER=1 npm run build:variant -- \
+  --variant stable --data-mode service \
+  --out-dir "$PWD/client/dist" --require-deployable
+MARKS_PRODUCT_VARIANT=stable MARKS_BUILD_PLAN_JSON="$plan" \
+  MARKS_BUILD_PLAN_SHA256="$digest" \
+  cargo build -p marks-server --locked --no-default-features
 MARKS_TEST_SERVICE_WORKER=1 npm run ci:service -- --bin target/debug/marks-server --static-dir client/dist --browser chromium
 ```
 

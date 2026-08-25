@@ -4,14 +4,19 @@ import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  PRODUCT_FEATURE_CATALOG,
+  assertNoLegacyProductFeatureEnvironment,
+  canonicalProductBuildPlan,
+  canonicalProductBuildReceipt,
+  createProductBuildReceipt,
+  productFeatureState,
+  resolveProductBuildPlan,
+  type ProductBuildPlan,
+} from '../config/product-variants.ts';
 
 const API_TARGET = process.env.MARKS_SERVER ?? 'http://localhost:3000';
 const CLIENT_ROOT = fileURLToPath(new URL('.', import.meta.url));
-
-interface ProductFeatureFlags {
-  agentChat: boolean;
-  ribbonWild: boolean;
-}
 
 function normalizeModuleId(id: string): string {
   return id.replaceAll('\\', '/').split('?', 1)[0];
@@ -24,35 +29,9 @@ function normalizeModuleId(id: string): string {
  * Inspect the final module graph rather than filenames so hashing, chunk
  * merging, or future component names cannot silently weaken the boundary.
  */
-function assertProductFeatureChunks(flags: ProductFeatureFlags): Plugin {
-  const source = (path: string) => normalizeModuleId(fileURLToPath(new URL(path, import.meta.url)));
+function assertProductFeatureChunks(plan: ProductBuildPlan): Plugin {
+  const source = (path: string) => normalizeModuleId(fileURLToPath(new URL(`./${path}`, import.meta.url)));
   const root = normalizeModuleId(CLIENT_ROOT).replace(/\/$/u, '');
-  const agentRequired = [
-    source('./src/components/agent/AgentPill.tsx'),
-    source('./src/components/agent/AgentChatPill.tsx'),
-    source('./src/commands/webmcp.ts'),
-  ];
-  const agentForbiddenPrefixes = [
-    source('./src/agent/'),
-    source('./src/components/agent/'),
-  ];
-  const agentForbiddenExact = [
-    source('./src/commands/webmcp.ts'),
-    source('./src/styles/agent.css'),
-  ];
-  const wildRequired = [
-    source('./src/components/wild/WildStudio.tsx'),
-    source('./src/components/wild/WildTelemetry.tsx'),
-    source('./src/wild/observations.ts'),
-  ];
-  const wildForbiddenPrefixes = [
-    source('./src/wild/'),
-    source('./src/components/wild/'),
-  ];
-  const wildForbiddenExact = [
-    source('./src/lib/wild-surfaces.ts'),
-    source('./src/styles/wild.css'),
-  ];
   const display = (id: string) => relative(root, id).replaceAll('\\', '/');
 
   return {
@@ -64,42 +43,73 @@ function assertProductFeatureChunks(flags: ProductFeatureFlags): Plugin {
           ? Object.keys(output.modules).map(normalizeModuleId)
           : []),
       );
+      // Module ownership proves that feature entry points are cut correctly.
+      // Shared command/ribbon modules can still retain disabled branches, so
+      // also inspect emitted JavaScript and CSS for catalog-owned identities.
+      // Source maps are deliberately excluded: they preserve source text and
+      // are not executable artifact code.
+      const javascript = Object.values(bundle)
+        .filter((output) => output.type === 'chunk')
+        .map((output) => output.code)
+        .join('\n');
+      const stylesheets = Object.values(bundle)
+        .filter((output) => output.type === 'asset' && output.fileName.endsWith('.css'))
+        .map((output) => typeof output.source === 'string'
+          ? output.source
+          : new TextDecoder().decode(output.source))
+        .join('\n');
 
-      const assertFeature = (
-        label: string,
-        enabled: boolean,
-        required: string[],
-        forbiddenPrefixes: string[],
-        forbiddenExact: string[],
-      ) => {
+      for (const feature of Object.values(PRODUCT_FEATURE_CATALOG)) {
+        if (!feature.client) continue;
+        const enabled = plan.features[feature.id];
+        const required = feature.client.requiredModules.map(source);
+        const forbiddenPrefixes = feature.client.forbiddenModulePrefixes.map(source);
+        const forbiddenExact = feature.client.forbiddenModules.map(source);
+        const javascriptMarkers = feature.client.javascriptMarkers;
+        const stylesheetMarkers = feature.client.stylesheetMarkers;
         if (enabled) {
           const missing = required.filter((id) => !modules.has(id));
           if (missing.length) {
-            this.error(`${label} is enabled but its entry modules were not emitted: ${missing.map(display).join(', ')}`);
+            this.error(`${feature.label} is enabled but its entry modules were not emitted: ${missing.map(display).join(', ')}`);
           }
-          return;
+          const missingJavaScriptMarkers = javascriptMarkers.filter((marker) => !javascript.includes(marker));
+          if (missingJavaScriptMarkers.length) {
+            this.error(`${feature.label} is enabled but JavaScript markers were not emitted: ${missingJavaScriptMarkers.join(', ')}`);
+          }
+          const missingStylesheetMarkers = stylesheetMarkers.filter((marker) => !stylesheets.includes(marker));
+          if (missingStylesheetMarkers.length) {
+            this.error(`${feature.label} is enabled but stylesheet markers were not emitted: ${missingStylesheetMarkers.join(', ')}`);
+          }
+          continue;
         }
         const forbidden = [...modules].filter((id) =>
           forbiddenExact.includes(id) || forbiddenPrefixes.some((prefix) => id.startsWith(prefix)));
         if (forbidden.length) {
-          this.error(`${label} is disabled but gated modules were emitted: ${forbidden.map(display).sort().join(', ')}`);
+          this.error(`${feature.label} is disabled but gated modules were emitted: ${forbidden.map(display).sort().join(', ')}`);
         }
-      };
+        const retainedJavaScriptMarkers = javascriptMarkers.filter((marker) => javascript.includes(marker));
+        if (retainedJavaScriptMarkers.length) {
+          this.error(`${feature.label} is disabled but JavaScript markers were emitted: ${retainedJavaScriptMarkers.join(', ')}`);
+        }
+        const retainedStylesheetMarkers = stylesheetMarkers.filter((marker) => stylesheets.includes(marker));
+        if (retainedStylesheetMarkers.length) {
+          this.error(`${feature.label} is disabled but stylesheet markers were emitted: ${retainedStylesheetMarkers.join(', ')}`);
+        }
+      }
+    },
+  };
+}
 
-      assertFeature(
-        'Agent chat',
-        flags.agentChat,
-        agentRequired,
-        agentForbiddenPrefixes,
-        agentForbiddenExact,
-      );
-      assertFeature(
-        'Ribbon wild',
-        flags.ribbonWild,
-        wildRequired,
-        wildForbiddenPrefixes,
-        wildForbiddenExact,
-      );
+function emitProductBuildReceipt(receiptJson: string): Plugin {
+  return {
+    name: 'marks-emit-product-build-receipt',
+    apply: 'build',
+    generateBundle() {
+      this.emitFile({
+        type: 'asset',
+        fileName: 'marks-product-build.json',
+        source: receiptJson,
+      });
     },
   };
 }
@@ -139,18 +149,54 @@ function stampServiceWorker(): Plugin {
 }
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, CLIENT_ROOT, 'VITE_');
-  const flags: ProductFeatureFlags = {
-    agentChat: env.VITE_MARKS_AGENT_CHAT === '1',
-    ribbonWild: env.VITE_MARKS_RIBBON_WILD === '1',
-  };
+  const env = loadEnv(mode, CLIENT_ROOT, '');
+  assertNoLegacyProductFeatureEnvironment(env);
+  const plan = resolveProductBuildPlan({
+    variant: env.MARKS_PRODUCT_VARIANT,
+    dataMode: env.VITE_MARKS_DATA_MODE ?? 'local',
+  });
+  const planJson = canonicalProductBuildPlan(plan);
+  const receipt = createProductBuildReceipt(plan);
+  const receiptJson = canonicalProductBuildReceipt(receipt);
+  const suppliedPlan = env.MARKS_BUILD_PLAN_JSON;
+  const suppliedDigest = env.MARKS_BUILD_PLAN_SHA256;
+  const suppliedCargoFeatures = env.MARKS_SERVER_CARGO_FEATURES;
+  if (suppliedPlan !== undefined && suppliedPlan !== planJson) {
+    throw new Error('MARKS_BUILD_PLAN_JSON does not match the product variant resolved by Vite');
+  }
+  if (suppliedDigest !== undefined && suppliedDigest !== receipt.buildPlanSha256) {
+    throw new Error('MARKS_BUILD_PLAN_SHA256 does not match the product variant resolved by Vite');
+  }
+  if (suppliedCargoFeatures !== undefined && suppliedCargoFeatures !== plan.server.cargoFeatures.join(',')) {
+    throw new Error('MARKS_SERVER_CARGO_FEATURES does not match the product variant resolved by Vite');
+  }
+  const flags = productFeatureState(plan);
+  const featureDefines = Object.fromEntries(
+    Object.entries(flags).map(([key, enabled]) => [
+      `__MARKS_FEATURES__.${key}`,
+      JSON.stringify(enabled),
+    ]),
+  );
 
   return {
     define: {
-      __MARKS_AGENT_CHAT_ENABLED__: JSON.stringify(flags.agentChat),
-      __MARKS_RIBBON_WILD_ENABLED__: JSON.stringify(flags.ribbonWild),
+      // Property-level replacements are deliberate. Replacing the whole object
+      // leaves Rolldown dynamic-import entries alive until after graph
+      // discovery; direct literal properties prune disabled feature chunks.
+      ...featureDefines,
+      // Shared catalogs are also executed directly by Node unit tests. This
+      // build sentinel lets them retain a safe fallback there while Vite can
+      // still fold their property-level feature guards to literals.
+      __MARKS_VITE_BUILD__: 'true',
+      __MARKS_PRODUCT_BUILD__: JSON.stringify(receipt),
+      __MARKS_PRODUCT_BUILD_JSON__: JSON.stringify(receiptJson),
     },
-    plugins: [react(), assertProductFeatureChunks(flags), stampServiceWorker()],
+    plugins: [
+      react(),
+      assertProductFeatureChunks(plan),
+      emitProductBuildReceipt(receiptJson),
+      stampServiceWorker(),
+    ],
     server: {
       port: 5173,
       proxy: {

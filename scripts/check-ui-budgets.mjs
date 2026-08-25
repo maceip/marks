@@ -1,10 +1,31 @@
 import { readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { isAbsolute, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 
 const projectRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const distRoot = join(projectRoot, 'client', 'dist');
+const args = process.argv.slice(2);
+let explicitDist;
+for (let index = 0; index < args.length; index += 1) {
+  const argument = args[index];
+  if (argument === '--dist-dir') {
+    if (explicitDist !== undefined || !args[index + 1]) {
+      throw new Error('--dist-dir must be supplied exactly once with one absolute path');
+    }
+    explicitDist = args[index + 1];
+    index += 1;
+    continue;
+  }
+  throw new Error(`unknown argument: ${argument}`);
+}
+if (explicitDist !== undefined && !isAbsolute(explicitDist)) {
+  throw new Error('--dist-dir must be an absolute path');
+}
+const configuredDist = explicitDist ?? process.env.MARKS_CLIENT_DIST_DIR;
+if (configuredDist !== undefined && !isAbsolute(configuredDist)) {
+  throw new Error('MARKS_CLIENT_DIST_DIR must be an absolute path');
+}
+const distRoot = configuredDist ? resolve(configuredDist) : join(projectRoot, 'client', 'dist');
 
 const limits = {
   // Leave bounded room for the shared UI contract while keeping the entry

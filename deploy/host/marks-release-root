@@ -8,14 +8,17 @@ import json
 import os
 import pwd
 import re
+import secrets
+import signal
 import shutil
 import socket
-import sqlite3
 import stat
 import subprocess
 import sys
+import tempfile
 import time
-import urllib.request
+import tomllib
+import urllib.parse
 from pathlib import Path
 
 def fixed_path(env_name: str, default: str) -> Path:
@@ -33,49 +36,175 @@ CURRENT = MARKS_ROOT / "current"
 PREVIOUS = MARKS_ROOT / "previous"
 LOCK = MARKS_ROOT / ".deploy.lock"
 ASSET_POOL = MARKS_ROOT / "assets"
+STATE = fixed_path("MARKS_TEST_STATE", "/var/lib/marks-deploy")
 INCOMING = fixed_path("MARKS_TEST_INCOMING", "/var/lib/marks-deploy/incoming")
-CACHE = fixed_path("MARKS_TEST_CACHE", "/var/lib/marks-deploy/cache")
+UPLOAD_LOCK = INCOMING / ".marks-upload.lock"
+CLAIMED = fixed_path("MARKS_TEST_CLAIMED", "/var/lib/marks-deploy/claimed")
 CANARY = fixed_path("MARKS_TEST_CANARY", "/var/lib/marks-deploy/canary")
-VERIFIED_GIT = fixed_path("MARKS_TEST_VERIFIED_GIT", "/var/cache/marks-deploy/git")
+SQLITE_STAGING = fixed_path(
+    "MARKS_TEST_SQLITE_STAGING",
+    "/var/lib/marks-deploy/sqlite-staging",
+)
+SQLITE_ARCHIVE = fixed_path(
+    "MARKS_TEST_SQLITE_ARCHIVE",
+    "/var/lib/marks-deploy/sqlite-snapshots",
+)
+# Untrusted builds can consume substantial transient disk. Keep every writable
+# build input/output on one separately provisioned fixed-capacity filesystem so
+# a malicious or accidental build can fill that filesystem, never the host's
+# root/state filesystem. Production ignores every MARKS_TEST_* override.
+BUILD_ROOT = fixed_path("MARKS_TEST_BUILD_ROOT", "/var/lib/marks-deploy/build")
+BUILD_LOOP_IMAGE = Path("/var/lib/marks-deploy-build.ext4")
+CACHE = fixed_path("MARKS_TEST_CACHE", "/var/lib/marks-deploy/build/cache")
+WORKSPACES = fixed_path("MARKS_TEST_WORKSPACES", "/var/lib/marks-deploy/build/workspaces")
+VERIFIED_GIT = fixed_path("MARKS_TEST_VERIFIED_GIT", "/var/lib/marks-deploy/build/verified-git")
 LIVE_DB = fixed_path("MARKS_TEST_LIVE_DB", "/var/lib/marks/marks.db3")
 BACKUPS = fixed_path("MARKS_TEST_BACKUPS", "/var/lib/marks/backups")
 KEEP_RELEASES = 8
-# Build caches accelerate the next release but must never grow without
-# bound. A cache over its cap is cleared entirely — the next build simply
-# repopulates it — which is deterministic and cannot corrupt state.
-CACHE_LIMIT_BYTES = {
-    "npm": 2 * 1024**3,
-    "cargo": 4 * 1024**3,
-    "target": 8 * 1024**3,
-    "home": 1 * 1024**3,
-}
+MAX_SOURCE_BYTES = 1024 * 1024 * 1024
+MAX_SOURCE_FILES = 50_000
+MAX_BUILT_BINARY_BYTES = 256 * 1024 * 1024
+MAX_HTTP_JSON_BYTES = 64 * 1024
+MAX_BUILD_RECEIPT_BYTES = 64 * 1024
+MAX_DEPENDENCY_LOCK_BYTES = 4 * 1024 * 1024
+MAX_LOOP_BACKING_PATH_BYTES = 4096
+MIN_BUILD_FILESYSTEM_BYTES = 20 * 1024**3
+MAX_BUILD_FILESYSTEM_BYTES = 24 * 1024**3
+MAX_MOUNTINFO_BYTES = 1024 * 1024
+NPM_RUNTIME_SECONDS = 20 * 60
+CARGO_FETCH_RUNTIME_SECONDS = 20 * 60
+DOCKER_RUNTIME_SECONDS = 30 * 60
+CANARY_RUNTIME_SECONDS = 90
+CANARY_TMPFS_BYTES = 1024**3
+MAX_CANARY_SEED_BYTES = 512 * 1024**2
+MAX_SQLITE_RECEIPT_BYTES = 64 * 1024
+SQLITE_WORKER_RUNTIME_SECONDS = 2 * 60
+KEEP_AUTHORITATIVE_SNAPSHOTS = 2
 DISPATCHER = Path("/usr/local/libexec/marks-deploy-ssh")
 UPLOADER = Path("/usr/local/libexec/marks-upload")
+SQLITE_WORKER = fixed_path(
+    "MARKS_TEST_SQLITE_WORKER",
+    "/usr/local/libexec/marks-sqlite-worker",
+)
+FETCH_EGRESS_POLICY = fixed_path(
+    "MARKS_TEST_FETCH_EGRESS_POLICY",
+    "/etc/marks/build-fetch-egress-policy.v1",
+)
+CARGO_FETCH_NETWORK = "marks-build-fetch"
+FETCH_EGRESS_POLICY_TEXT = (
+    "marks.fetch-egress.v1 network=marks-build-fetch "
+    "private=deny link-local=deny\n"
+)
 RELEASE_ROOT = Path("/usr/local/sbin/marks-release-root")
 TEMPLATE = fixed_path("MARKS_TEST_TEMPLATE", "/etc/marks/marks.service.template")
 UNIT = fixed_path("MARKS_TEST_UNIT", "/etc/systemd/system/marks.service")
+NODE = fixed_path("MARKS_TEST_NODE", "/usr/bin/node")
 SERVICE = "marks.service"
 REMOTE = "https://github.com/maceip/marks.git"
 PUBLIC_ORIGIN = "https://marks.secure.build"
 LOCAL_ORIGIN = "http://127.0.0.1:5192"
+# This installed helper owns only the existing marks.secure.build target. The
+# catalog may declare other deployable product variants (for example beta),
+# but they require a separately provisioned target with independent service,
+# state, origin, and release links. Never let this credential retarget the
+# production origin by selecting a different variant.
+TARGET_PRODUCT_VARIANT = "stable"
 BUILDER_IMAGE = "rust:1.88.0-bookworm@sha256:af306cfa71d987911a781c37b59d7d67d934f49684058f96cf72079c3626bfe0"
 SHA_RE = re.compile(r"[0-9a-f]{40}")
-RELEASE_RE = re.compile(r"[A-Za-z0-9._-]+")
+SHA256_RE = re.compile(r"[0-9a-f]{64}")
+PRODUCT_VARIANT_RE = re.compile(r"[a-z][a-z0-9-]{0,63}")
+CARGO_FEATURE_RE = re.compile(r"[a-z][a-z0-9_-]{0,63}")
+BACKUP_NAME_RE = re.compile(
+    r"pre-activation-[0-9]{8}T[0-9]{6}Z-[A-Za-z0-9._-]{1,64}\.db3"
+)
+RELEASE_RE = re.compile(
+    r"(?:legacy-[0-9]{8}T[0-9]{6}Z|[0-9a-f]{40}(?:\.[a-z][a-z0-9-]{0,63}\.[0-9a-f]{64})?)"
+)
+BUILD_PLAN_SCHEMA = "marks.product-build-plan.v1"
+BUILD_PLAN_RECEIPT_SCHEMA = "marks.product-build-receipt.v1"
+RELEASE_SCHEMA = "marks-release.v2"
 
 
 def fail(message: str) -> None:
     raise RuntimeError(message)
 
 
-def run(argv, *, check=True, capture=False, env=None):
-    result = subprocess.run(
-        [str(item) for item in argv],
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE if capture else None,
-        stderr=subprocess.STDOUT if capture else None,
-        env=env,
-    )
+def run(
+    argv,
+    *,
+    check=True,
+    capture=False,
+    capture_limit=None,
+    timeout=None,
+    env=None,
+    cwd=None,
+):
+    command = [str(item) for item in argv]
+    if capture and capture_limit is not None:
+        if timeout is not None:
+            fail("bounded captures must carry their deadline in the sandboxed command")
+        if capture_limit <= 0:
+            fail("capture limit must be positive")
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=env,
+            cwd=cwd,
+        )
+        output = bytearray()
+        assert process.stdout is not None
+        try:
+            while len(output) <= capture_limit:
+                block = process.stdout.read(min(8192, capture_limit + 1 - len(output)))
+                if not block:
+                    break
+                output.extend(block)
+            if len(output) > capture_limit:
+                process.kill()
+                process.wait()
+                fail(f"command output exceeded {capture_limit} bytes: {argv[0]}")
+            returncode = process.wait()
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            process.stdout.close()
+        stdout = output.decode("utf-8", errors="strict")
+        result = subprocess.CompletedProcess(command, returncode, stdout=stdout)
+    else:
+        if timeout is not None:
+            if capture:
+                fail("timed commands must stream rather than accumulate output")
+            process = subprocess.Popen(
+                command,
+                env=env,
+                cwd=cwd,
+                start_new_session=True,
+            )
+            try:
+                returncode = process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                # Git may have a remote-http child and Docker has client-side
+                # helpers. Kill the whole command session, then let callers
+                # perform any daemon-owned cleanup (for example docker rm).
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+                fail(f"command timed out after {timeout} seconds: {argv[0]}")
+            result = subprocess.CompletedProcess(command, returncode, stdout=None)
+        else:
+            result = subprocess.run(
+                command,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE if capture else None,
+                stderr=subprocess.STDOUT if capture else None,
+                env=env,
+                cwd=cwd,
+            )
     if check and result.returncode:
         detail = f": {result.stdout.strip()}" if capture and result.stdout else ""
         fail(f"command failed ({result.returncode}): {argv[0]}{detail}")
@@ -90,14 +219,254 @@ def sha(value: str) -> str:
 
 def release_id(value: str) -> str:
     if not RELEASE_RE.fullmatch(value):
-        fail("release id contains unsupported characters")
+        fail("release id is not one legacy, revision-only, or product-variant release identity")
     return value
+
+
+def product_variant(value: str) -> str:
+    if not PRODUCT_VARIANT_RE.fullmatch(value):
+        fail("product variant must be one lowercase catalog identifier")
+    return value
+
+
+def build_plan_sha256(value: str) -> str:
+    if not SHA256_RE.fullmatch(value):
+        fail("build plan digest must be exactly 64 lowercase hexadecimal characters")
+    return value
+
+
+def release_identity(revision: str, variant: str, digest: str) -> str:
+    return f"{sha(revision)}.{product_variant(variant)}.{build_plan_sha256(digest)}"
+
+
+def canonical_json(value) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
+def resolve_build_plan(source: Path, requested_variant: str, expected_digest: str):
+    """Resolve one checked-in build plan through the repository CLI.
+
+    The restricted caller supplies only an allowlisted catalog identifier and
+    its CI-bound digest. Feature booleans, Cargo features, and client build
+    inputs are never accepted from SSH or ambient root environment.
+    """
+    requested_variant = product_variant(requested_variant)
+    expected_digest = build_plan_sha256(expected_digest)
+    command = [
+        NODE,
+        "--experimental-strip-types",
+        "scripts/product-variant.ts",
+        "resolve",
+        "--variant",
+        requested_variant,
+        "--data-mode",
+        "service",
+        "--format",
+        "json",
+    ]
+    output = run_product_variant_resolver(source, command)
+    try:
+        resolved = json.loads(output)
+    except json.JSONDecodeError as error:
+        fail(f"product variant resolver did not return JSON: {error}")
+    if set(resolved) != {"schema", "buildPlan", "buildPlanSha256"}:
+        fail("product variant resolver receipt has an unexpected shape")
+    if resolved.get("schema") != BUILD_PLAN_RECEIPT_SCHEMA:
+        fail("product variant resolver receipt schema is unsupported")
+    plan = resolved.get("buildPlan")
+    if not isinstance(plan, dict) or set(plan) != {
+        "schema", "productVariant", "deployable", "features", "client", "server"
+    }:
+        fail("product build plan has an unexpected shape")
+    if plan.get("schema") != BUILD_PLAN_SCHEMA:
+        fail("product build plan schema is unsupported")
+    if plan.get("productVariant") != requested_variant:
+        fail("resolved product variant differs from the requested variant")
+    if plan.get("deployable") is not True:
+        fail(f"product variant is not deployable: {requested_variant}")
+    features = plan.get("features")
+    if (
+        not isinstance(features, dict)
+        or not features
+        or any(not PRODUCT_VARIANT_RE.fullmatch(str(name)) or type(enabled) is not bool
+               for name, enabled in features.items())
+    ):
+        fail("product build plan features are invalid")
+    client = plan.get("client")
+    if client != {"dataMode": "service"}:
+        fail("deployment requires a service-mode client build plan")
+    server = plan.get("server")
+    cargo_features = server.get("cargoFeatures") if isinstance(server, dict) else None
+    if (
+        not isinstance(cargo_features, list)
+        or cargo_features != sorted(set(cargo_features))
+        or any(not isinstance(name, str) or not CARGO_FEATURE_RE.fullmatch(name)
+               for name in cargo_features)
+    ):
+        fail("product build plan server Cargo features are invalid")
+    canonical = canonical_json(plan)
+    observed_digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    if resolved.get("buildPlanSha256") != observed_digest:
+        fail("product variant resolver digest does not match its canonical plan")
+    if observed_digest != expected_digest:
+        fail("requested build plan digest differs from the checked-in product variant")
+    return {
+        "plan": plan,
+        "canonical": canonical,
+        "digest": observed_digest,
+        "variant": requested_variant,
+        "cargoFeatures": cargo_features,
+        "clientOutput": (
+            source
+            / "client"
+            / "dist-variants"
+            / requested_variant
+            / f"service-{observed_digest[:16]}"
+        ),
+    }
+
+
+def run_product_variant_resolver(source: Path, command) -> str:
+    """Run repository-owned resolver code without root authority.
+
+    Production invokes this helper as root, but the uploaded TypeScript and
+    catalog are untrusted until their receipt has been validated. Execute them
+    as the dedicated locked build uid in a read-only, networkless transient
+    unit. Unprivileged contract tests can run the same command directly because
+    they have no authority to shed.
+    """
+    return run_untrusted_readonly(
+        source,
+        command,
+        step="plan",
+        capture_limit=128 * 1024,
+    )
+
+
+def run_untrusted_readonly(
+    working_directory: Path,
+    command,
+    *,
+    step: str,
+    capture_limit: int,
+    sandbox_command=None,
+) -> str:
+    """Capture one repository-built program without ever giving it root.
+
+    The production branch deliberately has no direct-execution fallback. The
+    unprivileged branch exists only so the same helper can be exercised by the
+    fixture suite without systemd or sudo.
+    """
+    if not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", step):
+        fail("sandbox step name is invalid")
+    if os.geteuid() != 0:
+        return run(
+            command,
+            capture=True,
+            capture_limit=capture_limit,
+            env=fixed_environment(),
+            cwd=working_directory,
+        ).stdout
+
+    uid, gid = build_identity()
+    path_token = hashlib.sha256(str(working_directory).encode("utf-8")).hexdigest()[:12]
+    unit = f"marks-{step}-{path_token}-{os.getpid()}"
+    payload = command if sandbox_command is None else sandbox_command
+    sandbox = [
+        "/usr/bin/systemd-run",
+        "--quiet",
+        "--wait",
+        "--pipe",
+        "--collect",
+        f"--unit={unit}",
+        f"--uid={uid}",
+        f"--gid={gid}",
+        "--property=Type=exec",
+        "--property=WorkingDirectory=/marks-input",
+        f"--property=BindReadOnlyPaths={working_directory}:/marks-input",
+        "--property=ProtectSystem=strict",
+        "--property=ProtectHome=yes",
+        "--property=PrivateTmp=yes",
+        "--property=PrivateDevices=yes",
+        "--property=PrivateNetwork=yes",
+        "--property=ProtectProc=invisible",
+        "--property=ProcSubset=pid",
+        "--property=RuntimeMaxSec=30",
+        "--property=MemoryMax=128M",
+        "--property=TasksMax=32",
+        "--property=NoNewPrivileges=yes",
+        "--property=RestrictSUIDSGID=yes",
+        "--property=CapabilityBoundingSet=",
+        "--property=RestrictRealtime=yes",
+        "--property=LockPersonality=yes",
+        "--property=ProtectKernelTunables=yes",
+        "--property=ProtectKernelModules=yes",
+        "--property=ProtectControlGroups=yes",
+        "--property=ReadOnlyPaths=/marks-input",
+        "--property=InaccessiblePaths=/var/lib/marks /etc/marks /home /root /run/docker.sock",
+        "--setenv=HOME=/tmp",
+        "--setenv=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "--setenv=LANG=C.UTF-8",
+        "--setenv=LC_ALL=C.UTF-8",
+        "--setenv=GIT_TERMINAL_PROMPT=0",
+        *payload,
+    ]
+    return run(sandbox, capture=True, capture_limit=capture_limit).stdout
+
+
+def built_schema_receipt(stage: Path):
+    """Read schema compatibility from a freshly built unprivileged payload."""
+    output = run_untrusted_readonly(
+        stage,
+        [stage / "marks-admin", "schema"],
+        step="schema",
+        capture_limit=64 * 1024,
+        sandbox_command=["/marks-input/marks-admin", "schema"],
+    )
+    try:
+        receipt = json.loads(output.strip())
+    except json.JSONDecodeError as error:
+        fail(f"built marks-admin did not return a JSON schema identity: {error}")
+    if set(receipt) != {"schemaVersion", "maxCompatibleSchema"}:
+        fail("built marks-admin schema identity has an unexpected shape")
+    if (
+        type(receipt.get("schemaVersion")) is not int
+        or type(receipt.get("maxCompatibleSchema")) is not int
+        or receipt["schemaVersion"] < 0
+        or receipt["maxCompatibleSchema"] < receipt["schemaVersion"]
+    ):
+        fail("built marks-admin did not report a valid schema identity")
+    return receipt
 
 
 def deploy_identity():
     if os.geteuid() != 0:
         return os.getuid(), os.getgid()
     account = pwd.getpwnam("marks-deploy")
+    return account.pw_uid, account.pw_gid
+
+
+def build_identity():
+    """Return the locked identity used only for untrusted build execution."""
+    if os.geteuid() != 0:
+        return os.getuid(), os.getgid()
+    account = pwd.getpwnam("marks-build")
+    deploy = pwd.getpwnam("marks-deploy")
+    service = pwd.getpwnam("devuser")
+    if (
+        account.pw_uid in (0, deploy.pw_uid, service.pw_uid)
+        or account.pw_gid in (0, deploy.pw_gid, service.pw_gid)
+        or account.pw_shell not in ("/usr/sbin/nologin", "/sbin/nologin", "/bin/false")
+    ):
+        fail("marks-build must be one distinct locked system identity")
+    return account.pw_uid, account.pw_gid
+
+
+def service_identity():
+    """Return the identity that owns and parses the live Marks database."""
+    if os.geteuid() != 0:
+        return os.getuid(), os.getgid()
+    account = pwd.getpwnam("devuser")
     return account.pw_uid, account.pw_gid
 
 
@@ -111,25 +480,457 @@ def fixed_environment():
     }
 
 
-def ensure_layout() -> None:
+def ensure_real_directory(
+    path: Path,
+    mode: int,
+    owner,
+    *,
+    parents: bool,
+    allowed_existing_owners=None,
+) -> None:
+    """Create or harden one directory without ever following its final path."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError:
+        path.mkdir(mode=mode, parents=parents, exist_ok=False)
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        fail(f"layout path is not a real directory: {path}: {error}")
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISDIR(info.st_mode):
+            fail(f"layout path is not a directory: {path}")
+        if (
+            os.geteuid() == 0
+            and allowed_existing_owners is not None
+            and (info.st_uid, info.st_gid) not in allowed_existing_owners
+        ):
+            fail(f"layout directory has an unexpected owner: {path}")
+        if os.geteuid() == 0:
+            os.fchown(descriptor, *owner)
+        os.fchmod(descriptor, mode)
+    finally:
+        os.close(descriptor)
+
+
+def ensure_upload_lock() -> None:
+    """Create or validate the uploader's fixed no-follow namespace lock."""
     uid, gid = deploy_identity()
+    directory_fd = os.open(
+        INCOMING, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    )
+    descriptor = None
+    try:
+        try:
+            descriptor = os.open(
+                UPLOAD_LOCK.name,
+                os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=directory_fd,
+            )
+        except OSError as error:
+            fail(f"upload namespace lock could not be opened safely: {error}")
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            fail("upload namespace lock must be one regular single-link file")
+        allowed = {(uid, gid), (0, 0)}
+        if (info.st_uid, info.st_gid) not in allowed:
+            fail("upload namespace lock has an unexpected owner")
+        if os.geteuid() == 0:
+            os.fchown(descriptor, uid, gid)
+        os.fchmod(descriptor, 0o600)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(directory_fd)
+
+
+def decode_mountinfo_field(value: str) -> str:
+    """Decode the only escapes permitted by proc(5) mountinfo."""
+    replacements = {
+        "\\040": " ",
+        "\\011": "\t",
+        "\\012": "\n",
+        "\\134": "\\",
+    }
+    for encoded, decoded in replacements.items():
+        value = value.replace(encoded, decoded)
+    return value
+
+
+def build_mount_record(path: Path, mountinfo=Path("/proc/self/mountinfo")):
+    """Return the one kernel mount record whose mount point is exactly path."""
+    descriptor = os.open(mountinfo, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        data = bytearray()
+        while len(data) <= MAX_MOUNTINFO_BYTES:
+            block = os.read(
+                descriptor,
+                min(8192, MAX_MOUNTINFO_BYTES + 1 - len(data)),
+            )
+            if not block:
+                break
+            data.extend(block)
+        if len(data) > MAX_MOUNTINFO_BYTES:
+            fail("kernel mount table exceeds its parsing bound")
+    finally:
+        os.close(descriptor)
+    try:
+        lines = data.decode("utf-8", errors="strict").splitlines()
+    except UnicodeDecodeError as error:
+        fail(f"kernel mount table is not valid UTF-8: {error}")
+
+    records = []
+    for line in lines:
+        fields = line.split()
+        try:
+            separator = fields.index("-")
+        except ValueError:
+            fail("kernel mount table contains a malformed record")
+        if separator < 6 or len(fields) < separator + 4:
+            fail("kernel mount table contains a truncated record")
+        mount_point = Path(decode_mountinfo_field(fields[4]))
+        if mount_point != path:
+            continue
+        try:
+            major_text, minor_text = fields[2].split(":", 1)
+            device = (int(major_text), int(minor_text))
+        except (TypeError, ValueError):
+            fail("build filesystem mount has an invalid device identity")
+        records.append({
+            "device": device,
+            "root": decode_mountinfo_field(fields[3]),
+            "mountPoint": mount_point,
+            "options": set(fields[5].split(",")),
+            "fileSystem": fields[separator + 1],
+            "source": decode_mountinfo_field(fields[separator + 2]),
+            "superOptions": set(fields[separator + 3].split(",")),
+        })
+    if len(records) != 1:
+        fail("build root must be exactly one explicit filesystem mount")
+    return records[0]
+
+
+def validate_build_filesystem_contract(build_info, state_info, filesystem, mount) -> int:
+    """Pure structural checks for the bounded build-filesystem contract."""
+    if not stat.S_ISDIR(build_info.st_mode):
+        fail("build root is not a directory")
+    if (build_info.st_uid, build_info.st_gid) != (0, 0):
+        fail("build root must be owned by root")
+    if build_info.st_mode & 0o022:
+        fail("build root must not be group/world-writable")
+    if build_info.st_dev == state_info.st_dev:
+        fail("build root must be a distinct filesystem from deployment state")
+    if mount.get("root") != "/" or mount.get("fileSystem") != "ext4":
+        fail("build root must be the root of a dedicated ext4 filesystem")
+    if not {"nodev", "nosuid"}.issubset(mount.get("options", set())):
+        fail("build filesystem must be mounted nodev,nosuid")
+    observed_device = (os.major(build_info.st_dev), os.minor(build_info.st_dev))
+    if mount.get("device") != observed_device:
+        fail("build root device differs from its kernel mount record")
+    block_size = filesystem.f_frsize or filesystem.f_bsize
+    capacity = block_size * filesystem.f_blocks
+    if not MIN_BUILD_FILESYSTEM_BYTES <= capacity <= MAX_BUILD_FILESYSTEM_BYTES:
+        fail(
+            "build filesystem capacity must be between "
+            f"{MIN_BUILD_FILESYSTEM_BYTES} and {MAX_BUILD_FILESYSTEM_BYTES} bytes"
+        )
+    return capacity
+
+
+def validate_loop_backing_contract(backing_info, build_device: int) -> None:
+    """A loop filesystem is hard-bounded only when its image is allocated."""
+    if not stat.S_ISREG(backing_info.st_mode):
+        fail("build loop backing is not a regular file")
+    if (backing_info.st_uid, backing_info.st_gid) != (0, 0):
+        fail("build loop backing must be owned by root")
+    if backing_info.st_mode & 0o022:
+        fail("build loop backing must not be group/world-writable")
+    if not MIN_BUILD_FILESYSTEM_BYTES <= backing_info.st_size <= MAX_BUILD_FILESYSTEM_BYTES:
+        fail("build loop backing has an unexpected size")
+    if backing_info.st_blocks * 512 < backing_info.st_size:
+        fail("build loop backing is sparse; allocate every byte before mounting")
+    if backing_info.st_dev == build_device:
+        fail("build loop backing must live outside the filesystem it provides")
+
+
+def validate_build_filesystem() -> int:
+    """Verify the admin-provisioned hard disk boundary before any build."""
+    try:
+        build_fd = os.open(BUILD_ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as error:
+        fail(f"bounded build filesystem is not provisioned at {BUILD_ROOT}: {error}")
+    try:
+        state_fd = os.open(STATE, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            build_info = os.fstat(build_fd)
+            state_info = os.fstat(state_fd)
+            filesystem = os.fstatvfs(build_fd)
+        finally:
+            os.close(state_fd)
+        mount = build_mount_record(BUILD_ROOT)
+        capacity = validate_build_filesystem_contract(
+            build_info,
+            state_info,
+            filesystem,
+            mount,
+        )
+
+        source = Path(mount["source"])
+        try:
+            source_info = source.stat()
+        except OSError as error:
+            fail(f"build filesystem source is unavailable: {error}")
+        if not stat.S_ISBLK(source_info.st_mode):
+            fail("build filesystem source must be a fixed-size block device")
+        source_device = (os.major(source_info.st_rdev), os.minor(source_info.st_rdev))
+        if source_device != mount["device"]:
+            fail("build filesystem source device differs from its mount record")
+
+        loop_backing = (
+            Path("/sys/dev/block")
+            / f"{source_device[0]}:{source_device[1]}"
+            / "loop"
+            / "backing_file"
+        )
+        if loop_backing.exists():
+            try:
+                backing_fd = os.open(loop_backing, os.O_RDONLY | os.O_NOFOLLOW)
+                try:
+                    backing_bytes = os.read(
+                        backing_fd,
+                        MAX_LOOP_BACKING_PATH_BYTES + 1,
+                    )
+                finally:
+                    os.close(backing_fd)
+                if len(backing_bytes) > MAX_LOOP_BACKING_PATH_BYTES:
+                    fail("build loop backing identity exceeds its parsing bound")
+                encoded = backing_bytes.decode("utf-8", errors="strict").strip()
+            except (OSError, UnicodeDecodeError) as error:
+                fail(f"build loop backing identity is unreadable: {error}")
+            if not encoded or "\n" in encoded or "\x00" in encoded:
+                fail("build loop backing identity is invalid")
+            backing = Path(encoded if encoded.startswith("/") else f"/{encoded}")
+            if backing != BUILD_LOOP_IMAGE:
+                fail(f"build loop backing must be the fixed {BUILD_LOOP_IMAGE} image")
+            try:
+                backing_info = backing.lstat()
+            except OSError as error:
+                fail(f"build loop backing is unavailable: {error}")
+            if stat.S_ISLNK(backing_info.st_mode):
+                fail("build loop backing must not be a symbolic link")
+            validate_loop_backing_contract(backing_info, build_info.st_dev)
+        return capacity
+    finally:
+        os.close(build_fd)
+
+
+def ensure_layout(*, require_build=True) -> None:
+    uid, gid = deploy_identity()
+    state_children = (
+        INCOMING, CLAIMED, CANARY, SQLITE_STAGING, SQLITE_ARCHIVE, BUILD_ROOT
+    )
+    if any(path.parent != STATE for path in state_children):
+        fail("deployment state paths do not share the fixed state root")
+    if any(path.parent != BUILD_ROOT for path in (CACHE, WORKSPACES, VERIFIED_GIT)):
+        fail("build cache, workspaces, and Git verification must share the fixed build root")
+    migration_owners = {(0, 0), (uid, gid)}
+    # This must happen before touching any deploy-owned child. Once STATE is
+    # root-owned and not group/world-writable, the uploader cannot rename or
+    # replace cache, claim, workspace, incoming, or canary mount points.
+    ensure_real_directory(
+        STATE,
+        0o755,
+        (0, 0),
+        parents=True,
+        allowed_existing_owners=migration_owners,
+    )
+    if require_build:
+        if os.geteuid() == 0:
+            validate_build_filesystem()
+        else:
+            # Fixture-only branch. A non-root process cannot mount a loop/LV;
+            # the pure contract above is tested independently.
+            ensure_real_directory(
+                BUILD_ROOT,
+                0o755,
+                (uid, gid),
+                parents=False,
+            )
+
     for path, mode, owner in (
         (RELEASES, 0o755, (0, 0)),
         (ASSET_POOL, 0o755, (0, 0)),
         (MARKS_ROOT / "deploy", 0o755, (0, 0)),
         (INCOMING, 0o700, (uid, gid)),
-        (CACHE, 0o700, (uid, gid)),
-        (CACHE / "npm", 0o700, (uid, gid)),
-        (CACHE / "cargo", 0o700, (uid, gid)),
-        (CACHE / "target", 0o700, (uid, gid)),
-        (CACHE / "home", 0o700, (uid, gid)),
-        (CANARY, 0o700, (uid, gid)),
-        (VERIFIED_GIT, 0o700, (0, 0)),
+        (CLAIMED, 0o700, (0, 0)),
+        (CANARY, 0o700, (0, 0)),
+        (SQLITE_STAGING, 0o700, (0, 0)),
+        (SQLITE_ARCHIVE, 0o700, (0, 0)),
     ):
-        path.mkdir(parents=True, exist_ok=True)
+        ensure_real_directory(path, mode, owner, parents=True)
+
+    ensure_upload_lock()
+
+    if not require_build:
+        return
+    ensure_real_directory(WORKSPACES, 0o700, (0, 0), parents=False)
+    ensure_real_directory(VERIFIED_GIT, 0o700, (0, 0), parents=False)
+
+    # No writable tool state persists across releases. Keep the legacy cache
+    # root empty, root-owned, and non-writable so stale npm/Cargo state can be
+    # retired under the deploy lock without creating a new trust channel.
+    ensure_real_directory(
+        CACHE,
+        0o755,
+        (0, 0),
+        parents=True,
+        allowed_existing_owners=migration_owners,
+    )
+
+
+def claim_uploaded_source(revision: str) -> Path:
+    """Atomically remove one completed upload from the uploader namespace."""
+    source = INCOMING / sha(revision)
+    try:
+        info = source.lstat()
+    except FileNotFoundError:
+        fail("no completed upload exists for this revision")
+    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        fail("completed upload is not a real directory")
+    claimed = CLAIMED / f"{revision}.{os.getpid()}"
+    if claimed.exists() or claimed.is_symlink():
+        fail("claimed source path already exists")
+    os.rename(source, claimed)
+    return claimed
+
+
+def purge_stale_claims() -> None:
+    """The deploy lock makes every pre-existing root claim abandoned."""
+    pattern = re.compile(r"[0-9a-f]{40}\.[0-9]+")
+    for entry in CLAIMED.iterdir():
+        info = entry.lstat()
+        if not pattern.fullmatch(entry.name) or not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+            fail(f"claim directory contains an unexpected object: {entry}")
+        shutil.rmtree(entry)
+
+
+def freeze_claimed_source(source: Path) -> None:
+    """Validate and make a claimed Git archive root-owned and immutable."""
+    if source.resolve().parent != CLAIMED.resolve():
+        fail("claimed source escapes the root-only claim directory")
+    uid, gid = deploy_identity()
+    expected_owner = (uid, gid)
+    entries = [source]
+    file_count = 0
+    byte_count = 0
+    for root, dirs, files in os.walk(source, topdown=True, followlinks=False):
+        for name in dirs + files:
+            item = Path(root) / name
+            info = item.lstat()
+            if stat.S_ISLNK(info.st_mode) or not (
+                stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)
+            ):
+                fail(f"claimed source contains an unsupported object: {item.relative_to(source)}")
+            if (info.st_uid, info.st_gid) != expected_owner:
+                fail(f"claimed source has an unexpected owner: {item.relative_to(source)}")
+            entries.append(item)
+            file_count += 1
+            if stat.S_ISREG(info.st_mode):
+                byte_count += info.st_size
+                if info.st_nlink != 1:
+                    fail(f"claimed source file has multiple links: {item.relative_to(source)}")
+            if file_count > MAX_SOURCE_FILES or byte_count > MAX_SOURCE_BYTES:
+                fail("claimed source exceeds the upload expansion limits")
+    root_info = source.lstat()
+    if (root_info.st_uid, root_info.st_gid) != expected_owner:
+        fail("claimed source root has an unexpected owner")
+
+    # Change children before their parents. The root-only CLAIMED parent has
+    # already removed every uploader path to this inode tree.
+    for item in sorted(entries, key=lambda path: len(path.parts), reverse=True):
+        info = item.lstat()
         if os.geteuid() == 0:
-            os.chown(path, *owner)
-        os.chmod(path, mode)
+            os.chown(item, 0, 0, follow_symlinks=False)
+        if stat.S_ISDIR(info.st_mode):
+            os.chmod(item, 0o555)
+        else:
+            os.chmod(item, 0o555 if info.st_mode & 0o111 else 0o444)
+
+
+def copy_claimed_workspace(source: Path, revision: str) -> Path:
+    """Create a hidden writable build copy from the immutable claimed tree."""
+    workspace = WORKSPACES / f"{sha(revision)}.{os.getpid()}"
+    if workspace.exists() or workspace.is_symlink():
+        fail("build workspace already exists")
+    workspace.mkdir(mode=0o700)
+    uid, gid = build_identity()
+    try:
+        for root, dirs, files in os.walk(source, topdown=True, followlinks=False):
+            relative_root = Path(root).relative_to(source)
+            destination_root = workspace / relative_root
+            for name in dirs:
+                item = Path(root) / name
+                info = item.lstat()
+                if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                    fail(f"claimed source directory changed during copy: {item}")
+                destination = destination_root / name
+                destination.mkdir(mode=0o700)
+                if os.geteuid() == 0:
+                    os.chown(destination, uid, gid)
+            for name in files:
+                item = Path(root) / name
+                info = item.lstat()
+                if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                    fail(f"claimed source file changed during copy: {item}")
+                destination = destination_root / name
+                source_fd = os.open(item, os.O_RDONLY | os.O_NOFOLLOW)
+                destination_fd = os.open(
+                    destination,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                )
+                try:
+                    while True:
+                        block = os.read(source_fd, 1024 * 1024)
+                        if not block:
+                            break
+                        remaining = memoryview(block)
+                        while remaining:
+                            written = os.write(destination_fd, remaining)
+                            remaining = remaining[written:]
+                    os.fchmod(destination_fd, 0o755 if info.st_mode & 0o111 else 0o644)
+                    if os.geteuid() == 0:
+                        os.fchown(destination_fd, uid, gid)
+                finally:
+                    os.close(source_fd)
+                    os.close(destination_fd)
+        if os.geteuid() == 0:
+            os.chown(workspace, uid, gid)
+        return workspace
+    except Exception:
+        shutil.rmtree(workspace, ignore_errors=True)
+        raise
+
+
+def verify_workspace_source(workspace: Path, git_dir: Path) -> None:
+    """Require every tracked build input to still equal the claimed revision."""
+    dirty = run(
+        [
+            "/usr/bin/git",
+            f"--git-dir={git_dir}",
+            f"--work-tree={workspace}",
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=no",
+        ],
+        capture=True,
+        capture_limit=64 * 1024,
+        env=fixed_environment(),
+    ).stdout
+    if dirty:
+        fail("build workspace modified tracked source files")
 
 
 def under_releases(path: Path) -> Path:
@@ -157,6 +958,84 @@ def hash_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def read_bounded_json_file(path: Path, label: str, limit: int):
+    """Read one regular no-follow JSON file without trusting its size first."""
+    if limit <= 0:
+        fail("JSON file limit must be positive")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as error:
+        fail(f"{label} could not be opened safely: {error}")
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            fail(f"{label} is not one regular unlinked file")
+        if before.st_size <= 0 or before.st_size > limit:
+            fail(f"{label} exceeds its {limit}-byte limit")
+        data = bytearray()
+        while len(data) <= limit:
+            block = os.read(descriptor, min(8192, limit + 1 - len(data)))
+            if not block:
+                break
+            data.extend(block)
+        if len(data) > limit:
+            fail(f"{label} exceeds its {limit}-byte limit")
+        after = os.fstat(descriptor)
+        if (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        ):
+            fail(f"{label} changed while it was read")
+    finally:
+        os.close(descriptor)
+    try:
+        return json.loads(data.decode("utf-8", errors="strict"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        fail(f"{label} is not valid UTF-8 JSON: {error}")
+
+
+def read_bounded_regular_bytes(path: Path, label: str, limit: int) -> bytes:
+    """Read immutable policy input through a regular no-follow descriptor."""
+    if limit <= 0:
+        fail("bounded file limit must be positive")
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            fail(f"{label} is not one regular single-link file")
+        if before.st_size <= 0 or before.st_size > limit:
+            fail(f"{label} exceeds its {limit}-byte limit")
+        data = bytearray()
+        while len(data) <= limit:
+            block = os.read(descriptor, min(8192, limit + 1 - len(data)))
+            if not block:
+                break
+            data.extend(block)
+        if len(data) > limit:
+            fail(f"{label} exceeds its {limit}-byte limit")
+        after = os.fstat(descriptor)
+        fingerprint = lambda value: (
+            value.st_dev, value.st_ino, value.st_size,
+            value.st_mtime_ns, value.st_ctime_ns,
+        )
+        if fingerprint(before) != fingerprint(after):
+            fail(f"{label} changed while it was read")
+        return bytes(data)
+    except OSError as error:
+        fail(f"{label} could not be read safely: {error}")
+    finally:
+        os.close(descriptor)
+
+
 def validate_release(path: Path, *, require_current_template=True) -> Path:
     release = under_releases(path)
     required = ("marks-server", "marks-admin", "marks.service", "release.json", "SHA256SUMS", "static/index.html")
@@ -182,8 +1061,43 @@ def validate_release(path: Path, *, require_current_template=True) -> Path:
             fail("release unit differs from the root-owned Marks unit template")
         print(f"note: {release.name} was sealed under an older unit template")
     receipt = json.loads((release / "release.json").read_text(encoding="utf-8"))
-    if receipt.get("schema") != "marks-release.v1" or not SHA_RE.fullmatch(str(receipt.get("revision", ""))):
+    schema = receipt.get("schema")
+    if schema not in ("marks-release.v1", RELEASE_SCHEMA) or not SHA_RE.fullmatch(
+        str(receipt.get("revision", ""))
+    ):
         fail("release receipt is invalid")
+    if schema == RELEASE_SCHEMA:
+        variant = receipt.get("productVariant")
+        digest = receipt.get("buildPlanSha256")
+        plan = receipt.get("buildPlan")
+        if (
+            not isinstance(plan, dict)
+            or plan.get("schema") != BUILD_PLAN_SCHEMA
+            or plan.get("productVariant") != variant
+            or plan.get("features") != receipt.get("features")
+            or plan.get("server", {}).get("cargoFeatures") != receipt.get("serverCargoFeatures")
+        ):
+            fail("release receipt build plan is incoherent")
+        canonical = canonical_json(plan)
+        if hashlib.sha256(canonical.encode("utf-8")).hexdigest() != digest:
+            fail("release receipt build plan digest is invalid")
+        expected_name = release_identity(receipt["revision"], variant, digest)
+        if release.name != expected_name or receipt.get("releaseId") != expected_name:
+            fail("release directory identity differs from its receipt")
+        static_receipt_path = release / "static" / "marks-product-build.json"
+        if not static_receipt_path.is_file() or static_receipt_path.is_symlink():
+            fail("release is missing a regular static product build receipt")
+        static_receipt = read_bounded_json_file(
+            static_receipt_path,
+            "static product build receipt",
+            MAX_BUILD_RECEIPT_BYTES,
+        )
+        if static_receipt != {
+            "schema": BUILD_PLAN_RECEIPT_SCHEMA,
+            "buildPlan": plan,
+            "buildPlanSha256": digest,
+        }:
+            fail("static product build receipt differs from the release receipt")
     declared = set()
     for line in (release / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
         digest, marker, relative = line.partition("  ")
@@ -217,24 +1131,68 @@ def atomic_link(target: Path, link: Path) -> None:
 
 
 def url_json(url: str, timeout=10):
-    with urllib.request.urlopen(url, timeout=timeout) as response:
-        if response.status != 200:
-            fail(f"{url} returned HTTP {response.status}")
-        return json.load(response)
+    """Fetch one small JSON receipt under a wall-clock and byte bound.
+
+    curl's max-time is an overall transfer deadline rather than a per-read
+    socket timeout. max-filesize rejects an oversized declared Content-Length,
+    while run(capture_limit=...) bounds streaming/chunked bodies before UTF-8
+    decoding or JSON parsing in this root process.
+    """
+    if timeout <= 0:
+        fail("HTTP receipt deadline has elapsed")
+    result = run(
+        [
+            "/usr/bin/curl",
+            "--disable",
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--max-time",
+            f"{max(0.001, float(timeout)):.3f}",
+            "--max-filesize",
+            str(MAX_HTTP_JSON_BYTES),
+            "--header",
+            "Accept: application/json",
+            url,
+        ],
+        capture=True,
+        capture_limit=MAX_HTTP_JSON_BYTES,
+        env=fixed_environment(),
+    )
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        fail(f"{url} did not return valid bounded JSON: {error}")
 
 
-def wait_ready(origin: str, revision: str, *, legacy=False, timeout=60) -> None:
+def wait_ready(
+    origin: str,
+    revision: str,
+    *,
+    legacy=False,
+    build_plan=None,
+    timeout=60,
+    fetch_json=None,
+) -> None:
     deadline = time.monotonic() + timeout
     last = "not ready"
+    fetch_json = fetch_json or url_json
+
+    def receipt(path: str):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            fail("readiness deadline elapsed")
+        return fetch_json(f"{origin}{path}", min(5.0, remaining))
+
     while time.monotonic() < deadline:
         try:
-            health = url_json(f"{origin}/healthz", 5)
+            health = receipt("/healthz")
             if health.get("ok") is not True:
                 fail("health response lacks ok=true")
             if legacy:
                 return
-            ready = url_json(f"{origin}/readyz", 5)
-            artifact = url_json(f"{origin}/v1/artifact", 5)
+            ready = receipt("/readyz")
+            artifact = receipt("/v1/artifact")
             required = {
                 "buildRevision": revision,
                 "serverSourceDirty": False,
@@ -244,39 +1202,200 @@ def wait_ready(origin: str, revision: str, *, legacy=False, timeout=60) -> None:
                 "engineCoherent": True,
                 "releaseReady": True,
             }
+            if build_plan is not None:
+                required.update({
+                    "productVariant": build_plan["productVariant"],
+                    "buildPlanSha256": hashlib.sha256(
+                        canonical_json(build_plan).encode("utf-8")
+                    ).hexdigest(),
+                    "features": build_plan["features"],
+                    "serverFeatures": build_plan["server"]["cargoFeatures"],
+                    "staticBuildPlanVerified": True,
+                })
             if ready.get("ok") is not True or any(artifact.get(key) != value for key, value in required.items()):
                 fail("readiness or artifact receipt does not match the release")
+            if build_plan is not None and any(
+                ready.get(key) != required[key]
+                for key in ("productVariant", "buildPlanSha256")
+            ):
+                fail("readiness product variant does not match the release")
             return
         except Exception as error:
             last = str(error)
-            time.sleep(1)
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(1.0, remaining))
     fail(f"timed out waiting for {origin}: {last}")
 
 
-def sandboxed_npm(source: Path, step: str, *arguments: str, extra_env=None) -> None:
-    uid, gid = deploy_identity()
+def validate_node_dependency_policy(source: Path) -> None:
+    if any(source.rglob(".npmrc")):
+        fail("repository .npmrc files are forbidden in production builds")
+    lock = read_bounded_json_file(
+        source / "package-lock.json",
+        "npm dependency lock",
+        MAX_DEPENDENCY_LOCK_BYTES,
+    )
+    packages = lock.get("packages") if isinstance(lock, dict) else None
+    if (
+        type(lock.get("lockfileVersion")) is not int
+        or lock["lockfileVersion"] < 2
+        or not isinstance(packages, dict)
+        or not packages
+    ):
+        fail("npm dependency lock has an unsupported shape")
+    for package_path, package in packages.items():
+        if not isinstance(package_path, str) or not isinstance(package, dict):
+            fail("npm dependency lock contains an invalid package entry")
+        resolved = package.get("resolved")
+        if resolved is None:
+            expected_workspace = {
+                "": "marks",
+                "client": "@marks/client",
+            }.get(package_path)
+            if (
+                expected_workspace is None
+                or package.get("name") != expected_workspace
+                or not isinstance(package.get("version"), str)
+                or package.get("link") is not None
+                or package.get("integrity") is not None
+            ):
+                fail("npm dependency without a resolved source is not one exact workspace root")
+            continue
+        if resolved == "client" and package_path == "node_modules/@marks/client" and package.get("link") is True:
+            continue
+        if not isinstance(resolved, str):
+            fail("npm dependency lock contains a non-string source")
+        parsed = urllib.parse.urlsplit(resolved)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "registry.npmjs.org"
+            or parsed.port is not None
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or not parsed.path.startswith("/")
+        ):
+            fail(f"npm dependency source is outside registry.npmjs.org: {resolved}")
+        if not re.fullmatch(r"sha512-[A-Za-z0-9+/]+={0,2}", str(package.get("integrity", ""))):
+            fail("npm registry dependency lacks a pinned SHA-512 integrity")
+
+
+def validate_cargo_dependency_policy(source: Path) -> None:
+    cargo_config = source / ".cargo"
+    if cargo_config.exists() or cargo_config.is_symlink():
+        fail("repository .cargo configuration is forbidden in production builds")
+    data = read_bounded_regular_bytes(
+        source / "Cargo.lock",
+        "Cargo dependency lock",
+        MAX_DEPENDENCY_LOCK_BYTES,
+    )
+    try:
+        lock = tomllib.loads(data.decode("utf-8", errors="strict"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        fail(f"Cargo dependency lock is invalid: {error}")
+    packages = lock.get("package") if isinstance(lock, dict) else None
+    if not isinstance(packages, list) or not packages:
+        fail("Cargo dependency lock has an unsupported shape")
+    registry = "registry+https://github.com/rust-lang/crates.io-index"
+    git_source = re.compile(
+        r"git\+https://github\.com/maceip/ESBT-web\?rev=([0-9a-f]{40})#([0-9a-f]{40})"
+    )
+    for package in packages:
+        if not isinstance(package, dict):
+            fail("Cargo dependency lock contains an invalid package entry")
+        dependency_source = package.get("source")
+        if dependency_source is None:
+            continue
+        if dependency_source == registry:
+            if not SHA256_RE.fullmatch(str(package.get("checksum", ""))):
+                fail("crates.io dependency lacks a pinned checksum")
+            continue
+        matched = git_source.fullmatch(str(dependency_source))
+        if matched and matched.group(1) == matched.group(2):
+            continue
+        fail(f"Cargo dependency source is not allowlisted: {dependency_source}")
+
+
+def sandboxed_npm(
+    source: Path,
+    step: str,
+    *arguments: str,
+    extra_env=None,
+    allow_network=False,
+) -> None:
+    uid, gid = build_identity()
+    for directory_name in (".marks-npm-home", ".marks-npm-cache"):
+        directory = source / directory_name
+        try:
+            info = directory.lstat()
+        except FileNotFoundError:
+            directory.mkdir(mode=0o700)
+            if os.geteuid() == 0:
+                os.chown(directory, uid, gid)
+            info = directory.lstat()
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or stat.S_ISLNK(info.st_mode)
+            or (info.st_uid, info.st_gid) != (uid, gid)
+            or info.st_mode & 0o077
+        ):
+            fail("per-release npm state is not one private build-uid directory")
     unit = f"marks-build-{step}-{source.name[:12]}-{os.getpid()}"
     command = [
         "/usr/bin/systemd-run", "--quiet", "--wait", "--pipe", "--collect", f"--unit={unit}",
         f"--uid={uid}", f"--gid={gid}", "--property=Type=exec",
-        f"--property=WorkingDirectory={source}", "--property=ProtectSystem=strict",
+        "--property=WorkingDirectory=/work", f"--property=BindPaths={source}:/work",
+        f"--property=RuntimeMaxSec={NPM_RUNTIME_SECONDS}",
+        "--property=MemoryHigh=3G", "--property=MemoryMax=4G",
+        "--property=TasksMax=512", "--property=CPUQuota=600%",
+        "--property=KillMode=mixed", "--property=TimeoutStopSec=30",
+        "--property=LimitFSIZE=2147483648",
+        "--property=TemporaryFileSystem=/tmp:rw,nodev,nosuid,size=1G",
+        "--property=ProtectSystem=strict",
         "--property=ProtectHome=yes", "--property=PrivateTmp=yes", "--property=PrivateDevices=yes",
+        "--property=ProtectProc=invisible", "--property=ProcSubset=pid",
         "--property=NoNewPrivileges=yes", "--property=RestrictSUIDSGID=yes",
         "--property=CapabilityBoundingSet=", "--property=RestrictRealtime=yes",
         "--property=LockPersonality=yes", "--property=ProtectKernelTunables=yes",
         "--property=ProtectKernelModules=yes", "--property=ProtectControlGroups=yes",
         "--property=InaccessiblePaths=/var/lib/marks /etc/marks /home /root /run/docker.sock",
-        f"--property=ReadWritePaths={source} {CACHE}", "--setenv=HOME=/var/lib/marks-deploy/cache/home",
-        "--setenv=npm_config_cache=/var/lib/marks-deploy/cache/npm", "/usr/bin/npm", *arguments,
+        "--property=ReadWritePaths=/work",
+        "--setenv=HOME=/work/.marks-npm-home",
+        "--setenv=npm_config_cache=/work/.marks-npm-cache",
+        "--setenv=npm_config_userconfig=/dev/null",
+        "--setenv=npm_config_globalconfig=/dev/null",
+        "--setenv=npm_config_registry=https://registry.npmjs.org/",
+        "--setenv=npm_config_audit=false", "--setenv=npm_config_fund=false",
+        "--setenv=npm_config_proxy=", "--setenv=npm_config_https_proxy=",
     ]
+    if allow_network:
+        for network in (
+            "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
+            "172.16.0.0/12", "192.168.0.0/16", "224.0.0.0/4",
+            "240.0.0.0/4", "::1/128", "fc00::/7", "fe80::/10", "ff00::/8",
+        ):
+            command.append(f"--property=IPAddressDeny={network}")
+        command.append("--setenv=npm_config_offline=false")
+    else:
+        command.extend([
+            "--property=PrivateNetwork=yes",
+            "--property=RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
+            "--setenv=npm_config_offline=true",
+        ])
+    command.extend(["/usr/bin/npm", *arguments])
     for key, value in (extra_env or {}).items():
-        command.insert(-len(arguments) - 1, f"--setenv={key}={value}")
+        command.insert(command.index("/usr/bin/npm"), f"--setenv={key}={value}")
     run(command)
 
 
 def verify_source(source: Path, revision: str) -> None:
-    if source.resolve().parent != INCOMING.resolve() or source.name != revision:
-        fail("source is outside the fixed incoming root")
+    if (
+        source.resolve().parent != CLAIMED.resolve()
+        or not source.name.startswith(f"{revision}.")
+    ):
+        fail("source is outside the fixed claimed root")
     for relative in ("Cargo.lock", "package-lock.json", "package.json", "deploy/systemd/marks.service"):
         candidate = source / relative
         if not candidate.is_file() or candidate.is_symlink():
@@ -290,29 +1409,343 @@ def verify_source(source: Path, revision: str) -> None:
     run(["/usr/bin/git", "init", "--quiet", "--bare", git_dir], env=env)
     git = ["/usr/bin/git", f"--git-dir={git_dir}", f"--work-tree={source}"]
     run([*git, "remote", "add", "origin", REMOTE], env=env)
-    run([*git, "fetch", "--quiet", "--depth=1", "origin", "refs/heads/main"], env=env)
-    fetched = run([*git, "rev-parse", "FETCH_HEAD"], capture=True, env=env).stdout.strip()
+    run(
+        [
+            *git,
+            "-c",
+            "http.lowSpeedLimit=1024",
+            "-c",
+            "http.lowSpeedTime=30",
+            "fetch",
+            "--quiet",
+            "--depth=1",
+            "origin",
+            "refs/heads/main",
+        ],
+        timeout=5 * 60,
+        env=env,
+    )
+    fetched = run(
+        [*git, "rev-parse", "FETCH_HEAD"],
+        capture=True,
+        capture_limit=128,
+        env=env,
+    ).stdout.strip()
     if fetched != revision:
         fail(f"requested revision is not current remote main ({fetched})")
     run([*git, "reset", "--quiet", "--mixed", revision], env=env)
-    dirty = run([*git, "status", "--porcelain=v1", "--untracked-files=all"], capture=True, env=env).stdout
+    dirty = run(
+        [*git, "status", "--porcelain=v1", "--untracked-files=all"],
+        capture=True,
+        capture_limit=64 * 1024,
+        env=env,
+    ).stdout
     if dirty:
         fail("uploaded archive does not exactly match the requested Git revision")
 
 
-def docker_build(source: Path, revision: str) -> None:
-    uid, gid = deploy_identity()
-    run([
-        "/usr/bin/docker", "run", "--rm", "--read-only", "--cap-drop=ALL",
-        "--security-opt=no-new-privileges", "--pids-limit=1024", "--memory=4g", "--cpus=6",
-        f"--user={uid}:{gid}", "--env=HOME=/tmp", "--env=CARGO_HOME=/cargo",
-        "--env=CARGO_TARGET_DIR=/target", "--env=RUSTUP_TOOLCHAIN=1.88.0",
-        f"--env=MARKS_BUILD_REVISION={revision}", "--env=MARKS_SOURCE_DIRTY=0",
-        f"--volume={source}:/work:ro", f"--volume={CACHE / 'cargo'}:/cargo",
-        f"--volume={CACHE / 'target'}:/target", "--tmpfs=/tmp:rw,noexec,nosuid,size=1g",
-        "--workdir=/work", BUILDER_IMAGE, "/bin/bash", "-ceu",
-        "case \"$(rustc --version)\" in 'rustc 1.88.0 '*) ;; *) exit 1;; esac; cargo build -p marks-server --release --locked --bin marks-server --bin marks-admin",
-    ])
+def validate_directory_descriptor(descriptor: int, owner, label: str) -> None:
+    info = os.fstat(descriptor)
+    if not stat.S_ISDIR(info.st_mode):
+        fail(f"{label} is not a directory")
+    if (info.st_uid, info.st_gid) != owner:
+        fail(f"{label} has an unexpected owner")
+    if info.st_mode & 0o022:
+        fail(f"{label} is writable by group or other")
+
+
+def validate_built_binary_descriptor(descriptor: int, owner, name: str):
+    info = os.fstat(descriptor)
+    if not stat.S_ISREG(info.st_mode):
+        fail(f"built {name} is not a regular file")
+    if (info.st_uid, info.st_gid) != owner:
+        fail(f"built {name} has an unexpected owner")
+    if info.st_nlink != 1:
+        fail(f"built {name} has multiple filesystem links")
+    if info.st_size <= 0 or info.st_size > MAX_BUILT_BINARY_BYTES:
+        fail(f"built {name} has an invalid size")
+    if info.st_mode & (stat.S_IWGRP | stat.S_IWOTH | stat.S_ISUID | stat.S_ISGID):
+        fail(f"built {name} has unsafe permissions")
+    return info
+
+
+def create_cargo_workspace(revision: str) -> Path:
+    """Create empty, per-release Cargo state beneath the bounded filesystem."""
+    uid, gid = build_identity()
+    root_owner = (0, 0) if os.geteuid() == 0 else (os.getuid(), os.getgid())
+    cargo = WORKSPACES / f".cargo-{sha(revision)}.{os.getpid()}"
+    if cargo.exists() or cargo.is_symlink():
+        fail("per-release Cargo workspace already exists")
+    cargo.mkdir(mode=0o700)
+    if os.geteuid() == 0:
+        os.chown(cargo, *root_owner)
+    for name in ("home", "target"):
+        child = cargo / name
+        child.mkdir(mode=0o700)
+        if os.geteuid() == 0:
+            os.chown(child, uid, gid)
+    return cargo
+
+
+def copy_built_binary(cargo: Path, name: str, destination: Path) -> None:
+    """Import one Cargo output through no-follow descriptors and hard bounds."""
+    if name not in ("marks-server", "marks-admin"):
+        fail("unsupported built binary name")
+    uid, gid = build_identity()
+    root_owner = (0, 0) if os.geteuid() == 0 else (os.getuid(), os.getgid())
+    if cargo.parent != WORKSPACES or not cargo.name.startswith(".cargo-"):
+        fail("Cargo output is outside the fixed per-release workspace root")
+    descriptors = []
+    destination_fd = None
+    try:
+        workspaces_fd = os.open(WORKSPACES, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        descriptors.append(workspaces_fd)
+        validate_directory_descriptor(workspaces_fd, root_owner, "build workspaces root")
+        cargo_fd = os.open(
+            cargo.name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=workspaces_fd,
+        )
+        descriptors.append(cargo_fd)
+        validate_directory_descriptor(cargo_fd, root_owner, "per-release Cargo root")
+        target_fd = os.open(
+            "target",
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=cargo_fd,
+        )
+        descriptors.append(target_fd)
+        validate_directory_descriptor(target_fd, (uid, gid), "Cargo target cache")
+        release_fd = os.open(
+            "release",
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=target_fd,
+        )
+        descriptors.append(release_fd)
+        validate_directory_descriptor(release_fd, (uid, gid), "Cargo release directory")
+        binary_fd = os.open(
+            name,
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
+            dir_fd=release_fd,
+        )
+        descriptors.append(binary_fd)
+        before = validate_built_binary_descriptor(binary_fd, (uid, gid), name)
+
+        destination_fd = os.open(
+            destination,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o700,
+        )
+        copied = 0
+        while copied < before.st_size:
+            block = os.read(binary_fd, min(1024 * 1024, before.st_size - copied))
+            if not block:
+                fail(f"built {name} was truncated during import")
+            remaining = memoryview(block)
+            while remaining:
+                written = os.write(destination_fd, remaining)
+                remaining = remaining[written:]
+            copied += len(block)
+        if os.read(binary_fd, 1):
+            fail(f"built {name} grew during import")
+        after = os.fstat(binary_fd)
+        fingerprint = lambda info: (
+            info.st_dev,
+            info.st_ino,
+            info.st_size,
+            info.st_mtime_ns,
+            info.st_ctime_ns,
+        )
+        if fingerprint(before) != fingerprint(after):
+            fail(f"built {name} changed during import")
+        os.fchmod(destination_fd, 0o755)
+        os.fsync(destination_fd)
+    except OSError as error:
+        destination.unlink(missing_ok=True)
+        fail(f"built {name} path could not be opened safely: {error}")
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
+    finally:
+        if destination_fd is not None:
+            os.close(destination_fd)
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def validate_fetch_egress_policy():
+    """Require the admin-attested, fixed Docker fetch network contract."""
+    try:
+        info = FETCH_EGRESS_POLICY.lstat()
+    except OSError as error:
+        fail(
+            "Cargo fetch egress policy is not provisioned; see deploy/host/README.md: "
+            f"{error}"
+        )
+    expected_owner = (0, 0) if os.geteuid() == 0 else (os.getuid(), os.getgid())
+    if (
+        stat.S_ISLNK(info.st_mode)
+        or not stat.S_ISREG(info.st_mode)
+        or info.st_nlink != 1
+        or (info.st_uid, info.st_gid) != expected_owner
+        or info.st_mode & 0o022
+    ):
+        fail("Cargo fetch egress policy receipt is unsafe")
+    data = read_bounded_regular_bytes(
+        FETCH_EGRESS_POLICY,
+        "Cargo fetch egress policy receipt",
+        1024,
+    )
+    if data.decode("utf-8", errors="strict") != FETCH_EGRESS_POLICY_TEXT:
+        fail("Cargo fetch egress policy receipt is unsupported")
+    result = run(
+        [
+            "/usr/bin/timeout", "--signal=KILL", "15s",
+            "/usr/bin/docker", "network", "inspect",
+            "--format={{json .}}", CARGO_FETCH_NETWORK,
+        ],
+        capture=True,
+        capture_limit=64 * 1024,
+        env=fixed_environment(),
+    )
+    try:
+        network = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        fail(f"Cargo fetch network did not return bounded JSON: {error}")
+    ipam = network.get("IPAM") if isinstance(network, dict) else None
+    config = ipam.get("Config") if isinstance(ipam, dict) else None
+    labels = network.get("Labels") if isinstance(network, dict) else None
+    options = network.get("Options") if isinstance(network, dict) else None
+    if (
+        network.get("Name") != CARGO_FETCH_NETWORK
+        or network.get("Driver") != "bridge"
+        or network.get("Scope") != "local"
+        or network.get("Internal") is not False
+        or network.get("Attachable") is not False
+        or network.get("Ingress") is not False
+        or labels != {"build.marks.secure/fetch-egress-policy": "marks.fetch-egress.v1"}
+        or not isinstance(options, dict)
+        or options.get("com.docker.network.bridge.enable_icc") != "false"
+        or not isinstance(config, list)
+        or len(config) != 1
+        or config[0].get("Subnet") != "172.30.0.0/24"
+    ):
+        fail("Cargo fetch Docker network differs from the fixed egress policy")
+    return {
+        "schema": "marks.fetch-egress.v1",
+        "network": CARGO_FETCH_NETWORK,
+        "subnet": "172.30.0.0/24",
+    }
+
+
+def docker_fetch(source: Path, cargo: Path, revision: str) -> None:
+    validate_fetch_egress_policy()
+    uid, gid = build_identity()
+    container = f"marks-fetch-{revision[:12]}-{os.getpid()}"
+    try:
+        run([
+            "/usr/bin/docker", "run", "--name", container, "--rm", "--pull=never",
+            "--log-driver=none", f"--network={CARGO_FETCH_NETWORK}",
+            "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
+            "--pids-limit=256", "--memory=2g", "--cpus=4", f"--user={uid}:{gid}",
+            "--env=HOME=/tmp", "--env=CARGO_HOME=/cargo",
+            "--env=RUSTUP_TOOLCHAIN=1.88.0", "--env=CARGO_NET_GIT_FETCH_WITH_CLI=false",
+            f"--volume={source}:/work:ro", f"--volume={cargo / 'home'}:/cargo",
+            "--tmpfs=/tmp:rw,noexec,nosuid,size=512m", "--workdir=/work",
+            BUILDER_IMAGE, "/bin/bash", "-ceu",
+            "case \"$(rustc --version)\" in 'rustc 1.88.0 '*) ;; *) exit 1;; esac; "
+            "cargo fetch --locked",
+        ], timeout=CARGO_FETCH_RUNTIME_SECONDS, env=fixed_environment())
+    finally:
+        run(
+            ["/usr/bin/docker", "rm", "--force", container],
+            check=False,
+            timeout=30,
+            env=fixed_environment(),
+        )
+
+
+def docker_build(source: Path, cargo: Path, revision: str, build) -> None:
+    uid, gid = build_identity()
+    cargo_feature_args = []
+    if build["cargoFeatures"]:
+        cargo_feature_args = ["--features", ",".join(build["cargoFeatures"])]
+    container = f"marks-build-{revision[:12]}-{os.getpid()}"
+    try:
+        run([
+            "/usr/bin/docker", "run", "--name", container, "--rm", "--pull=never",
+            "--log-driver=none",
+            "--network=none",
+            "--read-only", "--cap-drop=ALL",
+            "--security-opt=no-new-privileges", "--pids-limit=1024", "--memory=4g", "--cpus=6",
+            f"--user={uid}:{gid}", "--env=HOME=/tmp", "--env=CARGO_HOME=/cargo",
+            "--env=CARGO_TARGET_DIR=/target", "--env=RUSTUP_TOOLCHAIN=1.88.0",
+            f"--env=MARKS_BUILD_REVISION={revision}", "--env=MARKS_SOURCE_DIRTY=0",
+            f"--env=MARKS_PRODUCT_VARIANT={build['variant']}",
+            f"--env=MARKS_BUILD_PLAN_SHA256={build['digest']}",
+            f"--env=MARKS_BUILD_PLAN_JSON={build['canonical']}",
+            f"--volume={source}:/work:ro", f"--volume={cargo / 'home'}:/cargo",
+            f"--volume={cargo / 'target'}:/target", "--tmpfs=/tmp:rw,noexec,nosuid,size=1g",
+            "--workdir=/work", BUILDER_IMAGE, "/bin/bash", "-ceu",
+            "case \"$(rustc --version)\" in 'rustc 1.88.0 '*) ;; *) exit 1;; esac; "
+            "cargo build -p marks-server --release --locked --offline --no-default-features "
+            "--bin marks-server --bin marks-admin \"$@\"",
+            "marks-product-build",
+            *cargo_feature_args,
+        ], timeout=DOCKER_RUNTIME_SECONDS, env=fixed_environment())
+    finally:
+        # subprocess timeouts kill only the Docker client. A fixed name lets
+        # root terminate the actual container before releasing the deploy lock.
+        run(
+            ["/usr/bin/docker", "rm", "--force", container],
+            check=False,
+            timeout=30,
+            env=fixed_environment(),
+        )
+
+
+def freeze_client_output(workspace: Path, output: Path) -> None:
+    """Seal the only build-workspace bytes that cross into a release."""
+    try:
+        relative = output.relative_to(workspace)
+    except ValueError:
+        fail("client output escapes the hidden build workspace")
+    current = workspace
+    for part in relative.parts:
+        current = current / part
+        info = current.lstat()
+        if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+            fail(f"client output path component is not a real directory: {current}")
+
+    uid, gid = build_identity()
+    entries = [output]
+    total_files = 0
+    total_bytes = 0
+    for root, dirs, files in os.walk(output, topdown=True, followlinks=False):
+        for name in dirs + files:
+            item = Path(root) / name
+            info = item.lstat()
+            if stat.S_ISLNK(info.st_mode) or not (
+                stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)
+            ):
+                fail(f"client output contains an unsupported object: {item.relative_to(output)}")
+            if (info.st_uid, info.st_gid) != (uid, gid):
+                fail(f"client output has an unexpected owner: {item.relative_to(output)}")
+            entries.append(item)
+            total_files += 1
+            if stat.S_ISREG(info.st_mode):
+                total_bytes += info.st_size
+                if info.st_nlink != 1:
+                    fail(f"client output file has multiple links: {item.relative_to(output)}")
+            if total_files > MAX_SOURCE_FILES or total_bytes > MAX_SOURCE_BYTES:
+                fail("client output exceeds release bounds")
+    output_info = output.lstat()
+    if (output_info.st_uid, output_info.st_gid) != (uid, gid):
+        fail("client output root has an unexpected owner")
+    for item in sorted(entries, key=lambda path: len(path.parts), reverse=True):
+        info = item.lstat()
+        if os.geteuid() == 0:
+            os.chown(item, 0, 0, follow_symlinks=False)
+        os.chmod(item, 0o555 if stat.S_ISDIR(info.st_mode) else 0o444)
 
 
 def copy_regular_tree(source: Path, destination: Path) -> None:
@@ -330,32 +1763,43 @@ def copy_regular_tree(source: Path, destination: Path) -> None:
             os.chmod(target, 0o644)
 
 
-def seal_release(source: Path, revision: str) -> Path:
-    release = RELEASES / revision
+def seal_release(source: Path, cargo: Path, revision: str, build) -> Path:
+    identifier = release_identity(revision, build["variant"], build["digest"])
+    release = RELEASES / identifier
     if release.exists():
         return validate_release(release)
-    stage = RELEASES / f".{revision}.staging.{os.getpid()}"
+    stage = RELEASES / f".{identifier}.staging.{os.getpid()}"
     if stage.exists():
         shutil.rmtree(stage)
     stage.mkdir(mode=0o755)
     try:
-        shutil.copyfile(CACHE / "target/release/marks-server", stage / "marks-server")
-        shutil.copyfile(CACHE / "target/release/marks-admin", stage / "marks-admin")
-        os.chmod(stage / "marks-server", 0o755)
-        os.chmod(stage / "marks-admin", 0o755)
+        copy_built_binary(cargo, "marks-server", stage / "marks-server")
+        copy_built_binary(cargo, "marks-admin", stage / "marks-admin")
         (stage / "static").mkdir(mode=0o755)
-        copy_regular_tree(source / "client/dist", stage / "static")
+        copy_regular_tree(build["clientOutput"], stage / "static")
         shutil.copyfile(TEMPLATE, stage / "marks.service")
         os.chmod(stage / "marks.service", 0o644)
-        schema_receipt = json.loads(
-            run([stage / "marks-admin", "schema"], capture=True).stdout.strip()
+        schema_receipt = built_schema_receipt(stage)
+        static_build_receipt = read_bounded_json_file(
+            stage / "static" / "marks-product-build.json",
+            "generated static product build receipt",
+            MAX_BUILD_RECEIPT_BYTES,
         )
-        if not isinstance(schema_receipt.get("schemaVersion"), int) or not isinstance(
-            schema_receipt.get("maxCompatibleSchema"), int
-        ):
-            fail("built marks-admin did not report a schema identity")
+        expected_build_receipt = {
+            "schema": BUILD_PLAN_RECEIPT_SCHEMA,
+            "buildPlan": build["plan"],
+            "buildPlanSha256": build["digest"],
+        }
+        if static_build_receipt != expected_build_receipt:
+            fail("client output product build receipt differs from the resolved build plan")
         receipt = {
-            "schema": "marks-release.v1", "revision": revision,
+            "schema": RELEASE_SCHEMA, "revision": revision,
+            "releaseId": identifier,
+            "productVariant": build["variant"],
+            "buildPlanSha256": build["digest"],
+            "buildPlan": build["plan"],
+            "features": build["plan"]["features"],
+            "serverCargoFeatures": build["cargoFeatures"],
             "createdAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "builderImage": BUILDER_IMAGE,
             "nodeVersion": run(["/usr/bin/node", "--version"], capture=True).stdout.strip(),
@@ -387,82 +1831,524 @@ def seal_release(source: Path, revision: str) -> Path:
     return sealed
 
 
-def canary(release: Path, revision: str, seed_database=None) -> None:
-    uid, gid = deploy_identity()
+def purge_private_staging(root: Path, prefix: str) -> None:
+    """Remove stale transient directories from one root-only parent.
+
+    A worker uid can mutate a directory after it is bind-mounted, but cannot
+    replace its entry in this root-owned parent. Refuse surprising top-level
+    objects and never follow a stale link during cleanup.
+    """
+    if os.geteuid() == 0:
+        unit_pattern = None
+        if root == SQLITE_STAGING:
+            unit_pattern = "marks-sqlite-*"
+        elif root == CANARY:
+            unit_pattern = "marks-canary-*"
+        if unit_pattern is not None:
+            # A killed root client can leave a bounded transient unit alive.
+            # The deploy lock means any matching unit is stale; quiesce it
+            # before touching the bind-mounted directory.
+            run(
+                ["/usr/bin/systemctl", "stop", unit_pattern],
+                check=False,
+                timeout=30,
+                env=fixed_environment(),
+            )
+            run(
+                ["/usr/bin/systemctl", "reset-failed", unit_pattern],
+                check=False,
+                timeout=30,
+                env=fixed_environment(),
+            )
+    if not root.is_dir() or root.is_symlink():
+        fail(f"private staging root is unavailable: {root}")
+    for entry in root.iterdir():
+        info = entry.lstat()
+        if not entry.name.startswith(prefix) or not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+            fail(f"private staging root contains an unexpected object: {entry}")
+        shutil.rmtree(entry)
+
+
+def service_state_directory() -> Path:
+    """Validate the fixed directory entry systemd may bind as root.
+
+    The devuser-controlled marks.db3 entry is deliberately not resolved here.
+    `/var/lib/marks` itself cannot be renamed by devuser because its parent is
+    root-owned; SQLite opens the mutable child only after privilege demotion.
+    """
+    directory = LIVE_DB.parent
+    try:
+        info = directory.lstat()
+    except OSError as error:
+        fail(f"Marks service state directory is unavailable: {error}")
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        fail("Marks service state path is not one fixed real directory")
+    uid, gid = service_identity()
+    if os.geteuid() == 0 and (info.st_uid, info.st_gid) != (uid, gid):
+        fail("Marks service state directory has an unexpected owner")
+    return directory
+
+
+def live_database_present() -> bool:
+    """Check only the directory entry; never parse live SQLite as root."""
+    try:
+        info = LIVE_DB.lstat()
+    except FileNotFoundError:
+        return False
+    service_state_directory()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        fail("live database is not one regular no-follow file")
+    return True
+
+
+def validate_sqlite_receipt(receipt, operation: str):
+    shapes = {
+        "inspect": {"schema", "sourceBytes", "schemaVersion"},
+        "snapshot": {
+            "schema", "sourceBytes", "schemaVersion", "snapshotBytes", "sha256"
+        },
+        "publish": {"schema", "published", "snapshotBytes", "sha256"},
+    }
+    if operation not in shapes or not isinstance(receipt, dict) or set(receipt) != shapes[operation]:
+        fail("SQLite worker receipt has an unexpected shape")
+    if receipt.get("schema") != "marks.sqlite-worker.v1":
+        fail("SQLite worker receipt schema is unsupported")
+    integer_keys = shapes[operation] & {"sourceBytes", "schemaVersion", "snapshotBytes"}
+    if any(type(receipt.get(key)) is not int or receipt[key] < 0 for key in integer_keys):
+        fail("SQLite worker receipt contains an invalid integer")
+    for key in ("sourceBytes", "snapshotBytes"):
+        if key in receipt and receipt[key] > MAX_CANARY_SEED_BYTES:
+            fail("SQLite worker receipt exceeds the database byte ceiling")
+    if "snapshotBytes" in receipt and receipt["snapshotBytes"] <= 0:
+        fail("SQLite worker returned an empty snapshot")
+    if "sha256" in receipt and not SHA256_RE.fullmatch(str(receipt["sha256"])):
+        fail("SQLite worker receipt digest is invalid")
+    if "published" in receipt and not BACKUP_NAME_RE.fullmatch(str(receipt["published"])):
+        fail("SQLite worker publication identity is invalid")
+    return receipt
+
+
+def run_sqlite_worker(operation: str, *, stage=None, publication=None):
+    """Run the installed SQLite parser only as the service uid in a sandbox."""
+    if operation not in ("inspect", "snapshot", "publish"):
+        fail("unsupported SQLite worker operation")
+    service_root = service_state_directory()
+    uid, gid = service_identity()
+    payload = [SQLITE_WORKER, operation]
+    if operation == "publish":
+        if publication is None:
+            fail("SQLite publication name is required")
+        payload.append(publication)
+    elif publication is not None:
+        fail("unexpected SQLite publication name")
+
+    if os.geteuid() != 0:
+        # Fixture tests patch this boundary or exercise marks-sqlite-worker
+        # directly. This direct branch never carries elevated authority.
+        output = run(
+            payload,
+            capture=True,
+            capture_limit=MAX_SQLITE_RECEIPT_BYTES,
+            env=fixed_environment(),
+        ).stdout
+    else:
+        path_token = hashlib.sha256(
+            f"{operation}:{stage}:{os.getpid()}".encode("utf-8")
+        ).hexdigest()[:12]
+        command = [
+            "/usr/bin/systemd-run", "--quiet", "--wait", "--pipe", "--collect",
+            f"--unit=marks-sqlite-{operation}-{path_token}",
+            f"--uid={uid}", f"--gid={gid}", "--property=Type=exec",
+            f"--property=RuntimeMaxSec={SQLITE_WORKER_RUNTIME_SECONDS}",
+            "--property=MemoryMax=768M", "--property=TasksMax=32",
+            "--property=CPUQuota=200%", "--property=LimitFSIZE=536870912",
+            "--property=KillMode=mixed", "--property=TimeoutStopSec=10",
+            "--property=ProtectSystem=strict", "--property=ProtectHome=yes",
+            "--property=PrivateTmp=yes", "--property=PrivateDevices=yes",
+            "--property=PrivateNetwork=yes", "--property=NoNewPrivileges=yes",
+            "--property=RestrictSUIDSGID=yes", "--property=CapabilityBoundingSet=",
+            "--property=RestrictRealtime=yes", "--property=LockPersonality=yes",
+            "--property=ProtectKernelTunables=yes", "--property=ProtectKernelModules=yes",
+            "--property=ProtectControlGroups=yes", "--property=RestrictAddressFamilies=AF_UNIX",
+            "--property=TemporaryFileSystem=/tmp:rw,nodev,nosuid,noexec,size=64M",
+            "--property=InaccessiblePaths=/home /root /etc/marks /run/docker.sock",
+            "--setenv=HOME=/tmp", "--setenv=LANG=C.UTF-8", "--setenv=LC_ALL=C.UTF-8",
+        ]
+        if operation == "publish":
+            if stage is None:
+                fail("SQLite publication stage is required")
+            command.extend([
+                f"--property=BindReadOnlyPaths={stage}:/marks-input",
+                # Bind the fixed service-state directory, not its mutable
+                # backup child. Path resolution is safe, and all writes occur
+                # only after the worker is devuser.
+                f"--property=BindPaths={service_root}:/marks-live",
+            ])
+        else:
+            command.append(f"--property=BindReadOnlyPaths={service_root}:/marks-live")
+            if operation == "snapshot":
+                if stage is None:
+                    fail("SQLite snapshot stage is required")
+                command.append(f"--property=BindPaths={stage}:/marks-output")
+        command.extend(str(item) for item in payload)
+        output = run(
+            command,
+            capture=True,
+            capture_limit=MAX_SQLITE_RECEIPT_BYTES,
+        ).stdout
+    try:
+        receipt = json.loads(output.strip())
+    except json.JSONDecodeError as error:
+        fail(f"SQLite worker did not return bounded JSON: {error}")
+    return validate_sqlite_receipt(receipt, operation)
+
+
+def descriptor_sha256(descriptor: int, maximum: int) -> str:
+    digest = hashlib.sha256()
+    total = 0
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    while True:
+        block = os.read(descriptor, min(1024 * 1024, maximum + 1 - total))
+        if not block:
+            break
+        total += len(block)
+        if total > maximum:
+            fail("SQLite snapshot exceeds its descriptor read bound")
+        digest.update(block)
+    return digest.hexdigest()
+
+
+def create_sqlite_snapshot():
+    """Create and descriptor-verify one bounded devuser SQLite snapshot."""
+    if not live_database_present():
+        return None
+    purge_private_staging(SQLITE_STAGING, "snapshot-")
+    stage = Path(tempfile.mkdtemp(prefix="snapshot-", dir=SQLITE_STAGING))
+    uid, gid = service_identity()
+    if os.geteuid() == 0:
+        os.chown(stage, uid, gid)
+    os.chmod(stage, 0o700)
+    try:
+        receipt = run_sqlite_worker("snapshot", stage=stage)
+        snapshot = stage / "snapshot.db3"
+        descriptor = os.open(snapshot, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            before = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_nlink != 1
+                or (before.st_uid, before.st_gid) != (uid, gid)
+                or before.st_size != receipt["snapshotBytes"]
+                or before.st_size <= 0
+                or before.st_size > MAX_CANARY_SEED_BYTES
+            ):
+                fail("SQLite worker snapshot failed descriptor validation")
+            digest = descriptor_sha256(descriptor, MAX_CANARY_SEED_BYTES)
+            after = os.fstat(descriptor)
+            fingerprint = lambda value: (
+                value.st_dev, value.st_ino, value.st_size,
+                value.st_mtime_ns, value.st_ctime_ns,
+            )
+            if fingerprint(before) != fingerprint(after) or digest != receipt["sha256"]:
+                fail("SQLite worker snapshot changed or differs from its receipt")
+        finally:
+            os.close(descriptor)
+        return stage, snapshot, receipt
+    except Exception:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
+
+
+def prune_authoritative_snapshots(*, reserve=0) -> None:
+    """Keep root-owned activation snapshots below a fixed count/byte bound."""
+    if reserve not in (0, 1):
+        fail("authoritative snapshot reserve is invalid")
+    for entry in list(SQLITE_ARCHIVE.iterdir()):
+        info = entry.lstat()
+        if re.fullmatch(
+            r"\.pre-activation-[0-9]{8}T[0-9]{6}Z-[A-Za-z0-9._-]{1,64}\.db3"
+            r"\.tmp\.[0-9]+\.[0-9a-f]{32}",
+            entry.name,
+        ):
+            if (
+                stat.S_ISLNK(info.st_mode)
+                or not stat.S_ISREG(info.st_mode)
+                or info.st_nlink not in (1, 2)
+                or (os.geteuid() == 0 and (info.st_uid, info.st_gid) != (0, 0))
+                or info.st_size < 0
+                or info.st_size > MAX_CANARY_SEED_BYTES
+            ):
+                fail(f"authoritative snapshot archive contains an unsafe temporary: {entry}")
+            entry.unlink()
+    entries = []
+    # Normalize stale hard-link publications before examining final files.
+    # This is deliberately a second scan: directory iteration order must not
+    # make a post-link crash's nlink=2 final look corrupt.
+    for entry in SQLITE_ARCHIVE.iterdir():
+        info = entry.lstat()
+        if (
+            not BACKUP_NAME_RE.fullmatch(entry.name)
+            or stat.S_ISLNK(info.st_mode)
+            or not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or (os.geteuid() == 0 and (info.st_uid, info.st_gid) != (0, 0))
+            or info.st_size <= 0
+            or info.st_size > MAX_CANARY_SEED_BYTES
+        ):
+            fail(f"authoritative snapshot archive contains an unsafe object: {entry}")
+        entries.append((entry.name, entry, info.st_size))
+    entries.sort(reverse=True)
+    keep = KEEP_AUTHORITATIVE_SNAPSHOTS - reserve
+    for _name, entry, _size in entries[keep:]:
+        entry.unlink()
+    retained = entries[:keep]
+    if sum(size for _name, _entry, size in retained) > keep * MAX_CANARY_SEED_BYTES:
+        fail("authoritative snapshot archive exceeds its aggregate bound")
+
+
+def archive_sqlite_snapshot(snapshot: Path, receipt, name: str) -> Path:
+    """Import worker output as a root-owned, bounded recovery snapshot."""
+    if not BACKUP_NAME_RE.fullmatch(name):
+        fail("authoritative snapshot name is invalid")
+    try:
+        (SQLITE_ARCHIVE / name).lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise FileExistsError(f"authoritative snapshot already exists: {name}")
+    prune_authoritative_snapshots(reserve=1)
+    uid, gid = service_identity()
+    source_fd = os.open(snapshot, os.O_RDONLY | os.O_NOFOLLOW)
+    directory_fd = os.open(
+        SQLITE_ARCHIVE, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    )
+    destination_fd = None
+    temporary_created = False
+    destination = SQLITE_ARCHIVE / name
+    temporary_name = f".{name}.tmp.{os.getpid()}.{secrets.token_hex(16)}"
+    try:
+        before = os.fstat(source_fd)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or (before.st_uid, before.st_gid) != (uid, gid)
+            or before.st_size != receipt["snapshotBytes"]
+            or before.st_size <= 0
+            or before.st_size > MAX_CANARY_SEED_BYTES
+        ):
+            fail("SQLite snapshot is unsafe for authoritative import")
+        destination_fd = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o400,
+            dir_fd=directory_fd,
+        )
+        temporary_created = True
+        copied = 0
+        digest = hashlib.sha256()
+        while copied < before.st_size:
+            block = os.read(source_fd, min(1024 * 1024, before.st_size - copied))
+            if not block:
+                fail("SQLite snapshot was truncated during authoritative import")
+            remaining = memoryview(block)
+            while remaining:
+                written = os.write(destination_fd, remaining)
+                remaining = remaining[written:]
+            copied += len(block)
+            digest.update(block)
+        if os.read(source_fd, 1):
+            fail("SQLite snapshot grew during authoritative import")
+        after = os.fstat(source_fd)
+        fingerprint = lambda value: (
+            value.st_dev, value.st_ino, value.st_size,
+            value.st_mtime_ns, value.st_ctime_ns,
+        )
+        if fingerprint(before) != fingerprint(after) or digest.hexdigest() != receipt["sha256"]:
+            fail("SQLite snapshot changed or differs from its authoritative receipt")
+        if os.geteuid() == 0:
+            os.fchown(destination_fd, 0, 0)
+        os.fchmod(destination_fd, 0o400)
+        os.fsync(destination_fd)
+        os.close(destination_fd)
+        destination_fd = None
+        # Hard-link publication is atomic and fails if the final name already
+        # exists. Removing the hidden link leaves a complete nlink=1 archive.
+        os.link(
+            temporary_name,
+            name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+        os.unlink(temporary_name, dir_fd=directory_fd)
+        os.fsync(directory_fd)
+        return destination
+    except Exception:
+        if temporary_created:
+            try:
+                os.unlink(temporary_name, dir_fd=directory_fd)
+            except FileNotFoundError:
+                pass
+        raise
+    finally:
+        if destination_fd is not None:
+            os.close(destination_fd)
+        os.close(directory_fd)
+        os.close(source_fd)
+
+
+def publish_sqlite_snapshot(stage: Path, receipt, name: str) -> None:
+    published = run_sqlite_worker("publish", stage=stage, publication=name)
+    if (
+        published["published"] != name
+        or published["snapshotBytes"] != receipt["snapshotBytes"]
+        or published["sha256"] != receipt["sha256"]
+    ):
+        fail("published backup receipt differs from the verified snapshot")
+
+
+def purge_canary_state() -> None:
+    # This removes host-disk state left by pre-tmpfs versions or a killed
+    # helper. New canaries never write beneath CANARY.
+    purge_private_staging(CANARY, "")
+
+
+def canary_url_json(canary_unit: str, url: str, timeout: float):
+    """Fetch a bounded receipt from inside the candidate's network namespace."""
+    parsed = urllib.parse.urlsplit(url)
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname != "127.0.0.1"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+        or parsed.port is None
+    ):
+        fail("canary probe URL is outside the fixed private loopback origin")
+    if timeout <= 0:
+        fail("canary probe deadline has elapsed")
+    probe_unit = f"marks-canary-probe-{secrets.token_hex(8)}"
+    runtime = max(1, min(6, int(timeout) + 1))
+    result = run(
+        [
+            "/usr/bin/systemd-run",
+            "--quiet",
+            "--wait",
+            "--pipe",
+            "--collect",
+            f"--unit={probe_unit}",
+            "--property=Type=exec",
+            f"--property=JoinsNamespaceOf={canary_unit}.service",
+            "--property=PrivateNetwork=yes",
+            "--property=DynamicUser=yes",
+            f"--property=RuntimeMaxSec={runtime}",
+            "--property=MemoryMax=64M",
+            "--property=TasksMax=16",
+            "--property=CPUQuota=100%",
+            "--property=ProtectSystem=strict",
+            "--property=ProtectHome=yes",
+            "--property=PrivateTmp=yes",
+            "--property=PrivateDevices=yes",
+            "--property=NoNewPrivileges=yes",
+            "--property=CapabilityBoundingSet=",
+            "--property=ProtectProc=invisible",
+            "--property=ProcSubset=pid",
+            "--property=RestrictSUIDSGID=yes",
+            "--property=RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
+            "/usr/bin/curl",
+            "--disable",
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--max-time",
+            f"{max(0.001, float(timeout)):.3f}",
+            "--max-filesize",
+            str(MAX_HTTP_JSON_BYTES),
+            "--header",
+            "Accept: application/json",
+            url,
+        ],
+        capture=True,
+        capture_limit=MAX_HTTP_JSON_BYTES,
+        env=fixed_environment(),
+    )
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        fail(f"private canary probe did not return bounded JSON: {error}")
+
+
+def canary(release: Path, receipt, seed_snapshot=None) -> None:
+    # The candidate must never share the live service uid: same-uid processes
+    # can signal and inspect one another despite path isolation. DynamicUser
+    # gives every canary a distinct ephemeral identity.
+    revision = receipt["revision"]
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
-    state = CANARY / f"{revision}-{os.getpid()}"
-    state.mkdir(mode=0o700, parents=True)
-    if os.geteuid() == 0:
-        os.chown(state, uid, gid)
-    if seed_database is not None:
-        snapshot_database(seed_database, state / "marks.db3")
-        if os.geteuid() == 0:
-            os.chown(state / "marks.db3", uid, gid)
+    purge_canary_state()
     unit = f"marks-canary-{revision[:12]}-{os.getpid()}"
+    seed_binding = []
+    if seed_snapshot is not None:
+        seed_binding = [f"--property=BindReadOnlyPaths={seed_snapshot}:/marks-seed.db3"]
     try:
         run([
-            "/usr/bin/systemd-run", "--quiet", "--collect", f"--unit={unit}", f"--uid={uid}", f"--gid={gid}",
+            "/usr/bin/systemd-run", "--quiet", "--collect", f"--unit={unit}",
+            "--property=DynamicUser=yes",
             "--property=Type=exec", "--property=ProtectSystem=strict", "--property=ProtectHome=yes",
+            f"--property=RuntimeMaxSec={CANARY_RUNTIME_SECONDS}",
+            "--property=MemoryHigh=2G", "--property=MemoryMax=3G",
+            "--property=TasksMax=512", "--property=CPUQuota=400%",
+            "--property=KillMode=mixed", "--property=TimeoutStopSec=15",
+            "--property=LimitFSIZE=1073741824",
+            "--property=StandardOutput=null", "--property=StandardError=null",
             "--property=PrivateTmp=yes", "--property=PrivateDevices=yes", "--property=NoNewPrivileges=yes",
-            "--property=CapabilityBoundingSet=", "--property=InaccessiblePaths=/var/lib/marks /etc/marks /home /root /run/docker.sock",
-            f"--property=ReadWritePaths={state}", f"--setenv=MARKS_LISTEN=127.0.0.1:{port}",
-            f"--setenv=MARKS_ORIGIN=http://127.0.0.1:{port}", f"--setenv=MARKS_DB={state / 'marks.db3'}",
-            f"--setenv=MARKS_ASSET_DIR={state / 'assets'}", f"--setenv=MARKS_BACKUP_DIR={state / 'backups'}",
-            f"--setenv=MARKS_STATIC_DIR={release / 'static'}", "--setenv=RUST_LOG=info", release / "marks-server",
+            "--property=CapabilityBoundingSet=", "--property=RestrictSUIDSGID=yes",
+            "--property=PrivateNetwork=yes",
+            "--property=ProtectProc=invisible", "--property=ProcSubset=pid",
+            "--property=RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
+            "--property=InaccessiblePaths=/var/lib/marks /etc/marks /home /root /run/docker.sock",
+            f"--property=BindReadOnlyPaths={release}:/marks-release",
+            f"--property=TemporaryFileSystem=/marks-canary:rw,nodev,nosuid,noexec,size={CANARY_TMPFS_BYTES},mode=1777",
+            "--property=TemporaryFileSystem=/tmp:rw,nodev,nosuid,noexec,size=64M",
+            *seed_binding,
+            f"--setenv=MARKS_LISTEN=127.0.0.1:{port}",
+            f"--setenv=MARKS_ORIGIN=http://127.0.0.1:{port}", "--setenv=MARKS_DB=/marks-canary/marks.db3",
+            "--setenv=MARKS_ASSET_DIR=/marks-canary/assets", "--setenv=MARKS_BACKUP_DIR=/marks-canary/backups",
+            "--setenv=MARKS_STATIC_DIR=/marks-release/static", "--setenv=RUST_LOG=info",
+            SQLITE_WORKER, "launch-canary",
         ])
-        wait_ready(f"http://127.0.0.1:{port}", revision)
+        wait_ready(
+            f"http://127.0.0.1:{port}",
+            revision,
+            build_plan=receipt.get("buildPlan"),
+            fetch_json=lambda url, timeout: canary_url_json(unit, url, timeout),
+        )
     finally:
         run(["/usr/bin/systemctl", "stop", unit], check=False)
         run(["/usr/bin/systemctl", "reset-failed", unit], check=False)
-        shutil.rmtree(state, ignore_errors=True)
-
-
-def snapshot_database(source: Path, destination: Path) -> None:
-    """One transactionally valid copy of a live SQLite database, verified."""
-    origin = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
-    try:
-        copy = sqlite3.connect(destination)
-        try:
-            with copy:
-                origin.backup(copy)
-            integrity = copy.execute("PRAGMA integrity_check").fetchone()[0]
-        finally:
-            copy.close()
-    finally:
-        origin.close()
-    if integrity != "ok":
-        destination.unlink(missing_ok=True)
-        fail("database snapshot failed integrity verification")
 
 
 def backup_live_database(reason: str) -> None:
     """A verified pre-activation snapshot taken by the outgoing release,
     before the new binary can touch the schema."""
-    if not LIVE_DB.is_file():
+    snapshot = create_sqlite_snapshot()
+    if snapshot is None:
         print("no live database yet; skipping pre-activation backup")
         return
-    BACKUPS.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    destination = BACKUPS / f"pre-activation-{stamp}-{reason}.db3"
-    snapshot_database(LIVE_DB, destination)
-    print(f"pre-activation backup verified: {destination} sha256={hash_file(destination)}")
-
-
-def live_schema_version():
-    if not LIVE_DB.is_file():
-        return None
-    connection = sqlite3.connect(f"file:{LIVE_DB}?mode=ro", uri=True)
+    stage, _snapshot_path, receipt = snapshot
     try:
-        row = connection.execute(
-            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
-        ).fetchone()
-        return int(row[0])
-    except sqlite3.Error:
-        return None
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        name = f"pre-activation-{stamp}-{reason}-{os.getpid()}.db3"
+        authoritative = archive_sqlite_snapshot(_snapshot_path, receipt, name)
+        publish_sqlite_snapshot(stage, receipt, name)
+        print(
+            f"pre-activation backup verified: {authoritative} "
+            f"service-copy={BACKUPS / name} "
+            f"sha256={receipt['sha256']}"
+        )
     finally:
-        connection.close()
+        shutil.rmtree(stage, ignore_errors=True)
 
 
 def preflight_rollback(target: Path, receipt) -> None:
@@ -475,14 +2361,59 @@ def preflight_rollback(target: Path, receipt) -> None:
     """
     if receipt.get("legacy"):
         return
-    live = live_schema_version()
-    declared = receipt.get("maxCompatibleSchema")
-    if live is not None and isinstance(declared, int) and live > declared:
+    snapshot = create_sqlite_snapshot()
+    if snapshot is None:
+        canary(target, receipt)
+        return
+    stage, snapshot_path, snapshot_receipt = snapshot
+    try:
+        live = snapshot_receipt["schemaVersion"]
+        declared = receipt.get("maxCompatibleSchema")
+        if isinstance(declared, int) and live > declared:
+            fail(
+                f"live database schema v{live} exceeds the target binary's "
+                f"supported v{declared}; roll forward instead"
+            )
+        canary(target, receipt, seed_snapshot=snapshot_path)
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
+def require_target_product_variant(receipt) -> None:
+    """Never activate an explicit v2 artifact for another target."""
+    if (
+        receipt.get("schema") == RELEASE_SCHEMA
+        and receipt.get("productVariant") != TARGET_PRODUCT_VARIANT
+    ):
         fail(
-            f"live database schema v{live} exceeds the target binary's "
-            f"supported v{declared}; roll forward instead"
+            f"this deployment target activates only {TARGET_PRODUCT_VARIANT} releases"
         )
-    canary(target, receipt["revision"], seed_database=LIVE_DB if LIVE_DB.is_file() else None)
+
+
+def require_normal_rollback_receipt(receipt) -> None:
+    """Normal remote rollback is only for receipt-bound stable artifacts.
+
+    Revision-only v1 and captured legacy releases cannot prove their compiled
+    feature plan. They remain recoverable only through the explicit local-root
+    break-glass operation below, never through the deployment SSH credential.
+    """
+    if receipt.get("schema") != RELEASE_SCHEMA:
+        fail(
+            "normal rollback requires a v2 stable product-build receipt; "
+            "legacy recovery is local-root break-glass only"
+        )
+    require_target_product_variant(receipt)
+
+
+def require_local_break_glass() -> None:
+    """Keep unknown-plan recovery outside the restricted SSH trust boundary."""
+    if (
+        os.geteuid() != 0
+        or os.environ.get("SUDO_USER") == "marks-deploy"
+        or os.environ.get("SSH_ORIGINAL_COMMAND")
+        or os.environ.get("SSH_CONNECTION")
+    ):
+        fail("legacy rollback is available only from a local administrator root session")
 
 
 def release_pool_assets(release: Path):
@@ -500,30 +2431,127 @@ def link_release_assets(release: Path) -> None:
             os.link(item, target)
 
 
-def directory_bytes(path: Path) -> int:
-    total = 0
-    for root, _dirs, files in os.walk(path):
-        for name in files:
-            info = (Path(root) / name).lstat()
-            if stat.S_ISREG(info.st_mode):
-                total += info.st_size
-    return total
+def purge_stale_build_state() -> None:
+    """Remove every abandoned per-release workspace while holding the lock."""
+    workspace_name = re.compile(r"(?:[0-9a-f]{40}\.[0-9]+|\.cargo-[0-9a-f]{40}\.[0-9]+)")
+    workspace_entries = list(WORKSPACES.iterdir())
+    if os.geteuid() == 0:
+        identities = set()
+        for entry in workspace_entries:
+            matched = re.fullmatch(
+                r"(?:\.cargo-)?([0-9a-f]{40})\.([0-9]+)", entry.name
+            )
+            if matched:
+                identities.add((matched.group(1), matched.group(2)))
+        for revision, process_id in identities:
+            for step in ("ci", "fetch", "rebuild", "verify", "web", "budget"):
+                unit = f"marks-build-{step}-{revision[:12]}-{process_id}"
+                run(
+                    ["/usr/bin/systemctl", "stop", unit],
+                    check=False,
+                    timeout=30,
+                    env=fixed_environment(),
+                )
+                run(
+                    ["/usr/bin/systemctl", "reset-failed", unit],
+                    check=False,
+                    timeout=30,
+                    env=fixed_environment(),
+                )
+            run(
+                [
+                    "/usr/bin/docker", "rm", "--force",
+                    f"marks-build-{revision[:12]}-{process_id}",
+                ],
+                check=False,
+                timeout=30,
+                env=fixed_environment(),
+            )
+            run(
+                [
+                    "/usr/bin/docker", "rm", "--force",
+                    f"marks-fetch-{revision[:12]}-{process_id}",
+                ],
+                check=False,
+                timeout=30,
+                env=fixed_environment(),
+            )
+    for entry in workspace_entries:
+        info = entry.lstat()
+        if (
+            not workspace_name.fullmatch(entry.name)
+            or not stat.S_ISDIR(info.st_mode)
+            or stat.S_ISLNK(info.st_mode)
+        ):
+            fail(f"build workspaces contain an unexpected object: {entry}")
+        shutil.rmtree(entry)
+    for entry in VERIFIED_GIT.iterdir():
+        info = entry.lstat()
+        if (
+            not re.fullmatch(r"[0-9a-f]{40}\.git", entry.name)
+            or not stat.S_ISDIR(info.st_mode)
+            or stat.S_ISLNK(info.st_mode)
+        ):
+            fail(f"verified Git storage contains an unexpected object: {entry}")
+        shutil.rmtree(entry)
+
+    # Retire every object from the previous repository-writable cache, not
+    # merely the four historical names. The root-owned parent prevents new
+    # top-level races; take ownership of directories before safe rmtree and
+    # unlink every other object without following it.
+    for entry in list(CACHE.iterdir()):
+        info = entry.lstat()
+        if stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode):
+            descriptor = os.open(
+                entry, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            )
+            try:
+                if os.geteuid() == 0:
+                    os.fchown(descriptor, 0, 0)
+                os.fchmod(descriptor, 0o700)
+            finally:
+                os.close(descriptor)
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
 
 
-def bound_caches() -> None:
-    for name, limit in CACHE_LIMIT_BYTES.items():
-        cache = CACHE / name
-        if not cache.is_dir():
+def purge_stale_release_staging() -> None:
+    """Remove only recognized root-owned release stages under the deploy lock.
+
+    A killed root helper can leave a complete candidate beneath RELEASES,
+    which intentionally lives outside the disposable build filesystem. Stop
+    any abandoned schema sandbox first, reject every unexpected hidden object,
+    and remove exact v1/v2/legacy stage names without following links.
+    """
+    if os.geteuid() == 0:
+        run(
+            ["/usr/bin/systemctl", "stop", "marks-schema-*"],
+            check=False,
+            timeout=30,
+            env=fixed_environment(),
+        )
+        run(
+            ["/usr/bin/systemctl", "reset-failed", "marks-schema-*"],
+            check=False,
+            timeout=30,
+            env=fixed_environment(),
+        )
+    staging = re.compile(rf"\.({RELEASE_RE.pattern})\.staging\.[0-9]+")
+    for entry in list(RELEASES.iterdir()):
+        if not entry.name.startswith("."):
             continue
-        used = directory_bytes(cache)
-        if used <= limit:
-            continue
-        print(f"cache {name} holds {used} bytes (cap {limit}); clearing it")
-        for entry in cache.iterdir():
-            if entry.is_dir() and not entry.is_symlink():
-                shutil.rmtree(entry)
-            else:
-                entry.unlink()
+        info = entry.lstat()
+        if (
+            not staging.fullmatch(entry.name)
+            or stat.S_ISLNK(info.st_mode)
+            or not stat.S_ISDIR(info.st_mode)
+            or info.st_nlink < 2
+            or (os.geteuid() == 0 and (info.st_uid, info.st_gid) != (0, 0))
+            or info.st_mode & 0o022
+        ):
+            fail(f"release storage contains an unsafe hidden object: {entry}")
+        shutil.rmtree(entry)
 
 
 def prune_releases() -> None:
@@ -622,10 +2650,17 @@ def install_stable_unit() -> None:
 
 def activate(target: Path, *, observe: bool, historical_unit_ok=False) -> None:
     target = validate_release(target, require_current_template=not historical_unit_ok)
+    target_receipt = json.loads((target / "release.json").read_text(encoding="utf-8"))
+    require_target_product_variant(target_receipt)
     old = link_target(CURRENT)
     if old == target:
-        receipt = json.loads((target / "release.json").read_text())
-        wait_ready(PUBLIC_ORIGIN, receipt["revision"], legacy=bool(receipt.get("legacy")))
+        receipt = target_receipt
+        wait_ready(
+            PUBLIC_ORIGIN,
+            receipt["revision"],
+            legacy=bool(receipt.get("legacy")),
+            build_plan=receipt.get("buildPlan"),
+        )
         return
     backup_live_database(target.name[:12])
     run(["/usr/bin/systemctl", "stop", SERVICE])
@@ -633,9 +2668,19 @@ def activate(target: Path, *, observe: bool, historical_unit_ok=False) -> None:
         atomic_link(target, CURRENT)
         install_stable_unit()
         run(["/usr/bin/systemctl", "start", SERVICE])
-        receipt = json.loads((target / "release.json").read_text())
-        wait_ready(LOCAL_ORIGIN, receipt["revision"], legacy=bool(receipt.get("legacy")))
-        wait_ready(PUBLIC_ORIGIN, receipt["revision"], legacy=bool(receipt.get("legacy")))
+        receipt = target_receipt
+        wait_ready(
+            LOCAL_ORIGIN,
+            receipt["revision"],
+            legacy=bool(receipt.get("legacy")),
+            build_plan=receipt.get("buildPlan"),
+        )
+        wait_ready(
+            PUBLIC_ORIGIN,
+            receipt["revision"],
+            legacy=bool(receipt.get("legacy")),
+            build_plan=receipt.get("buildPlan"),
+        )
         if observe:
             baseline = run(["/usr/bin/systemctl", "show", SERVICE, "-p", "NRestarts", "--value"], capture=True).stdout.strip()
             deadline = time.monotonic() + 30
@@ -652,57 +2697,134 @@ def activate(target: Path, *, observe: bool, historical_unit_ok=False) -> None:
             install_stable_unit()
             run(["/usr/bin/systemctl", "start", SERVICE])
             old_receipt = json.loads((old / "release.json").read_text())
-            wait_ready(LOCAL_ORIGIN, old_receipt["revision"], legacy=bool(old_receipt.get("legacy")))
+            wait_ready(
+                LOCAL_ORIGIN,
+                old_receipt["revision"],
+                legacy=bool(old_receipt.get("legacy")),
+                build_plan=old_receipt.get("buildPlan"),
+            )
         raise
     if old and old != target:
         atomic_link(old, PREVIOUS)
 
 
-def build_deploy(revision: str) -> None:
+def build_deploy(revision: str, requested_variant: str, expected_digest: str) -> None:
     ensure_layout()
-    source = INCOMING / revision
-    if not source.is_dir() or source.is_symlink():
-        fail("no completed upload exists for this revision")
+    if requested_variant != TARGET_PRODUCT_VARIANT:
+        fail(
+            f"this deployment target is fixed to {TARGET_PRODUCT_VARIANT}; "
+            "provision a separate target before deploying another product variant"
+        )
+    # A prior deploy may have been killed after atomically publishing its
+    # candidate but before activation/pruning. Bound visible releases and the
+    # shared asset pool before creating at most one new candidate this run.
+    prune_releases()
+    purge_stale_build_state()
+    purge_stale_claims()
+    source = claim_uploaded_source(revision)
     git_dir = VERIFIED_GIT / f"{revision}.git"
     try:
-        build_and_activate(source, git_dir, revision)
+        freeze_claimed_source(source)
+        build_and_activate(source, git_dir, revision, requested_variant, expected_digest)
     finally:
-        # Staging never outlives the attempt: a failed build cannot leave
-        # incoming or verified-Git state behind for a later run to trust.
+        # The uploader-visible name was atomically removed before verification.
+        # Cleanup addresses only this unique root claim; a concurrent upload or
+        # cleanup of INCOMING/<revision> can never mutate or remove the build.
         shutil.rmtree(source, ignore_errors=True)
         shutil.rmtree(git_dir, ignore_errors=True)
 
 
-def build_and_activate(source: Path, git_dir: Path, revision: str) -> None:
+def build_and_activate(
+    source: Path,
+    git_dir: Path,
+    revision: str,
+    requested_variant: str,
+    expected_digest: str,
+) -> None:
     verify_source(source, revision)
     # A repository unit change must not pass CI and deploy while production
     # silently keeps the older root-owned template. Require exact equality;
     # re-provision the template first, then deploy the matching revision.
     if (source / "deploy/systemd/marks.service").read_bytes() != TEMPLATE.read_bytes():
         fail("uploaded deploy/systemd/marks.service differs from the root-owned service template")
-    sandboxed_npm(source, "ci", "ci")
-    sandboxed_npm(source, "verify", "run", "verify:esbt")
-    sandboxed_npm(source, "web", "run", "build", extra_env={"VITE_MARKS_DATA_MODE": "service"})
-    sandboxed_npm(source, "budget", "run", "check:ui-budgets")
-    dirty = run(["/usr/bin/git", f"--git-dir={git_dir}", f"--work-tree={source}", "status", "--porcelain=v1", "--untracked-files=no"], capture=True, env=fixed_environment()).stdout
-    if dirty:
-        fail("build modified tracked source files")
-    docker_build(source, revision)
-    release = seal_release(source, revision)
-    canary(release, revision)
-    snapshot_legacy()
-    activate(release, observe=True)
-    prune_releases()
-    bound_caches()
+    build = resolve_build_plan(source, requested_variant, expected_digest)
+    validate_node_dependency_policy(source)
+    validate_cargo_dependency_policy(source)
+    client_relative = build["clientOutput"].relative_to(source)
+    workspace = copy_claimed_workspace(source, revision)
+    cargo = None
+    try:
+        cargo = create_cargo_workspace(revision)
+        verify_workspace_source(workspace, git_dir)
+        # Only exact lockfile materialization receives public network access,
+        # and lifecycle scripts are disabled there. Every dependency and
+        # repository script executes later inside a private network namespace.
+        sandboxed_npm(
+            workspace,
+            "fetch",
+            "ci",
+            "--ignore-scripts",
+            "--no-audit",
+            "--no-fund",
+            allow_network=True,
+        )
+        sandboxed_npm(workspace, "rebuild", "rebuild")
+        sandboxed_npm(workspace, "verify", "run", "verify:esbt")
+        build["clientOutput"] = workspace / client_relative
+        sandbox_output = Path("/work") / client_relative
+        sandboxed_npm(
+            workspace,
+            "web",
+            "run",
+            "build:variant",
+            "--",
+            "--variant",
+            build["variant"],
+            "--data-mode",
+            "service",
+            "--out-dir",
+            str(sandbox_output),
+            "--require-deployable",
+        )
+        sandboxed_npm(
+            workspace,
+            "budget",
+            "run",
+            "check:ui-budgets",
+            "--",
+            "--dist-dir",
+            str(sandbox_output),
+        )
+        verify_workspace_source(workspace, git_dir)
+        freeze_client_output(workspace, build["clientOutput"])
+        # Server compilation never consumes the writable npm workspace.
+        docker_fetch(source, cargo, revision)
+        docker_build(source, cargo, revision, build)
+        release = seal_release(source, cargo, revision, build)
+        receipt = json.loads((release / "release.json").read_text(encoding="utf-8"))
+        canary(release, receipt)
+        snapshot_legacy()
+        activate(release, observe=True)
+        prune_releases()
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+        if cargo is not None:
+            shutil.rmtree(cargo, ignore_errors=True)
 
 
-def rollback(requested=None) -> None:
-    ensure_layout()
+def rollback(requested=None, *, allow_legacy=False) -> None:
+    # Rollback remains available if the disposable build filesystem is offline.
+    ensure_layout(require_build=False)
     target = RELEASES / release_id(requested) if requested else link_target(PREVIOUS)
     if target is None:
         fail("no previous release exists")
     target = validate_release(target, require_current_template=False)
     receipt = json.loads((target / "release.json").read_text(encoding="utf-8"))
+    if allow_legacy:
+        if receipt.get("schema") == RELEASE_SCHEMA:
+            fail("local legacy break-glass accepts only legacy or v1 releases")
+    else:
+        require_normal_rollback_receipt(receipt)
     preflight_rollback(target, receipt)
     activate(target, observe=False, historical_unit_ok=True)
 
@@ -720,7 +2842,11 @@ def status_command() -> None:
     print(f"previous: {previous.name if previous else ''}")
     print(service_state())
     if current and (current / "release.json").is_file():
-        print((current / "release.json").read_text().strip())
+        receipt = json.loads((current / "release.json").read_text(encoding="utf-8"))
+        print(f"revision: {receipt.get('revision', '')}")
+        print(f"product-variant: {receipt.get('productVariant', '')}")
+        print(f"build-plan-sha256: {receipt.get('buildPlanSha256', '')}")
+        print(json.dumps(receipt, indent=2, sort_keys=True))
 
 
 def releases_command() -> None:
@@ -738,12 +2864,41 @@ def releases_command() -> None:
 
 
 def probe() -> None:
-    commands = ("docker", "npm", "node", "git", "curl", "python3", "sha256sum", "systemd-run")
+    commands = (
+        "docker", "npm", "node", "git", "curl", "python3", "sha256sum",
+        "systemd-run", "timeout", "prlimit",
+    )
+    build_capacity = validate_build_filesystem()
+    fetch_egress = validate_fetch_egress_policy()
+    build_uid, build_gid = build_identity()
+    for required in (Path("/usr/bin/timeout"), Path("/usr/bin/prlimit")):
+        try:
+            info = required.lstat()
+        except OSError as error:
+            fail(f"required upload boundary executable is unavailable: {required}: {error}")
+        if (
+            stat.S_ISLNK(info.st_mode)
+            or not stat.S_ISREG(info.st_mode)
+            or (info.st_uid, info.st_gid) != (0, 0)
+            or info.st_mode & 0o022
+            or not info.st_mode & stat.S_IXUSR
+        ):
+            fail(f"required upload boundary executable is unsafe: {required}")
     value = {
-        "protocol": "marks-deploy.v1", "host": socket.gethostname(), "architecture": os.uname().machine,
+        "protocol": "marks-deploy.v2", "host": socket.gethostname(), "architecture": os.uname().machine,
         "commands": {name: bool(shutil.which(name)) for name in commands},
         "service": service_state(), "incomingLimitBytes": 512 * 1024 * 1024,
         "expandedLimitBytes": 1024 * 1024 * 1024, "fileLimit": 50_000,
+        "incomingAggregateLimitBytes": 2 * 1024 * 1024 * 1024,
+        "incomingTreeLimit": 4,
+        "uploadLock": str(UPLOAD_LOCK),
+        "identities": {
+            "ingress": "marks-deploy",
+            "build": "marks-build",
+            "buildUid": build_uid,
+            "buildGid": build_gid,
+            "service": "devuser",
+        },
         # The deployment client refuses to proceed when these identities
         # differ from the checked-in deploy/host sources, so a green
         # repository test can never silently certify a different installed
@@ -751,10 +2906,19 @@ def probe() -> None:
         "helpers": {
             "dispatcher": hash_file(DISPATCHER),
             "uploader": hash_file(UPLOADER),
+            "sqliteWorker": hash_file(SQLITE_WORKER),
             "releaseRoot": hash_file(RELEASE_ROOT),
             "serviceTemplate": hash_file(TEMPLATE),
         },
         "operations": ["probe", "upload", "cleanup", "deploy", "rollback", "status", "releases"],
+        "target": {"origin": PUBLIC_ORIGIN, "productVariant": TARGET_PRODUCT_VARIANT},
+        "buildFilesystem": {
+            "root": str(BUILD_ROOT),
+            "capacityBytes": build_capacity,
+            "minimumBytes": MIN_BUILD_FILESYSTEM_BYTES,
+            "maximumBytes": MAX_BUILD_FILESYSTEM_BYTES,
+        },
+        "fetchEgress": fetch_egress,
     }
     print(json.dumps(value, sort_keys=True))
 
@@ -766,10 +2930,12 @@ def main() -> None:
         fail("missing operation")
     operation = sys.argv[1]
     args = sys.argv[2:]
-    allowed = {"probe", "status", "releases", "deploy", "rollback"}
+    allowed = {
+        "probe", "status", "releases", "deploy", "rollback", "rollback-legacy"
+    }
     if operation not in allowed:
         fail("unsupported root operation")
-    ensure_layout()
+    ensure_layout(require_build=operation in ("probe", "deploy"))
     if operation in ("probe", "status", "releases"):
         if args: fail("read-only operation accepts no arguments")
         {"probe": probe, "status": status_command, "releases": releases_command}[operation]()
@@ -780,12 +2946,25 @@ def main() -> None:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             fail("another Marks deployment or rollback holds the release lock")
+        purge_stale_release_staging()
         if operation == "deploy":
-            if len(args) != 1: fail("deploy requires one revision")
-            build_deploy(sha(args[0]))
-        else:
+            if len(args) != 3:
+                fail("deploy requires revision, product variant, and build plan digest")
+            build_deploy(sha(args[0]), product_variant(args[1]), build_plan_sha256(args[2]))
+        elif operation == "rollback":
             if len(args) > 1: fail("rollback accepts at most one release id")
             rollback(args[0] if args else None)
+        else:
+            require_local_break_glass()
+            if len(args) != 1:
+                fail("rollback-legacy requires one explicit legacy or v1 release id")
+            requested = release_id(args[0])
+            if not (
+                requested.startswith("legacy-")
+                or SHA_RE.fullmatch(requested)
+            ):
+                fail("rollback-legacy accepts only legacy or revision-only v1 release ids")
+            rollback(requested, allow_legacy=True)
 
 
 if __name__ == "__main__":

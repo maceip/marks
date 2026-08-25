@@ -1,4 +1,5 @@
 import type { ProjectedCommand } from '../commands/types.ts';
+import { RIBBON_WILD_ENABLED } from '../lib/product.ts';
 
 export interface AgentPlanStep {
   id: string;
@@ -20,6 +21,13 @@ interface Pattern {
 }
 
 const VIEW_MODE_COMMANDS = new Set(['view.editor', 'view.split', 'view.preview']);
+const FUZZY_STOP_WORDS = new Set([
+  'and', 'can', 'command', 'for', 'from', 'how', 'into', 'open', 'please',
+  'review', 'show', 'stage', 'that', 'the', 'this', 'what', 'with', 'you',
+]);
+const RIBBON_WILD_BUILD_ENABLED = typeof __MARKS_VITE_BUILD__ === 'undefined'
+  ? RIBBON_WILD_ENABLED
+  : __MARKS_FEATURES__.ribbonWild;
 
 const PATTERNS: Pattern[] = [
   { commandId: 'view.preview', expressions: [/\b(?:rendered?|preview|reading)\s+(?:view|mode)\b/i, /\bshow (?:me )?(?:the )?(?:rendered?|preview)\b/i], reason: 'Switch to the compiled rendering.' },
@@ -67,11 +75,13 @@ const PATTERNS: Pattern[] = [
   { commandId: 'tools.paste-intent', expressions: [/\b(?:paste|clipboard).*(?:intent|provenance|as plain|as quote|as code)\b/i], reason: 'Open paste intent and provenance.' },
   { commandId: 'insert.cross-document-block', expressions: [/\b(?:insert|add|create).*(?:cross[- ]document|linked document|document block|transclusion)\b/i], reason: 'Open cross-document block insertion.' },
   { commandId: 'review.quality-contract', expressions: [/\b(?:check|set|open|inspect).*(?:audience|quality contract|reading level|readability)\b/i], reason: 'Open the audience and quality contract.' },
-  { commandId: 'wild.intent-horizon', expressions: [/\b(?:open|show|infer|declare).*(?:intent horizon|next moves?|what should (?:i|we) do next)\b/i], reason: 'Open the inspectable intent horizon.' },
-  { commandId: 'wild.causal-lightpath', expressions: [/\b(?:open|show|trace|inspect).*(?:causal lightpath|command path|causal receipts?|what (?:did|changed))\b/i], reason: 'Open real command-effect receipts.' },
-  { commandId: 'wild.consequence-lanes', expressions: [/\b(?:open|show|predict|stage|inspect).*(?:consequence lanes?|command consequences?|what will .* affect)\b/i], reason: 'Stage commands against the consequence lanes.' },
-  { commandId: 'wild.context-half-life', expressions: [/\b(?:open|show|check|review).*(?:context half[- ]life|stale claims?|aging context|freshness)\b/i], reason: 'Open context half-life review.' },
-  { commandId: 'wild.counterfactual-shelf', expressions: [/\b(?:open|show|save|branch|compare).*(?:counterfactual|alternative|possibilit(?:y|ies)|reversal)\b/i], reason: 'Open the counterfactual shelf.' },
+  ...(RIBBON_WILD_BUILD_ENABLED ? [
+    { commandId: 'wild.intent-horizon', expressions: [/\b(?:open|show|infer|declare).*(?:intent horizon|next moves?|what should (?:i|we) do next)\b/i], reason: 'Open the inspectable intent horizon.' },
+    { commandId: 'wild.causal-lightpath', expressions: [/\b(?:open|show|trace|inspect).*(?:causal lightpath|command path|causal receipts?|what (?:did|changed))\b/i], reason: 'Open real command-effect receipts.' },
+    { commandId: 'wild.consequence-lanes', expressions: [/\b(?:open|show|predict|stage|inspect).*(?:consequence lanes?|command consequences?|what will .* affect)\b/i], reason: 'Stage commands against the consequence lanes.' },
+    { commandId: 'wild.context-half-life', expressions: [/\b(?:open|show|check|review).*(?:context half[- ]life|stale claims?|aging context|freshness)\b/i], reason: 'Open context half-life review.' },
+    { commandId: 'wild.counterfactual-shelf', expressions: [/\b(?:open|show|save|branch|compare).*(?:counterfactual|alternative|possibilit(?:y|ies)|reversal)\b/i], reason: 'Open the counterfactual shelf.' },
+  ] : []),
   { commandId: 'view.outline', expressions: [/\b(?:open|show|toggle) (?:the )?outline\b/i], reason: 'Toggle the document outline.' },
   { commandId: 'view.focus', expressions: [/\b(?:enter|toggle|use) focus(?: mode)?\b/i], reason: 'Toggle focus mode.' },
   { commandId: 'document.export-bundle', expressions: [/\b(?:download|export).*(?:bundle|zip|assets?)\b/i], reason: 'Export Markdown with referenced assets.' },
@@ -141,16 +151,25 @@ export function planAgentRequest(request: string, commands: readonly ProjectedCo
 }
 
 function fuzzyCommand(request: string, commands: readonly ProjectedCommand[]): ProjectedCommand | null {
-  const words = new Set(request.toLowerCase().match(/[a-z0-9]+/g) ?? []);
+  const words = new Set(
+    (request.toLowerCase().match(/[a-z0-9]+/g) ?? [])
+      .filter((word) => word.length >= 3 && !FUZZY_STOP_WORDS.has(word)),
+  );
   if (words.size === 0 || /\b(?:help|what can|how do|explain)\b/i.test(request)) return null;
   let best: { command: ProjectedCommand; score: number } | null = null;
   for (const command of commands) {
     const haystack = `${command.id} ${command.label} ${command.description} ${(command.aliases ?? []).join(' ')}`.toLowerCase();
     let score = 0;
+    let matches = 0;
     for (const word of words) {
-      if (word.length >= 3 && haystack.includes(word)) score += word.length;
+      if (!haystack.includes(word)) continue;
+      score += word.length;
+      matches += 1;
     }
-    if (score >= 6 && (!best || score > best.score)) best = { command, score };
+    // A single generic or long word is not enough authority to guess a
+    // command. This also keeps requests for compiled-out features from
+    // falling through to an unrelated visible action.
+    if (matches >= 2 && score >= 6 && (!best || score > best.score)) best = { command, score };
   }
   return best?.command ?? null;
 }

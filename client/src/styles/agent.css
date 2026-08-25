@@ -1,3 +1,52 @@
+.agent-tab-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: var(--color-brand-positive);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-brand-positive) 16%, transparent);
+}
+
+.ribbon-command.agent-raised,
+.style-chip.agent-raised,
+.quick-access .agent-raised {
+  border-color: color-mix(in srgb, var(--color-brand-positive) 52%, var(--material-border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-brand-positive) 14%, transparent), var(--material-elevation);
+}
+
+.ribbon-command.agent-running::after {
+  position: absolute;
+  inset: -3px;
+  border: 2px solid var(--color-brand-positive);
+  border-radius: inherit;
+  content: '';
+  animation: agent-command-pulse var(--motion-control-pulse) ease-in-out infinite alternate;
+  pointer-events: none;
+}
+
+.ribbon-command.agent-awaiting-approval::after {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--color-feedback-warning);
+  color: white;
+  content: '!';
+  font: 800 10px/1 sans-serif;
+}
+
+@keyframes agent-command-pulse {
+  from { opacity: .28; transform: scale(.98); }
+  to { opacity: .9; transform: scale(1.03); }
+}
+
+.phone-category-grid .agent-tab-dot { position: absolute; top: 6px; right: 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--color-brand-positive); }
+
 .agent-pill {
   position: fixed;
   right: max(16px, env(safe-area-inset-right));
@@ -99,7 +148,7 @@
   border: 2px solid var(--color-bg-surface);
   border-radius: 50%;
   background: var(--color-brand-positive);
-  animation: agent-pill-pulse var(--motion-agent-pill-pulse) ease-in-out infinite alternate;
+  animation: agent-pill-pulse var(--motion-indicator-pulse) ease-in-out infinite alternate;
 }
 
 .agent-pill-panel {
@@ -208,6 +257,30 @@
 
 @keyframes agent-pill-pulse { to { transform: scale(1.2); box-shadow: 0 0 0 5px color-mix(in srgb, var(--color-brand-positive) 12%, transparent); } }
 
+.exposure-agent { background: var(--color-action); }
+
+@media (min-width: 1120px) {
+  .agent-pill.inspector-standard {
+    right: calc(min(500px, 42vw) + 30px);
+    width: min(620px, calc(100vw - min(500px, 42vw) - 64px));
+    transition: right var(--motion-practical-enter) ease, width var(--motion-practical-enter) ease;
+  }
+  .agent-pill.inspector-linked.inspector-standard {
+    width: min(390px, calc(100vw - min(500px, 42vw) - 64px));
+  }
+}
+
+@media (min-width: 1180px) {
+  .agent-pill.inspector-wide {
+    right: calc(min(560px, 46vw) + 30px);
+    width: min(580px, calc(100vw - min(560px, 46vw) - 64px));
+    transition: right var(--motion-medium) ease, width var(--motion-medium) ease;
+  }
+  .agent-pill.inspector-linked.inspector-wide {
+    width: min(390px, calc(100vw - min(560px, 46vw) - 64px));
+  }
+}
+
 .with-sidebar .agent-pill { right: max(16px, env(safe-area-inset-right)); }
 
 :root[data-shell='phone'] .agent-pill {
@@ -246,5 +319,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .ribbon-command.agent-running::after { animation: none; opacity: .8; }
   .agent-running-dot { animation: none; }
 }

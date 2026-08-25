@@ -48,6 +48,7 @@ jobs:
       browser_matrix: ${{ steps.classify.outputs.browser_matrix }}
       changed_path_count: ${{ steps.classify.outputs.changed_path_count }}
       reasons: ${{ steps.classify.outputs.reasons }}
+      product_variant_matrix: ${{ steps.variants.outputs.matrix }}
     steps:
       - name: Checkout complete history for impact analysis
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -99,6 +100,33 @@ jobs:
             --github-output "$GITHUB_OUTPUT" \
             "${force[@]}"
 
+      - name: Resolve the complete checked-in product variant matrix
+        id: variants
+        shell: bash
+        run: |
+          set -euo pipefail
+          variants=$(node --experimental-strip-types scripts/product-variant.ts list)
+          matrix=$(VARIANTS="$variants" node -e '
+            const variants = JSON.parse(process.env.VARIANTS);
+            if (!Array.isArray(variants) || variants.length === 0) throw new Error("product variant catalog is empty");
+            const names = variants.map(({ name }) => name);
+            if (new Set(names).size !== names.length || names.some((name) => !/^[a-z][a-z0-9-]{0,63}$/.test(name))) {
+              throw new Error("product variant catalog contains duplicate or unsafe names");
+            }
+            if (variants.some(({ deployable }) => typeof deployable !== "boolean")) {
+              throw new Error("product variant catalog has an invalid deployability decision");
+            }
+            const include = variants.flatMap(({ name, deployable }) => {
+              if (!deployable) return [{ variant: name, browser: "chromium" }];
+              const browsers = name === "stable"
+                ? ["chromium"]
+                : ["chromium", "firefox", "webkit"];
+              return browsers.map((browser) => ({ variant: name, browser }));
+            });
+            process.stdout.write(JSON.stringify({ include }));
+          ')
+          printf 'matrix=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
+
       - name: Record impact receipt
         shell: bash
         env:
@@ -126,6 +154,16 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js v24 for Rust build-plan resolution and web checks
+        if: >-
+          needs.impact.outputs.run_rust == 'true' ||
+          needs.impact.outputs.run_web == 'true' ||
+          needs.impact.outputs.run_harness == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: 'npm'
 
       - name: Reject retired duplicate implementations
         run: |
@@ -190,23 +228,23 @@ jobs:
         if: needs.impact.outputs.run_rust == 'true'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      - name: Setup Node.js v24
-        if: needs.impact.outputs.run_web == 'true' || needs.impact.outputs.run_harness == 'true'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '24'
-          cache: 'npm'
-
       - name: Install dependencies
         if: needs.impact.outputs.run_web == 'true' || needs.impact.outputs.run_harness == 'true'
         run: npm ci
+
+      - name: Enforce product feature source and catalog contracts
+        if: needs.impact.outputs.run_web == 'true'
+        run: >-
+          node --experimental-strip-types --test
+          scripts/harness/product-feature-source-contract.test.mjs
+          config/product-variants.test.ts
 
       - name: Validate workflow and deployment shell contracts
         if: needs.impact.outputs.run_harness == 'true'
         run: |
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           bash -n scripts/deploy-secure-build.sh scripts/run-service-ci.sh deploy/host/marks-deploy-ssh
-          python3 -m py_compile deploy/host/marks-upload deploy/host/marks-release-root
+          python3 -m py_compile deploy/host/marks-upload deploy/host/marks-sqlite-worker deploy/host/marks-release-root
 
       - name: Typecheck
         if: needs.impact.outputs.run_web == 'true'
@@ -325,17 +363,46 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Resolve the stable service build plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          plan=$(node --experimental-strip-types scripts/product-variant.ts resolve \
+            --variant stable --data-mode service --format canonical --require-deployable)
+          digest=$(node --experimental-strip-types scripts/product-variant.ts resolve \
+            --variant stable --data-mode service --format sha256 --require-deployable)
+          cargo_features=$(PLAN_JSON="$plan" node -e \
+            'process.stdout.write(JSON.parse(process.env.PLAN_JSON).server.cargoFeatures.join(","))')
+          {
+            printf 'MARKS_PRODUCT_VARIANT=stable\n'
+            printf 'MARKS_BUILD_PLAN_SHA256=%s\n' "$digest"
+            printf 'MARKS_BUILD_PLAN_JSON=%s\n' "$plan"
+            printf 'MARKS_SERVER_CARGO_FEATURES=%s\n' "$cargo_features"
+            printf 'MARKS_CLIENT_DIST=%s/client/dist\n' "$GITHUB_WORKSPACE"
+          } >> "$GITHUB_ENV"
+
       - name: Build marks-server
-        run: cargo build -p marks-server --locked
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--no-default-features)
+          if [[ -n "$MARKS_SERVER_CARGO_FEATURES" ]]; then
+            args+=(--features "$MARKS_SERVER_CARGO_FEATURES")
+          fi
+          cargo build -p marks-server --locked "${args[@]}"
         env:
           MARKS_BUILD_REVISION: ${{ github.sha }}
           MARKS_SOURCE_DIRTY: '0'
 
       - name: Production service-mode client
-        run: VITE_MARKS_DATA_MODE=service VITE_MARKS_TEST_SERVICE_WORKER=1 npm run build
+        run: >-
+          npm run build:variant -- --variant stable --data-mode service
+          --out-dir "$MARKS_CLIENT_DIST" --require-deployable
+        env:
+          VITE_MARKS_TEST_SERVICE_WORKER: '1'
 
       - name: Production UI budgets (service-mode)
-        run: npm run check:ui-budgets
+        run: npm run check:ui-budgets -- --dist-dir "$MARKS_CLIENT_DIST"
 
       # One earlier Firefox install stalled for around ten minutes; bound
       # each attempt and allow exactly one controlled retry.
@@ -367,9 +434,11 @@ jobs:
           MARKS_TEST_SERVICE_WORKER: '1'
         run: |
           set -euo pipefail
+          export MARKS_EXPECT_PRODUCT_VARIANT="$MARKS_PRODUCT_VARIANT"
+          export MARKS_EXPECT_BUILD_PLAN_SHA256="$MARKS_BUILD_PLAN_SHA256"
           args=(
             --bin target/debug/marks-server
-            --static-dir client/dist
+            --static-dir "$MARKS_CLIENT_DIST"
             --browser "$BROWSER"
           )
           if [[ "$BROWSER" != chromium ]]; then
@@ -399,10 +468,251 @@ jobs:
             artifacts/
             /tmp/marks-ci-*
 
+  product-variants:
+    needs: impact
+    if: needs.impact.outputs.run_aggregate == 'true'
+    name: product variant ${{ matrix.variant }} / ${{ matrix.browser }} boundary
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.impact.outputs.product_variant_matrix) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Restore variant Rust build state
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-rust-1.88.0-${{ hashFiles('Cargo.lock') }}-variant-${{ matrix.variant }}-${{ matrix.browser }}
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # immutable action revision
+        with:
+          toolchain: 1.88.0
+
+      - name: Setup Node.js v24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Resolve the requested product build plan
+        id: plan
+        shell: bash
+        env:
+          REQUESTED_VARIANT: ${{ matrix.variant }}
+        run: |
+          set -euo pipefail
+          plan=$(node --experimental-strip-types scripts/product-variant.ts resolve \
+            --variant "$REQUESTED_VARIANT" --data-mode service \
+            --format canonical)
+          digest=$(node --experimental-strip-types scripts/product-variant.ts resolve \
+            --variant "$REQUESTED_VARIANT" --data-mode service \
+            --format sha256)
+          cargo_features=$(PLAN_JSON="$plan" node -e \
+            'process.stdout.write(JSON.parse(process.env.PLAN_JSON).server.cargoFeatures.join(","))')
+          deployable=$(PLAN_JSON="$plan" node -e \
+            'process.stdout.write(JSON.parse(process.env.PLAN_JSON).deployable ? "true" : "false")')
+          dist="$GITHUB_WORKSPACE/client/dist-variants/$REQUESTED_VARIANT/service-${digest:0:16}"
+          {
+            printf 'MARKS_PRODUCT_VARIANT=%s\n' "$REQUESTED_VARIANT"
+            printf 'MARKS_BUILD_PLAN_SHA256=%s\n' "$digest"
+            printf 'MARKS_BUILD_PLAN_JSON=%s\n' "$plan"
+            printf 'MARKS_SERVER_CARGO_FEATURES=%s\n' "$cargo_features"
+            printf 'MARKS_VARIANT_DEPLOYABLE=%s\n' "$deployable"
+            printf 'MARKS_CLIENT_DIST=%s\n' "$dist"
+            printf 'MARKS_EXPECT_PRODUCT_VARIANT=%s\n' "$REQUESTED_VARIANT"
+            printf 'MARKS_EXPECT_BUILD_PLAN_SHA256=%s\n' "$digest"
+          } >> "$GITHUB_ENV"
+          {
+            printf 'product_variant=%s\n' "$REQUESTED_VARIANT"
+            printf 'build_plan_sha256=%s\n' "$digest"
+            printf 'deployable=%s\n' "$deployable"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build the isolated client cut
+        shell: bash
+        env:
+          VITE_MARKS_TEST_SERVICE_WORKER: '1'
+        run: |
+          set -euo pipefail
+          args=(
+            --variant "$MARKS_PRODUCT_VARIANT"
+            --data-mode service
+            --out-dir "$MARKS_CLIENT_DIST"
+          )
+          if [[ "$MARKS_VARIANT_DEPLOYABLE" == true ]]; then
+            args+=(--require-deployable)
+          fi
+          npm run build:variant -- "${args[@]}"
+
+      - name: Assert the emitted client receipt is the requested cut
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e '
+            const { readFileSync } = require("node:fs");
+            const receipt = JSON.parse(readFileSync(`${process.env.MARKS_CLIENT_DIST}/marks-product-build.json`, "utf8"));
+            if (receipt.schema !== "marks.product-build-receipt.v1") throw new Error("unexpected client receipt schema");
+            if (receipt.buildPlan.productVariant !== process.env.MARKS_EXPECT_PRODUCT_VARIANT) throw new Error("client variant differs from matrix request");
+            if (receipt.buildPlanSha256 !== process.env.MARKS_EXPECT_BUILD_PLAN_SHA256) throw new Error("client digest differs from matrix request");
+            const expected = JSON.parse(process.env.MARKS_BUILD_PLAN_JSON);
+            if (!require("node:util").isDeepStrictEqual(receipt.buildPlan, expected)) throw new Error("client plan differs from canonical resolver output");
+          '
+          npm run check:ui-budgets -- --dist-dir "$MARKS_CLIENT_DIST"
+
+      - name: Test the matching server cut
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--no-default-features)
+          if [[ -n "$MARKS_SERVER_CARGO_FEATURES" ]]; then
+            args+=(--features "$MARKS_SERVER_CARGO_FEATURES")
+          fi
+          # Shipping cuts keep the release identity during tests. Validation
+          # cuts deliberately remain development builds because build.rs must
+          # reject a nondeployable plan carrying a release revision.
+          if [[ "$MARKS_VARIANT_DEPLOYABLE" == true ]]; then
+            export MARKS_BUILD_REVISION="$GITHUB_SHA"
+            export MARKS_SOURCE_DIRTY=0
+          fi
+          cargo test -p marks-server --locked "${args[@]}"
+
+      - name: Build the matching server executable cut
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--no-default-features)
+          if [[ -n "$MARKS_SERVER_CARGO_FEATURES" ]]; then
+            args+=(--features "$MARKS_SERVER_CARGO_FEATURES")
+          fi
+          cargo build -p marks-server --locked "${args[@]}"
+
+      - name: Build the deployable server release cut
+        if: steps.plan.outputs.deployable == 'true'
+        shell: bash
+        env:
+          MARKS_BUILD_REVISION: ${{ github.sha }}
+          MARKS_SOURCE_DIRTY: '0'
+        run: |
+          set -euo pipefail
+          args=(--no-default-features)
+          if [[ -n "$MARKS_SERVER_CARGO_FEATURES" ]]; then
+            args+=(--features "$MARKS_SERVER_CARGO_FEATURES")
+          fi
+          cargo build -p marks-server --release --locked "${args[@]}"
+
+      - name: Lint the resolved server feature boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--no-default-features)
+          if [[ -n "$MARKS_SERVER_CARGO_FEATURES" ]]; then
+            args+=(--features "$MARKS_SERVER_CARGO_FEATURES")
+          fi
+          cargo clippy -p marks-server --all-targets --locked "${args[@]}" -- -D warnings
+
+      - name: Install the selected Playwright browser
+        if: matrix.browser != 'none'
+        shell: bash
+        timeout-minutes: 12
+        env:
+          MARKS_BROWSER: ${{ matrix.browser }}
+        run: |
+          set -euo pipefail
+          attempt() { timeout 300 npx playwright install --with-deps "$MARKS_BROWSER"; }
+          attempt || {
+            echo "playwright install stalled or failed once; retrying" >&2
+            attempt
+          }
+
+      - name: Prove server, webapp, and requested variant coherence
+        if: matrix.browser != 'none'
+        shell: bash
+        env:
+          MARKS_BROWSER: ${{ matrix.browser }}
+        run: |
+          set -euo pipefail
+          run_root="$RUNNER_TEMP/marks-variant-${MARKS_PRODUCT_VARIANT}-${MARKS_BROWSER}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$run_root/assets" "$run_root/backups"
+          server_pid=""
+          cleanup() {
+            if [[ -n "$server_pid" ]]; then
+              kill "$server_pid" >/dev/null 2>&1 || true
+              wait "$server_pid" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT INT TERM
+          MARKS_LISTEN=127.0.0.1:3319 \
+          MARKS_ORIGIN=http://127.0.0.1:3319 \
+          MARKS_DB="$run_root/marks.db3" \
+          MARKS_ASSET_DIR="$run_root/assets" \
+          MARKS_BACKUP_DIR="$run_root/backups" \
+          MARKS_STATIC_DIR="$MARKS_CLIENT_DIST" \
+          MARKS_AGENT_PROVIDER=disabled \
+            "$(if [[ "$MARKS_VARIANT_DEPLOYABLE" == true ]]; then printf '%s' target/release/marks-server; else printf '%s' target/debug/marks-server; fi)" \
+            >"$run_root/server.log" 2>&1 &
+          server_pid=$!
+          bash scripts/wait-for-server.sh \
+            http://127.0.0.1:3319/readyz "$server_pid" 30 "$run_root/server.log"
+
+          artifact=$(curl -fsS http://127.0.0.1:3319/v1/artifact)
+          ARTIFACT="$artifact" node -e '
+            const artifact = JSON.parse(process.env.ARTIFACT);
+            const expectedPlan = JSON.parse(process.env.MARKS_BUILD_PLAN_JSON);
+            const fail = (message) => { throw new Error(message); };
+            if (process.env.MARKS_VARIANT_DEPLOYABLE === "true" && artifact.buildRevision !== process.env.GITHUB_SHA) fail("server revision differs from matrix revision");
+            if (artifact.productVariant !== process.env.MARKS_EXPECT_PRODUCT_VARIANT) fail("server variant differs from matrix request");
+            if (artifact.buildPlanSha256 !== process.env.MARKS_EXPECT_BUILD_PLAN_SHA256) fail("server digest differs from matrix request");
+            const { isDeepStrictEqual } = require("node:util");
+            if (!isDeepStrictEqual(artifact.buildPlan, expectedPlan)) fail("server plan differs from resolver plan");
+            if (!isDeepStrictEqual(artifact.features, expectedPlan.features)) fail("server feature map differs from resolver plan");
+            if (!isDeepStrictEqual(artifact.serverFeatures, expectedPlan.server.cargoFeatures)) fail("server Cargo features differ from resolver plan");
+            if (artifact.staticBuildPlanVerified !== true) fail("server did not verify the static product plan");
+            if (process.env.MARKS_VARIANT_DEPLOYABLE === "true" && artifact.releaseReady !== true) fail("shipping server is not release-ready");
+          '
+
+          MARKS_URL=http://127.0.0.1:3319 npm run smoke:playwright
+
+      - name: Record product variant evidence
+        if: success()
+        shell: bash
+        run: |
+          {
+            echo '### Product variant boundary'
+            echo
+            echo "- Revision: \`$GITHUB_SHA\`"
+            echo "- Variant: \`$MARKS_PRODUCT_VARIANT\`"
+            echo "- Browser: \`${{ matrix.browser }}\`"
+            echo "- Build plan SHA-256: \`$MARKS_BUILD_PLAN_SHA256\`"
+            echo "- Deployable: \`$MARKS_VARIANT_DEPLOYABLE\`"
+            echo "- Server Cargo features: \`${MARKS_SERVER_CARGO_FEATURES:-none}\`"
+            echo "- Client output: \`$MARKS_CLIENT_DIST\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload variant failure evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: variant-${{ matrix.variant }}-${{ matrix.browser }}-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            artifacts/
+            ${{ runner.temp }}/marks-variant-*
+
   gate:
     name: CI gate
     if: always()
-    needs: [impact, test, service-collab]
+    needs: [impact, test, service-collab, product-variants]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -412,8 +722,10 @@ jobs:
           IMPACT_RESULT: ${{ needs.impact.result }}
           TEST_RESULT: ${{ needs.test.result }}
           SERVICE_RESULT: ${{ needs.service-collab.result }}
+          VARIANT_RESULT: ${{ needs.product-variants.result }}
           RUN_AGGREGATE: ${{ needs.impact.outputs.run_aggregate }}
           RUN_SERVICE: ${{ needs.impact.outputs.run_service }}
+          RUN_VARIANTS: ${{ needs.impact.outputs.run_aggregate }}
           PROFILE: ${{ needs.impact.outputs.profile }}
         run: |
           set -euo pipefail
@@ -440,6 +752,17 @@ jobs:
           else
             [[ "$SERVICE_RESULT" == skipped ]] || {
               echo "unclassified service job result: $SERVICE_RESULT" >&2
+              exit 1
+            }
+          fi
+          if [[ "$RUN_VARIANTS" == true ]]; then
+            [[ "$VARIANT_RESULT" == success ]] || {
+              echo "product variant boundaries did not succeed: $VARIANT_RESULT" >&2
+              exit 1
+            }
+          else
+            [[ "$VARIANT_RESULT" == skipped ]] || {
+              echo "unclassified product variant job result: $VARIANT_RESULT" >&2
               exit 1
             }
           fi

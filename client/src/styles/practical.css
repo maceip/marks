@@ -196,7 +196,6 @@
 .exposure-map i { width: 8px; height: 8px; border-radius: 50%; }
 .exposure-local { background: var(--color-feedback-success); }
 .exposure-explicit { background: var(--color-feedback-warning); }
-.exposure-agent { background: var(--color-action); }
 
 .avatar { display: grid; width: 30px; height: 30px; place-items: center; flex: none; border-radius: 50%; background: color-mix(in srgb, var(--color-action) 16%, var(--color-bg-surface)); color: var(--color-action); font-size: 11px; font-weight: 760; }
 .technical-receipt { display: grid; margin: 14px 0 0; border-top: 1px solid var(--color-border-default); }
@@ -260,17 +259,6 @@
   .structure-tree { max-height: 180px; }
   .ledger-compose { grid-template-columns: 86px 1fr; }
   .ledger-compose button { grid-column: 1 / -1; }
-}
-
-@media (min-width: 1120px) {
-  .practical-open .agent-pill {
-    right: calc(min(500px, 42vw) + 30px);
-    width: min(620px, calc(100vw - min(500px, 42vw) - 64px));
-    transition: right var(--motion-practical-enter) ease, width var(--motion-practical-enter) ease;
-  }
-  .practical-open .agent-pill.inspector-linked {
-    width: min(390px, calc(100vw - min(500px, 42vw) - 64px));
-  }
 }
 
 .practical-inspector[data-shell="fold-book"] {

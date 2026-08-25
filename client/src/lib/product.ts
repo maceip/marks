@@ -9,29 +9,36 @@ export const UI_PERFORMANCE_RECEIPT = {
   marketingCriticalKb: '0.55',
 } as const;
 
-/**
- * The complete UI runs against a deterministic local workspace by default.
- * Set VITE_MARKS_DATA_MODE=service when the document service is ready to own
- * metadata, admission, and persistence again.
- */
-export const UI_DATA_MODE =
-  import.meta.env?.VITE_MARKS_DATA_MODE === 'service' ? ('service' as const) : ('local' as const);
+const NODE_TEST_PRODUCT_BUILD: MarksProductBuildReceipt = {
+  schema: 'marks.product-build-receipt.v1',
+  buildPlan: {
+    schema: 'marks.product-build-plan.v1',
+    productVariant: 'stable',
+    deployable: true,
+    features: {
+      'agent-chat': false,
+      'ribbon-wild': false,
+    },
+    client: { dataMode: 'local' },
+    server: { cargoFeatures: [] },
+  },
+  // Node unit tests import this module without Vite. Browser and release
+  // artifacts always receive the real resolver-owned digest at build time.
+  buildPlanSha256: 'unresolved-node-test',
+};
 
-/**
- * The ribbon possibility layer is merged but intentionally dormant until its
- * product and design review is complete. This is a build-time flag so an
- * unflagged production bundle cannot accidentally activate it at runtime.
- */
-export const RIBBON_WILD_ENABLED =
-  import.meta.env?.VITE_MARKS_RIBBON_WILD === '1';
+export const PRODUCT_BUILD = typeof __MARKS_PRODUCT_BUILD__ === 'undefined'
+  ? NODE_TEST_PRODUCT_BUILD
+  : __MARKS_PRODUCT_BUILD__;
 
-/**
- * Agent chat is merged but intentionally dormant. Keep this build-time so an
- * unflagged artifact cannot expose chat UI, planners, or browser agent bridges
- * through runtime state left behind by another release.
- */
-export const AGENT_CHAT_ENABLED =
-  import.meta.env?.VITE_MARKS_AGENT_CHAT === '1';
+export const PRODUCT_BUILD_JSON = typeof __MARKS_PRODUCT_BUILD_JSON__ === 'undefined'
+  ? JSON.stringify(PRODUCT_BUILD)
+  : __MARKS_PRODUCT_BUILD_JSON__;
+
+export const PRODUCT_VARIANT = PRODUCT_BUILD.buildPlan.productVariant;
+export const UI_DATA_MODE = PRODUCT_BUILD.buildPlan.client.dataMode;
+export const RIBBON_WILD_ENABLED = PRODUCT_BUILD.buildPlan.features['ribbon-wild'];
+export const AGENT_CHAT_ENABLED = PRODUCT_BUILD.buildPlan.features['agent-chat'];
 
 export const ENGINE = {
   id: 'esbt' as const,

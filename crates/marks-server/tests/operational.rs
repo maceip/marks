@@ -149,6 +149,37 @@ async fn liveness_polling_is_read_only_and_readiness_tracks_writer_heartbeat() {
         .unwrap();
     assert_eq!(ready["ok"], true);
     assert!(ready["databaseWriteAt"].as_u64().unwrap() > 0);
+    assert_eq!(ready["productVariant"], env!("MARKS_PRODUCT_VARIANT"));
+    assert_eq!(ready["buildPlanSha256"], env!("MARKS_BUILD_PLAN_SHA256"));
+    assert_eq!(
+        ready["features"]["agent-chat"],
+        cfg!(feature = "agent-chat")
+    );
+    assert_eq!(ready["staticBuildPlanVerified"], false);
+    server.stop().await;
+}
+
+#[cfg(not(feature = "agent-chat"))]
+#[tokio::test(flavor = "multi_thread")]
+async fn stable_server_physically_omits_agent_routes_and_capability() {
+    let server = TestServer::spawn(temp_db("operational-no-agent")).await;
+    let http = reqwest::Client::new();
+    for path in [
+        "/v1/agent/capabilities",
+        "/v1/agent/runs",
+        "/v1/agent/runs/run_missing/events",
+        "/v1/agent/runs/run_missing/tool-results",
+        "/v1/agent/runs/run_missing",
+    ] {
+        let response = http
+            .get(format!("{}{path}", server.base))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 404, "stable route {path} must be absent");
+    }
+    assert!(!server.app.artifact.features["agent-chat"]);
+    assert!(server.app.artifact.server_features.is_empty());
     server.stop().await;
 }
 
@@ -179,6 +210,15 @@ async fn artifact_identity_static_mime_and_security_headers_are_process_owned() 
         let name = module["path"].as_str().unwrap().trim_start_matches('/');
         std::fs::copy(public.join(name), static_dir.join(name)).unwrap();
     }
+    std::fs::write(
+        static_dir.join("marks-product-build.json"),
+        format!(
+            "{{\"buildPlan\":{},\"buildPlanSha256\":\"{}\",\"schema\":\"marks.product-build-receipt.v1\"}}",
+            env!("MARKS_BUILD_PLAN_JSON"),
+            env!("MARKS_BUILD_PLAN_SHA256"),
+        ),
+    )
+    .unwrap();
     std::fs::write(static_dir.join("assets/app-abc.js"), b"export default 1").unwrap();
     let pool_dir = static_dir.with_extension("asset-pool");
     std::fs::create_dir_all(&pool_dir).unwrap();
@@ -212,6 +252,13 @@ async fn artifact_identity_static_mime_and_security_headers_are_process_owned() 
     assert_eq!(identity["schema"], "marks-artifact.component");
     assert_eq!(identity["serverEngineRevision"], engine_header);
     assert_eq!(identity["staticArtifactVerified"], true);
+    assert_eq!(identity["staticBuildPlanVerified"], true);
+    assert_eq!(identity["productVariant"], env!("MARKS_PRODUCT_VARIANT"));
+    assert_eq!(identity["buildPlanSha256"], env!("MARKS_BUILD_PLAN_SHA256"));
+    assert_eq!(
+        identity["features"]["agent-chat"],
+        cfg!(feature = "agent-chat")
+    );
     assert_eq!(identity["profileCoherent"], true);
     assert_eq!(identity["engineCoherent"], true);
     assert_eq!(

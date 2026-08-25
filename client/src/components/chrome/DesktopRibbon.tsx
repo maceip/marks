@@ -18,7 +18,6 @@ import type {
   RibbonTabId,
 } from '../../commands/types.ts';
 import { clearFormatPreview, showFormatPreview, type FormatPreviewKind } from '../../editor/format-preview';
-import { AGENT_CHAT_ENABLED } from '../../lib/product';
 import type { UiActionId } from '../../lib/ui-actions';
 import type { ViewMode } from '../shell/TopBar';
 import { Glyph } from '../glyphs/Glyph';
@@ -157,7 +156,7 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
   }, [props.mode]);
 
   useEffect(() => {
-    if (!AGENT_CHAT_ENABLED) return;
+    if (!__MARKS_FEATURES__.agentChat) return;
     const active = center.runs.findLast((run) =>
       (run.source === 'agent' || run.source === 'bridge') &&
       (run.status === 'proposed' || run.status === 'awaiting-approval' || run.status === 'running'));
@@ -268,7 +267,9 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
       className={`ribbon-body${overflowOpen ? ' ribbon-overflow-open' : ''}${overflowOpen || galleryOpen ? ' ribbon-flyout-open' : ''}${keyTipLayer ? ' keytips-visible' : ''}`}
       data-command-context={center.environment.context}
       data-ribbon-task={task}
-      data-agent-active={center.raised.size > 0 ? 'true' : undefined}
+      {...(__MARKS_FEATURES__.agentChat ? {
+        'data-agent-active': center.raised.size > 0 ? 'true' : undefined,
+      } : {})}
     >
       <RibbonTabList role="tablist" onKeyDown={moveTabFocus}>
         {tabs.map((item) => (
@@ -280,11 +281,11 @@ export function DesktopRibbon(props: DesktopRibbonProps) {
             aria-controls="ribbon-command-panel"
             tabIndex={tab === item.id ? 0 : -1}
             contextual={item.contextual}
-            className={item.agentRaised ? 'agent-raised' : undefined}
+            className={__MARKS_FEATURES__.agentChat && item.agentRaised ? 'agent-raised' : undefined}
             onClick={() => selectTab(item.id)}
           >
             {item.label}
-            {item.agentRaised && <span className="agent-tab-dot" aria-label="Agent-relevant commands" />}
+            {__MARKS_FEATURES__.agentChat && item.agentRaised && <span className="agent-tab-dot" aria-label="Agent-relevant commands" />}
             {keyTipLayer === 'tabs' && <KeyTip value={tabTips.get(item.id)} sequence={keySequence} />}
           </RibbonTabButton>
         ))}
@@ -390,7 +391,10 @@ function CommandGroup({
   const galleryCommands = group.commands.filter((command) => command.presentation === 'gallery');
   const ordinary = group.commands.filter((command) => command.presentation !== 'gallery');
   return (
-    <RibbonGroup label={group.label} agentRaised={group.agentRaised}>
+    <RibbonGroup
+      label={group.label}
+      {...(__MARKS_FEATURES__.agentChat ? { agentRaised: group.agentRaised } : {})}
+    >
       {galleryCommands.length > 0 && (
         <div className="ribbon-gallery-control">
           <div className="ribbon-gallery-strip" role="listbox" aria-label={`${group.label} gallery`}>
@@ -455,7 +459,7 @@ function GalleryOption({ command, keyTip, keySequence, getView }: {
   return (
     <button
       type="button"
-      className={`style-chip ${command.id.replaceAll('.', '-')}${command.agentRaised ? ' agent-raised' : ''}`}
+      className={`style-chip ${command.id.replaceAll('.', '-')}${__MARKS_FEATURES__.agentChat && command.agentRaised ? ' agent-raised' : ''}`}
       role="option"
       data-command-id={command.id}
       disabled={!command.enabled}
@@ -484,7 +488,7 @@ function CommandControl({ command, keyTip, keySequence = '', compact = false }: 
   compact?: boolean;
 }) {
   const center = useCommandCenter();
-  const active = AGENT_CHAT_ENABLED
+  const active = __MARKS_FEATURES__.agentChat
     ? center.runs.findLast((run) => run.commandId === command.id &&
         (run.status === 'proposed' || run.status === 'awaiting-approval' || run.status === 'running'))
     : undefined;
@@ -499,8 +503,10 @@ function CommandControl({ command, keyTip, keySequence = '', compact = false }: 
       danger={command.risk === 'destructive'}
       large={!compact && command.presentation === 'large'}
       commandId={command.id}
-      agentState={active?.status}
-      agentRaised={command.agentRaised}
+      {...(__MARKS_FEATURES__.agentChat ? {
+        agentState: active?.status,
+        agentRaised: command.agentRaised,
+      } : {})}
       onContextMenu={() => center.togglePin(command.id)}
       onClick={() => void center.invoke(command.id)}
     >
@@ -546,7 +552,7 @@ export function QuickAccess({ disabled: _disabled, getView: _getView }: {
         <button
           key={command.id}
           type="button"
-          className={`icon-button${command.agentRaised ? ' agent-raised' : ''}`}
+          className={`icon-button${__MARKS_FEATURES__.agentChat && command.agentRaised ? ' agent-raised' : ''}`}
           data-command-id={command.id}
           aria-label={command.label}
           title={command.unavailableReason ?? command.description}

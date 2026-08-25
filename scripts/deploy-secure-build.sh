@@ -8,9 +8,14 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 HOST=marks-deploy@secure.build
 PUBLIC_ORIGIN=https://marks.secure.build
+TARGET_PRODUCT_VARIANT=stable
 DEPLOY_BRANCH=${MARKS_DEPLOY_BRANCH:-main}
 IDENTITY_FILE=${MARKS_DEPLOY_IDENTITY_FILE:-}
 STAGED_REVISION=""
+PRODUCT_VARIANT=""
+BUILD_PLAN_SHA256=""
+BUILD_PLAN_JSON=""
+SERVER_CARGO_FEATURES=""
 SSH=(
   ssh
   -o BatchMode=yes
@@ -31,7 +36,7 @@ usage() {
   cat <<'EOF'
 Usage:
   scripts/deploy-secure-build.sh deploy
-  scripts/deploy-secure-build.sh deploy-verified <revision>
+  scripts/deploy-secure-build.sh deploy-verified <revision> <product-variant> <build-plan-sha256>
   scripts/deploy-secure-build.sh rollback [release-id]
   scripts/deploy-secure-build.sh status
   scripts/deploy-secure-build.sh verify
@@ -44,9 +49,13 @@ Commands:
                activation.
   deploy-verified
                GitHub workflow_run path for an exact successful CI revision.
+               The successful receipt must also match the production product
+               variant and canonical build-plan digest.
                It removes only the duplicate local gate; secure.build still
                performs its locked build, verification, canary, and activation.
-  rollback     Atomically activate `previous`, or the named retained release.
+  rollback     Atomically activate `previous`, or a named retained stable v2
+               release. The host rejects `previous` if it lacks a stable v2
+               product-build receipt; legacy recovery is root-only break-glass.
                A successful rollback swaps `current` and `previous`, so the
                command can be used again to undo the rollback.
   status       Show the active/previous release and live service receipt.
@@ -65,6 +74,8 @@ Deployment intentionally has no skip-tests or dirty-tree switch. Rollback and
 status do not build and do not run the pre-deploy suite. The SSH target and
 remote command grammar are fixed rather than supplied by the environment.
 deploy-verified is rejected outside the exact GitHub workflow_run contract.
+The marks.secure.build target is fixed to the checked-in stable variant; this
+client cannot select beta or retarget the production service.
 EOF
 }
 
@@ -95,6 +106,141 @@ validate_deploy_config() {
     || die "MARKS_DEPLOY_BRANCH is not a safe branch name"
 }
 
+resolve_product_variant() {
+  local requested_variant=$1
+  local requested_data_mode=${2:-service}
+  local require_deployable=${3:-true}
+  [[ "$require_deployable" == true || "$require_deployable" == false ]] \
+    || die "internal product variant deployability policy is invalid"
+  local receipt fields
+  receipt=$(
+    cd "$ROOT"
+    node --experimental-strip-types scripts/product-variant.ts resolve \
+      --variant "$requested_variant" \
+      --data-mode "$requested_data_mode" \
+      --format json
+  ) || die "failed to resolve product variant $requested_variant"
+  fields=$(PRODUCT_BUILD_RECEIPT="$receipt" \
+    REQUESTED_DATA_MODE="$requested_data_mode" \
+    REQUIRE_DEPLOYABLE="$require_deployable" node -e '
+    const { createHash } = require("node:crypto");
+    const fail = (message) => { console.error(`variant: ${message}`); process.exit(1); };
+    let receipt;
+    try { receipt = JSON.parse(process.env.PRODUCT_BUILD_RECEIPT); } catch { fail("receipt is not JSON"); }
+    const plan = receipt.buildPlan;
+    if (receipt.schema !== "marks.product-build-receipt.v1" || !plan) fail("unsupported receipt");
+    if (plan.schema !== "marks.product-build-plan.v1") fail("unsupported plan");
+    if (typeof plan.deployable !== "boolean" || plan.client?.dataMode !== process.env.REQUESTED_DATA_MODE) {
+      fail("plan is not the requested data mode or lacks a deployability decision");
+    }
+    if (process.env.REQUIRE_DEPLOYABLE === "true" && plan.deployable !== true) {
+      fail("plan is not deployable");
+    }
+    if (!/^[a-z][a-z0-9-]{0,63}$/.test(plan.productVariant)) fail("unsafe product variant");
+    if (!/^[0-9a-f]{64}$/.test(receipt.buildPlanSha256)) fail("invalid plan digest");
+    const cargo = plan.server?.cargoFeatures;
+    if (!Array.isArray(cargo) || cargo.some((name) => !/^[a-z][a-z0-9_-]{0,63}$/.test(name))) {
+      fail("invalid server Cargo features");
+    }
+    if (JSON.stringify(cargo) !== JSON.stringify([...new Set(cargo)].sort())) {
+      fail("server Cargo features must be sorted and unique");
+    }
+    const normalize = (value) => Array.isArray(value)
+      ? value.map(normalize)
+      : value && typeof value === "object"
+        ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, normalize(value[key])]))
+        : value;
+    const canonical = JSON.stringify(normalize(plan));
+    if (createHash("sha256").update(canonical).digest("hex") !== receipt.buildPlanSha256) {
+      fail("plan digest does not match canonical JSON");
+    }
+    if (canonical.includes("\n") || canonical.includes("\t")) fail("canonical plan is not line-safe");
+    process.stdout.write(`${plan.productVariant}\t${receipt.buildPlanSha256}\t${canonical}\t${cargo.join(",")}`);
+  ') || die "product variant receipt is invalid"
+  IFS=$'\t' read -r PRODUCT_VARIANT BUILD_PLAN_SHA256 BUILD_PLAN_JSON SERVER_CARGO_FEATURES <<< "$fields"
+  [[ "$PRODUCT_VARIANT" == "$requested_variant" ]] \
+    || die "resolver returned $PRODUCT_VARIANT for requested variant $requested_variant"
+}
+
+list_product_variants() {
+  (
+    cd "$ROOT"
+    node --experimental-strip-types scripts/product-variant.ts list
+  ) | node -e '
+    const { readFileSync } = require("node:fs");
+    const variants = JSON.parse(readFileSync(0, "utf8"));
+    if (!Array.isArray(variants) || variants.length === 0) throw new Error("product variant catalog is empty");
+    const names = new Set();
+    for (const variant of variants) {
+      if (!variant || typeof variant !== "object" ||
+          !/^[a-z][a-z0-9-]{0,63}$/.test(variant.name) ||
+          typeof variant.deployable !== "boolean" || names.has(variant.name)) {
+        throw new Error("product variant catalog contains an invalid entry");
+      }
+      names.add(variant.name);
+    }
+    // Prefer a shipping plan as the representative when several variants
+    // compile the same server Cargo feature set.
+    variants.sort((left, right) =>
+      Number(right.deployable) - Number(left.deployable) ||
+      (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+    process.stdout.write(`${variants.map(({ name }) => name).join("\n")}\n`);
+  '
+}
+
+run_product_variant_server_gate() {
+  local -a catalog_variants=()
+  local candidate
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" ]] && catalog_variants+=("$candidate")
+  done < <(list_product_variants)
+  [[ ${#catalog_variants[@]} -gt 0 ]] || die "product variant catalog is empty"
+
+  local -a tested_cargo_feature_sets=()
+  local cargo_feature_set already_tested existing
+  for candidate in "${catalog_variants[@]}"; do
+    # Validation-only variants are valid test plans but remain forbidden at
+    # every release/deployment boundary.
+    resolve_product_variant "$candidate" local false
+    cargo_feature_set=$SERVER_CARGO_FEATURES
+    already_tested=false
+    # Bash 3.2 with nounset rejects expansion of an empty array, so guard the
+    # first iteration explicitly while retaining an ordinary indexed array.
+    if [[ ${#tested_cargo_feature_sets[@]} -gt 0 ]]; then
+      for existing in "${tested_cargo_feature_sets[@]}"; do
+        if [[ "$existing" == "$cargo_feature_set" ]]; then
+          already_tested=true
+          break
+        fi
+      done
+    fi
+    if [[ "$already_tested" == true ]]; then
+      echo "==> server Cargo feature set already covered; skipping $candidate"
+      continue
+    fi
+    tested_cargo_feature_sets+=("$cargo_feature_set")
+
+    echo "==> server tests and lint for $candidate (${cargo_feature_set:-no Cargo features})"
+    local -a catalog_cargo_args
+    catalog_cargo_args=(--no-default-features)
+    if [[ -n "$cargo_feature_set" ]]; then
+      catalog_cargo_args+=(--features "$cargo_feature_set")
+    fi
+    (
+      cd "$ROOT"
+      MARKS_PRODUCT_VARIANT="$PRODUCT_VARIANT" \
+      MARKS_BUILD_PLAN_SHA256="$BUILD_PLAN_SHA256" \
+      MARKS_BUILD_PLAN_JSON="$BUILD_PLAN_JSON" \
+        cargo_pinned test -p marks-server --locked "${catalog_cargo_args[@]}"
+      MARKS_PRODUCT_VARIANT="$PRODUCT_VARIANT" \
+      MARKS_BUILD_PLAN_SHA256="$BUILD_PLAN_SHA256" \
+      MARKS_BUILD_PLAN_JSON="$BUILD_PLAN_JSON" \
+        cargo_pinned clippy -p marks-server --all-targets --locked \
+          "${catalog_cargo_args[@]}" -- -D warnings
+    )
+  done
+}
+
 restricted_command() {
   local command=$1
   shift
@@ -111,6 +257,12 @@ restricted_command() {
     request+=" $argument"
   done
   "${SSH[@]}" "$HOST" "$request"
+}
+
+validate_release_identifier() {
+  local identifier=$1
+  [[ "$identifier" =~ ^[0-9a-f]{40}\.stable\.[0-9a-f]{64}$ ]] \
+    || die "release id is not one retained stable v2 release identity"
 }
 
 # The probe receipt carries the SHA-256 of every installed boundary program
@@ -130,12 +282,54 @@ check_remote_protocol() {
     const fail = (message) => { console.error(`probe: ${message}`); process.exit(1); };
     let probe;
     try { probe = JSON.parse(process.env.PROBE_RECEIPT); } catch { fail("receipt is not JSON"); }
-    if (probe.protocol !== "marks-deploy.v1") fail(`unsupported protocol: ${probe.protocol}`);
+    if (probe.protocol !== "marks-deploy.v2") fail(`unsupported protocol: ${probe.protocol}`);
+    if (probe.target?.origin !== "https://marks.secure.build" || probe.target?.productVariant !== "stable") {
+      fail("installed helper does not own the stable marks.secure.build target");
+    }
+    const build = probe.buildFilesystem;
+    if (
+      build?.root !== "/var/lib/marks-deploy/build" ||
+      build?.minimumBytes !== 20 * 1024 ** 3 ||
+      build?.maximumBytes !== 24 * 1024 ** 3 ||
+      !Number.isSafeInteger(build?.capacityBytes) ||
+      build.capacityBytes < build.minimumBytes ||
+      build.capacityBytes > build.maximumBytes
+    ) {
+      fail("installed helper did not prove the bounded build filesystem");
+    }
+    if (
+      probe.identities?.ingress !== "marks-deploy" ||
+      probe.identities?.build !== "marks-build" ||
+      probe.identities?.service !== "devuser" ||
+      !Number.isSafeInteger(probe.identities?.buildUid) ||
+      !Number.isSafeInteger(probe.identities?.buildGid) ||
+      probe.identities.buildUid <= 0 ||
+      probe.identities.buildGid <= 0
+    ) {
+      fail("installed helper did not prove the dedicated build identity");
+    }
+    if (
+      probe.fetchEgress?.schema !== "marks.fetch-egress.v1" ||
+      probe.fetchEgress?.network !== "marks-build-fetch" ||
+      probe.fetchEgress?.subnet !== "172.30.0.0/24"
+    ) {
+      fail("installed helper did not prove the filtered dependency-fetch network");
+    }
+    if (
+      probe.incomingAggregateLimitBytes !== 2 * 1024 ** 3 ||
+      probe.incomingTreeLimit !== 4 ||
+      probe.uploadLock !== "/var/lib/marks-deploy/incoming/.marks-upload.lock" ||
+      probe.commands?.timeout !== true ||
+      probe.commands?.prlimit !== true
+    ) {
+      fail("installed helper did not prove the bounded upload namespace");
+    }
     const digest = (relative) =>
       createHash("sha256").update(readFileSync(join(process.env.MARKS_ROOT_DIR, relative))).digest("hex");
     const sources = {
       dispatcher: "deploy/host/marks-deploy-ssh",
       uploader: "deploy/host/marks-upload",
+      sqliteWorker: "deploy/host/marks-sqlite-worker",
       releaseRoot: "deploy/host/marks-release-root",
       serviceTemplate: "deploy/host/marks.service.template",
     };
@@ -191,12 +385,15 @@ cargo_pinned() {
 
 run_local_gate() {
   local revision=$1
+  local variant=$2
+  local plan_digest=$3
   require_command git
   require_command ssh
   require_command npm
   require_command node
   require_command rustup
   require_command curl
+  require_command python3
   node -e '
     const [major, minor] = process.versions.node.split(".").map(Number);
     if (major < 22 || (major === 22 && minor < 12)) process.exit(1);
@@ -209,6 +406,12 @@ run_local_gate() {
   (cd "$ROOT" && cargo_pinned fmt --all --check)
   (cd "$ROOT" && cargo_pinned test --workspace --locked)
   (cd "$ROOT" && cargo_pinned clippy --workspace --all-targets --locked -- -D warnings)
+
+  echo "==> catalog-derived server feature tests and lint"
+  run_product_variant_server_gate
+  resolve_product_variant "$variant" service
+  [[ "$BUILD_PLAN_SHA256" == "$plan_digest" ]] \
+    || die "target product build plan changed while the deployment gate was running"
 
   echo "==> TypeScript and checked-in ESBT artifact verification"
   (cd "$ROOT" && npm run typecheck)
@@ -227,14 +430,31 @@ run_local_gate() {
   (cd "$ROOT" && npm run check:motion)
   (cd "$ROOT" && npm run test:design-system-contract)
   (cd "$ROOT" && npm run test:harness)
+  (cd "$ROOT" && python3 -m py_compile \
+    deploy/host/marks-upload \
+    deploy/host/marks-sqlite-worker \
+    deploy/host/marks-release-root)
 
   echo "==> production service-mode UI and release-receipt build"
-  (cd "$ROOT" && VITE_MARKS_DATA_MODE=service npm run build)
+  (
+    cd "$ROOT"
+    npm run build:variant -- \
+      --variant "$variant" \
+      --data-mode service \
+      --out-dir "$ROOT/client/dist" \
+      --require-deployable
+  )
   (cd "$ROOT" && npm run check:ui-budgets)
   (
     cd "$ROOT"
+    cargo_feature_args=(--no-default-features)
+    if [[ -n "$SERVER_CARGO_FEATURES" ]]; then
+      cargo_feature_args+=(--features "$SERVER_CARGO_FEATURES")
+    fi
     MARKS_BUILD_REVISION="$revision" MARKS_SOURCE_DIRTY=0 \
-      cargo_pinned build -p marks-server --locked
+    MARKS_PRODUCT_VARIANT="$variant" MARKS_BUILD_PLAN_SHA256="$plan_digest" \
+    MARKS_BUILD_PLAN_JSON="$BUILD_PLAN_JSON" \
+      cargo_pinned build -p marks-server --locked "${cargo_feature_args[@]}"
   )
 
   echo "==> live Chromium workflow plus native multi-peer convergence"
@@ -277,34 +497,50 @@ deploy() {
   revision=$(git -C "$ROOT" rev-parse HEAD)
   [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || die "HEAD is not one full Git revision"
 
-  check_remote_protocol
-  run_local_gate "$revision"
+  resolve_product_variant "$TARGET_PRODUCT_VARIANT"
+  [[ "$PRODUCT_VARIANT" == "$TARGET_PRODUCT_VARIANT" ]] \
+    || die "production target accepts only $TARGET_PRODUCT_VARIANT"
 
-  ship_revision "$revision"
+  check_remote_protocol
+  run_local_gate "$revision" "$PRODUCT_VARIANT" "$BUILD_PLAN_SHA256"
+
+  ship_revision "$revision" "$PRODUCT_VARIANT" "$BUILD_PLAN_SHA256"
 }
 
 ship_revision() {
   local revision=$1
+  local variant=$2
+  local plan_digest=$3
 
   echo "==> uploading exact commit $revision"
   STAGED_REVISION=$revision
   git -C "$ROOT" archive --format=tar "$revision" \
     | restricted_command upload "$revision"
 
-  echo "==> building, canarying, and activating $revision on $HOST"
-  restricted_command deploy "$revision"
+  echo "==> building, canarying, and activating $revision/$variant/$plan_digest on $HOST"
+  restricted_command deploy "$revision" "$variant" "$plan_digest"
 }
 
 deploy_verified() {
   local expected_revision=$1
+  local expected_variant=$2
+  local expected_plan_digest=$3
   [[ "$expected_revision" =~ ^[0-9a-f]{40}$ ]] \
     || die "deploy-verified requires one full lowercase Git revision"
+  [[ "$expected_variant" =~ ^[a-z][a-z0-9-]{0,63}$ ]] \
+    || die "deploy-verified requires one safe product variant"
+  [[ "$expected_plan_digest" =~ ^[0-9a-f]{64}$ ]] \
+    || die "deploy-verified requires one full lowercase build plan digest"
   [[ "${GITHUB_ACTIONS:-}" == true ]] \
     || die "deploy-verified is available only in GitHub Actions"
   [[ "${GITHUB_EVENT_NAME:-}" == workflow_run ]] \
     || die "deploy-verified requires a workflow_run event"
   [[ "${MARKS_CI_VERIFIED_SHA:-}" == "$expected_revision" ]] \
     || die "deploy-verified revision does not match the successful CI receipt"
+  [[ "${MARKS_CI_VERIFIED_VARIANT:-}" == "$expected_variant" ]] \
+    || die "deploy-verified product variant does not match the successful CI receipt"
+  [[ "${MARKS_CI_VERIFIED_PLAN_SHA256:-}" == "$expected_plan_digest" ]] \
+    || die "deploy-verified build plan digest does not match the successful CI receipt"
   [[ "${MARKS_CI_RUN_ID:-}" =~ ^[0-9]+$ ]] \
     || die "deploy-verified requires the successful CI run id"
 
@@ -317,9 +553,15 @@ deploy_verified() {
   [[ "$revision" == "$expected_revision" ]] \
     || die "checked-out HEAD $revision does not match verified revision $expected_revision"
 
+  resolve_product_variant "$TARGET_PRODUCT_VARIANT"
+  [[ "$expected_variant" == "$TARGET_PRODUCT_VARIANT" \
+    && "$PRODUCT_VARIANT" == "$expected_variant" \
+    && "$BUILD_PLAN_SHA256" == "$expected_plan_digest" ]] \
+    || die "verified product build identity is not the current stable plan"
+
   check_remote_protocol
-  echo "==> accepting successful CI run $MARKS_CI_RUN_ID for exact revision $revision"
-  ship_revision "$revision"
+  echo "==> accepting successful CI run $MARKS_CI_RUN_ID for exact build $revision/$PRODUCT_VARIANT/$BUILD_PLAN_SHA256"
+  ship_revision "$revision" "$PRODUCT_VARIANT" "$BUILD_PLAN_SHA256"
 }
 
 # status prints a receipt and succeeds even when production is unhealthy.
@@ -331,11 +573,16 @@ verify_production() {
   require_command node
 
   echo "==> restricted status receipt"
-  local status_receipt current
+  local status_receipt current current_revision current_variant current_plan_digest
   status_receipt=$(restricted_command status)
   printf '%s\n' "$status_receipt"
   current=$(awk '$1 == "current:" { print $2 }' <<< "$status_receipt")
-  [[ "$current" =~ ^[0-9a-f]{40}$ || "$current" == legacy-* ]] \
+  current_revision=$(awk '$1 == "revision:" { print $2 }' <<< "$status_receipt")
+  current_variant=$(awk '$1 == "product-variant:" { print $2 }' <<< "$status_receipt")
+  current_plan_digest=$(awk '$1 == "build-plan-sha256:" { print $2 }' <<< "$status_receipt")
+  [[ "$current" =~ ^[0-9a-f]{40}\.[a-z][a-z0-9-]{0,63}\.[0-9a-f]{64}$ \
+    || "$current" =~ ^[0-9a-f]{40}$ \
+    || "$current" == legacy-* ]] \
     || die "restricted status did not report the current release"
 
   echo "==> public health, readiness, and artifact receipt on $PUBLIC_ORIGIN"
@@ -347,7 +594,9 @@ verify_production() {
   artifact=$(curl -fsS --max-time 15 "$PUBLIC_ORIGIN/v1/artifact") \
     || die "public artifact receipt failed"
 
-  CURRENT_RELEASE="$current" HEALTH="$health" READY="$ready" ARTIFACT="$artifact" node -e '
+  CURRENT_RELEASE="$current" CURRENT_REVISION="$current_revision" \
+  CURRENT_VARIANT="$current_variant" CURRENT_PLAN_DIGEST="$current_plan_digest" \
+  HEALTH="$health" READY="$ready" ARTIFACT="$artifact" node -e '
     const fail = (message) => { console.error(`verify: ${message}`); process.exit(1); };
     const parse = (label, text) => {
       try { return JSON.parse(text); } catch { fail(`${label} is not JSON`); }
@@ -369,12 +618,39 @@ verify_production() {
       fail("the live release was built from a dirty tree");
     }
     const current = process.env.CURRENT_RELEASE;
-    if (!current.startsWith("legacy-") && artifact.buildRevision !== current) {
-      fail(`public build revision ${artifact.buildRevision} is not the active release ${current}`);
+    if (!current.startsWith("legacy-")) {
+      const revision = process.env.CURRENT_REVISION || current;
+      if (artifact.buildRevision !== revision) {
+        fail(`public build revision ${artifact.buildRevision} is not active revision ${revision}`);
+      }
+      if (current.includes(".")) {
+        if (process.env.CURRENT_VARIANT !== "stable" || artifact.productVariant !== "stable") {
+          fail("production is not the stable product variant");
+        }
+        if (artifact.buildPlanSha256 !== process.env.CURRENT_PLAN_DIGEST) {
+          fail("public build plan digest is not the active release plan");
+        }
+        if (ready.productVariant !== process.env.CURRENT_VARIANT) {
+          fail("public readiness variant is not the active release variant");
+        }
+        if (ready.buildPlanSha256 !== process.env.CURRENT_PLAN_DIGEST) {
+          fail("public readiness build plan digest is not the active release plan");
+        }
+        if (ready.productVariant !== artifact.productVariant
+            || ready.buildPlanSha256 !== artifact.buildPlanSha256) {
+          fail("public readiness and artifact receipts disagree");
+        }
+        if (ready.staticBuildPlanVerified !== true || ready.releaseReady !== true) {
+          fail("public readiness has not verified the release build plan");
+        }
+        if (artifact.staticBuildPlanVerified !== true) {
+          fail("public static build plan is not verified");
+        }
+      }
     }
   ' || die "public verification failed"
 
-  echo "==> production verified: release $current is live, coherent, and ready"
+  echo "==> production verified: release $current is live, stable, coherent, and ready"
 }
 
 main() {
@@ -385,12 +661,14 @@ main() {
       deploy
       ;;
     deploy-verified)
-      [[ $# -eq 2 ]] || die "deploy-verified requires one revision"
-      deploy_verified "$2"
+      [[ $# -eq 4 ]] \
+        || die "deploy-verified requires revision, product variant, and build plan digest"
+      deploy_verified "$2" "$3" "$4"
       ;;
     rollback)
       [[ $# -le 2 ]] || die "rollback accepts at most one release id"
       if [[ $# -eq 2 ]]; then
+        validate_release_identifier "$2"
         restricted_command rollback "$2"
       else
         restricted_command rollback

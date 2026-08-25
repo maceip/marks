@@ -178,14 +178,14 @@ export interface ProjectedCommandGroup {
   priority: number;
   commands: ProjectedCommand[];
   contextual: boolean;
-  agentRaised: boolean;
+  agentRaised?: boolean;
 }
 
 export interface ProjectedRibbonTab {
   id: RibbonTabId;
   label: string;
   contextual: boolean;
-  agentRaised: boolean;
+  agentRaised?: boolean;
   groups: ProjectedCommandGroup[];
 }
 

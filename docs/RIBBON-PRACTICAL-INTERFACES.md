@@ -7,19 +7,22 @@ every exception introduced by practical capabilities and the reason it exists.
 
 ## Agent-chat activation contract
 
-Agent chat is merged but off by default. It uses an independent build-time gate
-that follows the ribbon-wild convention:
+Agent chat is merged but excluded from the default `stable` product variant.
+Its build-time state comes only from the checked-in product-variant catalog:
 
-- Development: `VITE_MARKS_AGENT_CHAT=1 npm run dev`
-- Production build: `VITE_MARKS_AGENT_CHAT=1 npm run build`
-- Any missing value, including `0`, leaves agent chat disabled.
+- Stable development: `npm run dev`
+- Beta development: `MARKS_PRODUCT_VARIANT=beta npm run dev`
+- Agent-only structural validation:
+  `MARKS_PRODUCT_VARIANT=agent-chat-validation npm run build`
+- `VITE_MARKS_AGENT_CHAT` is rejected rather than treated as an override.
 - The resolved state is inspectable as `data-marks-agent-chat="enabled|disabled"`
   on the document root.
 
 In a disabled build, the product and design-system agent chat UIs do not render;
 the local and hosted planners do not load; no hosted capability probe or run
 recovery starts; agent tool projection is empty; and neither `window.marksRibbon`
-nor the experimental WebMCP page tools are registered. The lazy `AgentPill`,
+nor the experimental WebMCP page tools are registered. The global
+`marks:command-state` integration event is also compiled out. The lazy `AgentPill`,
 `AgentChatPill`, planner, gateway, run-store, and agent-style modules are omitted
 from the built artifact rather than merely left as unreachable chunks. Human
 ribbon, palette, shortcut, and KeyTip commands remain available.
@@ -29,10 +32,11 @@ the build if any gated source module is emitted, and enabled features fail if a
 required lazy entry is missing. This assertion uses source module IDs rather
 than hashed filenames, so chunk renaming or merging cannot bypass it.
 
-This browser gate and the server provider policy are independent. Hosted planning
-requires both `VITE_MARKS_AGENT_CHAT=1` in the client artifact and an explicitly
-enabled `MARKS_AGENT_PROVIDER`; enabling either one alone cannot activate the
-hosted path. The checked-in build and deployment configuration enables neither.
+This compiled product feature and the server provider policy are independent.
+Hosted planning requires both an agent-chat product variant in the matched
+browser/server build plan and an explicitly enabled `MARKS_AGENT_PROVIDER`;
+enabling either one alone cannot activate the hosted path. The `stable` build
+and checked-in deployment configuration enable neither.
 
 ## In-page agent gateway
 
@@ -104,7 +108,7 @@ The new variables are additive and all retain a safe disabled default:
 
 | Variable | Default | Boundary |
 | --- | --- | --- |
-| `VITE_MARKS_AGENT_CHAT` | unset | Client build gate; only exact value `1` exposes agent chat and browser agent command entry points. |
+| `MARKS_PRODUCT_VARIANT` | `stable` | Selects a complete checked-in browser/server feature assignment; agent chat exists only in variants that explicitly include it. |
 | `MARKS_AGENT_PROVIDER` | `disabled` | `disabled` or `openai`; server-owned. |
 | `MARKS_OPENAI_API_KEY_FILE` | unset | Required for OpenAI; regular file, at most 16 KiB, mode `0600` or stricter. |
 | `MARKS_OPENAI_MODEL` | unset | Required for OpenAI; validated server-owned model identifier. |
@@ -116,10 +120,14 @@ The new variables are additive and all retain a safe disabled default:
 | `MARKS_AGENT_TOOL_WAIT_MS` | `120000` | Maximum wait for a browser tool receipt. |
 | `MARKS_AGENT_MAX_OUTPUT_TOKENS` | `4096` | Provider output-token ceiling. |
 
+The legacy `VITE_MARKS_AGENT_CHAT` input is rejected. Product variants, build
+plan receipts, and target allowlists are specified in
+[`PRODUCT-VARIANTS.md`](PRODUCT-VARIANTS.md).
+
 The checked-in systemd unit does not enable a paid provider. Operators opt in
 with a service override after installing the key outside the repository, then
-restart the service. This keeps deployment of unrelated ribbon features from
-silently activating external transmission or spend.
+restart the service. This keeps compilation of the agent feature from silently
+activating external transmission or spend.
 
 ## Interfaces not changed
 

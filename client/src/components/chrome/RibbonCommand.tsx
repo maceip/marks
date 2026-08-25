@@ -21,35 +21,36 @@ export interface RibbonCommandProps {
   children?: ReactNode;
 }
 
-export function RibbonCommand({
-  glyph,
-  label,
-  title,
-  pressed,
-  disabled,
-  danger,
-  large,
-  commandId,
-  agentState,
-  agentRaised,
-  loading,
-  className,
-  onClick,
-  onContextMenu,
-  children,
-}: RibbonCommandProps) {
+export function RibbonCommand(props: RibbonCommandProps) {
+  const {
+    glyph,
+    label,
+    title,
+    pressed,
+    disabled,
+    danger,
+    large,
+    commandId,
+    loading,
+    className,
+    onClick,
+    onContextMenu,
+    children,
+  } = props;
+  const agentState = __MARKS_FEATURES__.agentChat ? props.agentState : undefined;
+  const agentRaised = __MARKS_FEATURES__.agentChat ? props.agentRaised : undefined;
   return (
     <button
       type="button"
-      className={`ribbon-command${pressed ? ' active' : ''}${danger ? ' danger-command' : ''}${large ? ' ribbon-command-large' : ''}${agentRaised ? ' agent-raised' : ''}${agentState ? ` agent-${agentState}` : ''}${className ? ` ${className}` : ''}`}
+      className={`ribbon-command${pressed ? ' active' : ''}${danger ? ' danger-command' : ''}${large ? ' ribbon-command-large' : ''}${__MARKS_FEATURES__.agentChat && agentRaised ? ' agent-raised' : ''}${__MARKS_FEATURES__.agentChat && agentState ? ` agent-${agentState}` : ''}${className ? ` ${className}` : ''}`}
       data-command-id={commandId}
-      data-agent-state={agentState}
+      {...(__MARKS_FEATURES__.agentChat ? { 'data-agent-state': agentState } : {})}
       data-loading={loading || undefined}
       data-danger={danger || undefined}
       title={title ?? label}
       aria-label={label}
       aria-pressed={pressed}
-      aria-busy={loading || agentState === 'running' || undefined}
+      aria-busy={loading || (__MARKS_FEATURES__.agentChat && agentState === 'running') || undefined}
       disabled={disabled || loading}
       onMouseDown={(event) => event.preventDefault()}
       onContextMenu={(event) => {
@@ -100,9 +101,11 @@ export function RibbonGallery({ children, className = '', ...props }: HTMLAttrib
   return <div className={`ribbon-gallery${className ? ` ${className}` : ''}`} {...props}>{children}</div>;
 }
 
-export function RibbonGroup({ label, children, onLaunch, launchLabel, agentRaised }: RibbonGroupProps) {
+export function RibbonGroup(props: RibbonGroupProps) {
+  const { label, children, onLaunch, launchLabel } = props;
+  const agentRaised = __MARKS_FEATURES__.agentChat ? props.agentRaised : undefined;
   return (
-    <div className={`ribbon-command-group${agentRaised ? ' agent-raised' : ''}`}>
+    <div className={`ribbon-command-group${__MARKS_FEATURES__.agentChat && agentRaised ? ' agent-raised' : ''}`}>
       <div className="ribbon-command-row">{children}</div>
       <span className="ribbon-group-label">
         {label}

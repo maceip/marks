@@ -13,7 +13,12 @@ read -r -a argv <<< "$original"
 command=${argv[0]-}
 argc=${#argv[@]}
 sha='^[0-9a-f]{40}$'
-release='^[A-Za-z0-9._-]+$'
+variant='^[a-z][a-z0-9-]{0,63}$'
+digest='^[0-9a-f]{64}$'
+# Normal remote rollback is receipt-bound to this host's stable v2 artifacts.
+# Unknown-plan legacy/v1 recovery exists only as a local-root break-glass
+# operation in marks-release-root and is intentionally absent from this grammar.
+release='^[0-9a-f]{40}\.stable\.[0-9a-f]{64}$'
 
 case "$command" in
   probe|status|releases)
@@ -22,11 +27,21 @@ case "$command" in
     ;;
   upload|cleanup)
     [[ $argc -eq 2 && ${argv[1]} =~ $sha ]] || { echo "marks-deploy: invalid revision" >&2; exit 2; }
-    exec /usr/local/libexec/marks-upload "$command" "${argv[1]}"
+    exec /usr/bin/timeout --signal=TERM --kill-after=15s 2700s \
+      /usr/bin/prlimit \
+        --as=1610612736 \
+        --cpu=1200 \
+        --fsize=1073741824 \
+        --nofile=128 \
+        --nproc=64 \
+        --core=0 \
+        -- /usr/local/libexec/marks-upload "$command" "${argv[1]}"
     ;;
   deploy)
-    [[ $argc -eq 2 && ${argv[1]} =~ $sha ]] || { echo "marks-deploy: invalid revision" >&2; exit 2; }
-    exec /usr/bin/sudo -n /usr/local/sbin/marks-release-root deploy "${argv[1]}"
+    [[ $argc -eq 4 && ${argv[1]} =~ $sha && ${argv[2]} =~ $variant && ${argv[3]} =~ $digest ]] \
+      || { echo "marks-deploy: invalid deployment identity" >&2; exit 2; }
+    exec /usr/bin/sudo -n /usr/local/sbin/marks-release-root \
+      deploy "${argv[1]}" "${argv[2]}" "${argv[3]}"
     ;;
   rollback)
     if [[ $argc -eq 1 ]]; then

@@ -6,17 +6,23 @@
  * create a doc, preview, select-all, context menu, voice, theme, and offline.
  */
 
-import { parseBooleanFlag } from '../env.mjs';
-
-const EXPECT_AGENT_CHAT = parseBooleanFlag(process.env.MARKS_EXPECT_AGENT_CHAT);
-const EXPECT_RIBBON_WILD = parseBooleanFlag(process.env.MARKS_EXPECT_RIBBON_WILD);
-
 const FIXTURE = `# Surface harness
 
 Hello from the portable suite.
 
 Currently this note targets API v3.
 `;
+
+const EXPECT_PRODUCT_VARIANT = process.env.MARKS_EXPECT_PRODUCT_VARIANT ?? null;
+const EXPECT_BUILD_PLAN_SHA256 = process.env.MARKS_EXPECT_BUILD_PLAN_SHA256 ?? null;
+if ((EXPECT_PRODUCT_VARIANT === null) !== (EXPECT_BUILD_PLAN_SHA256 === null)) {
+  throw new Error(
+    'MARKS_EXPECT_PRODUCT_VARIANT and MARKS_EXPECT_BUILD_PLAN_SHA256 must be supplied together',
+  );
+}
+if (EXPECT_BUILD_PLAN_SHA256 !== null && !/^[a-f0-9]{64}$/u.test(EXPECT_BUILD_PLAN_SHA256)) {
+  throw new Error('MARKS_EXPECT_BUILD_PLAN_SHA256 must be a lowercase SHA-256 digest');
+}
 
 async function proposeFromInPageAgent(session, commandId) {
   return session.evaluate((id) => {
@@ -122,6 +128,69 @@ export async function runSurface(session, { check }) {
 
   check('opening shell does not stay up', (await session.count('.opening-shell')) === 0);
 
+  const productBuildState = await session.evaluate(async () => {
+    const root = document.documentElement;
+    const json = document.querySelector('#marks-product-build')?.textContent ?? '';
+    let receipt = null;
+    try {
+      receipt = JSON.parse(json);
+    } catch {
+      // The check below reports a missing or malformed receipt with context.
+    }
+    const canonicalize = (value) => {
+      if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') {
+        return JSON.stringify(value);
+      }
+      if (Array.isArray(value)) return `[${value.map(canonicalize).join(',')}]`;
+      return `{${Object.keys(value).sort().map((key) =>
+        `${JSON.stringify(key)}:${canonicalize(value[key])}`).join(',')}}`;
+    };
+    let computedDigest = 'unavailable';
+    if (receipt?.buildPlan && globalThis.crypto?.subtle) {
+      const bytes = new TextEncoder().encode(canonicalize(receipt.buildPlan));
+      const digest = await crypto.subtle.digest('SHA-256', bytes);
+      computedDigest = [...new Uint8Array(digest)]
+        .map((value) => value.toString(16).padStart(2, '0'))
+        .join('');
+    }
+    return {
+      receipt,
+      json,
+      computedDigest,
+      variant: root.dataset.marksProductVariant ?? 'missing',
+      digest: root.dataset.marksBuildPlanSha256 ?? 'missing',
+      agentChat: root.dataset.marksAgentChat ?? 'missing',
+      ribbonWild: root.dataset.marksRibbonWild ?? 'missing',
+      dataMode: root.dataset.marksMode ?? 'missing',
+    };
+  });
+  const productPlan = productBuildState.receipt?.buildPlan;
+  const agentChatEnabled = productPlan?.features?.['agent-chat'] === true;
+  const ribbonWildEnabled = productPlan?.features?.['ribbon-wild'] === true;
+  check('product build receipt is embedded and schema-valid',
+    productBuildState.receipt?.schema === 'marks.product-build-receipt.v1' &&
+    productPlan?.schema === 'marks.product-build-plan.v1' &&
+    typeof productPlan?.deployable === 'boolean' &&
+    typeof productPlan?.features?.['agent-chat'] === 'boolean' &&
+    typeof productPlan?.features?.['ribbon-wild'] === 'boolean' &&
+    /^[a-f0-9]{64}$/u.test(productBuildState.receipt?.buildPlanSha256 ?? '') &&
+    productBuildState.computedDigest === productBuildState.receipt?.buildPlanSha256,
+    JSON.stringify(productBuildState));
+  check('root product diagnostics agree with the embedded build plan',
+    productBuildState.variant === productPlan?.productVariant &&
+    productBuildState.digest === productBuildState.receipt?.buildPlanSha256 &&
+    productBuildState.dataMode === productPlan?.client?.dataMode &&
+    productBuildState.agentChat === (agentChatEnabled ? 'enabled' : 'disabled') &&
+    productBuildState.ribbonWild === (ribbonWildEnabled ? 'enabled' : 'disabled'),
+    JSON.stringify(productBuildState));
+  check('product build matches the externally requested identity',
+    EXPECT_PRODUCT_VARIANT === null || (
+      productPlan?.productVariant === EXPECT_PRODUCT_VARIANT &&
+      productBuildState.receipt?.buildPlanSha256 === EXPECT_BUILD_PLAN_SHA256
+    ),
+    `expected=${EXPECT_PRODUCT_VARIANT ?? 'unspecified'}/${EXPECT_BUILD_PLAN_SHA256 ?? 'unspecified'} ` +
+      `actual=${productPlan?.productVariant ?? 'missing'}/${productBuildState.receipt?.buildPlanSha256 ?? 'missing'}`);
+
   const openingRibbon = await session.evaluate(() => {
     const selected = document.querySelector('.ribbon-tab[aria-selected="true"]');
     const topLevel = [...document.querySelectorAll('.ribbon-tab')]
@@ -170,6 +239,9 @@ export async function runSurface(session, { check }) {
     );
     await session.click('[role="dialog"] button[aria-label="Close"]');
     await waitForAbsent(session, '[role="dialog"]');
+    // The login flow intentionally selects the Log In tab. Restore Start
+    // before the service registry assertion; local documents remain on Home.
+    await session.click('.ribbon-tab[data-ribbon-tab="import"]');
   }
 
   const materialState = await session.evaluate(() => ({
@@ -203,9 +275,15 @@ export async function runSurface(session, { check }) {
   await session.wait(800);
 
   check('document renders blocks', (await session.count('.marks-preview .marks-block')) >= 1);
+  const activeRegistryCommand = desktopDataMode === 'service' ? 'import.url' : 'format.bold';
+  const registryCounts = {
+    activeCommand: activeRegistryCommand,
+    activeCount: await session.count(`.ribbon-body [data-command-id="${activeRegistryCommand}"]`),
+    quickBold: await session.count('.quick-access [data-command-id="format.bold"]'),
+  };
   check('desktop ribbon is registry-driven',
-    (await session.count('.ribbon-body [data-command-id="format.bold"]')) === 1 &&
-    (await session.count('.quick-access [data-command-id="format.bold"]')) >= 1);
+    registryCounts.activeCount === 1 && registryCounts.quickBold >= 1,
+    JSON.stringify(registryCounts));
 
   await session.click('.ribbon-tab');
   await session.press('Alt');
@@ -215,10 +293,9 @@ export async function runSurface(session, { check }) {
 
   const agentChatState = await session.evaluate(() =>
     document.documentElement.dataset.marksAgentChat ?? 'missing');
-  const agentChatEnabled = agentChatState === 'enabled';
-  check('agent-chat build flag matches the expected state',
-    agentChatEnabled === EXPECT_AGENT_CHAT,
-    `expected=${EXPECT_AGENT_CHAT ? 'enabled' : 'disabled'} actual=${agentChatState}`);
+  check('agent-chat runtime state matches the resolved build plan',
+    agentChatState === (agentChatEnabled ? 'enabled' : 'disabled'),
+    `plan=${agentChatEnabled ? 'enabled' : 'disabled'} actual=${agentChatState}`);
 
   if (agentChatEnabled) {
     await session.click('.agent-orb');
@@ -286,10 +363,9 @@ export async function runSurface(session, { check }) {
     JSON.stringify(composeState));
 
   const ribbonWildState = await session.evaluate(() => document.documentElement.dataset.marksRibbonWild ?? 'missing');
-  const ribbonWildEnabled = ribbonWildState === 'enabled';
-  check('ribbon-wild build flag matches the expected state',
-    ribbonWildEnabled === EXPECT_RIBBON_WILD,
-    `expected=${EXPECT_RIBBON_WILD ? 'enabled' : 'disabled'} actual=${ribbonWildState}`);
+  check('ribbon-wild runtime state matches the resolved build plan',
+    ribbonWildState === (ribbonWildEnabled ? 'enabled' : 'disabled'),
+    `plan=${ribbonWildEnabled ? 'enabled' : 'disabled'} actual=${ribbonWildState}`);
 
   if (ribbonWildEnabled) {
     let horizonRunId = null;
@@ -1227,6 +1303,9 @@ export async function runSurface(session, { check }) {
 
 export const SURFACE_CHECK_NAMES = [
   'opening shell does not stay up',
+  'product build receipt is embedded and schema-valid',
+  'root product diagnostics agree with the embedded build plan',
+  'product build matches the externally requested identity',
   'desktop edit opens on the Home ribbon',
   'anonymous desktop puts Log In second',
   'desktop Log In opens the phone QR flow',
@@ -1237,7 +1316,7 @@ export const SURFACE_CHECK_NAMES = [
   'document renders blocks',
   'desktop ribbon is registry-driven',
   'ribbon KeyTips are keyboard discoverable',
-  'agent-chat build flag matches the expected state',
+  'agent-chat runtime state matches the resolved build plan',
   'local agent privacy disclosure is truthful',
   'enabled agent chat exposes the guarded command bridge',
   'agent visibly raises the relevant ribbon task',
@@ -1248,7 +1327,7 @@ export const SURFACE_CHECK_NAMES = [
   'disabled agent chat makes no agent network or lazy-asset requests',
   'desktop split inspects the rendered pane from a preview click',
   'desktop split restores compose commands from an editor click',
-  'ribbon-wild build flag matches the expected state',
+  'ribbon-wild runtime state matches the resolved build plan',
   'disabled ribbon-wild exposes no commands, agent tools, or surfaces',
   'in-page agent can visibly operate the possibility ribbon layer',
   'wild studio exposes all five integrated capabilities',

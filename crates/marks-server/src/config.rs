@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+#[cfg(feature = "agent-chat")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AgentProviderKind {
     Disabled,
@@ -9,6 +10,7 @@ pub enum AgentProviderKind {
 
 /// Server-owned agent configuration. Provider credentials and model selection
 /// are deployment policy: neither is accepted from a browser request.
+#[cfg(feature = "agent-chat")]
 #[derive(Clone, Debug)]
 pub struct AgentConfig {
     pub provider: AgentProviderKind,
@@ -23,6 +25,7 @@ pub struct AgentConfig {
     pub max_output_tokens: u32,
 }
 
+#[cfg(feature = "agent-chat")]
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
@@ -127,6 +130,7 @@ pub struct Config {
     /// Upper bound for one WebSocket frame accepted from a client.
     pub max_frame_bytes: usize,
     /// Optional, session-only in-page agent gateway. Disabled by default.
+    #[cfg(feature = "agent-chat")]
     pub agent: AgentConfig,
 }
 
@@ -199,33 +203,46 @@ impl Config {
         if database_heartbeat_stale_ms <= database_heartbeat_ms {
             return Err("MARKS_DB_HEARTBEAT_STALE_MS must exceed MARKS_DB_HEARTBEAT_MS".to_owned());
         }
-        let agent_provider = match std::env::var("MARKS_AGENT_PROVIDER") {
-            Err(std::env::VarError::NotPresent) => AgentProviderKind::Disabled,
-            Ok(value) if value == "disabled" => AgentProviderKind::Disabled,
-            Ok(value) if value == "openai" => AgentProviderKind::OpenAi,
-            Ok(value) => {
-                return Err(format!(
-                    "MARKS_AGENT_PROVIDER must be disabled or openai, got {value:?}"
-                ));
-            }
-            Err(error) => return Err(format!("cannot read MARKS_AGENT_PROVIDER: {error}")),
-        };
-        let openai_api_key_file = std::env::var("MARKS_OPENAI_API_KEY_FILE")
-            .ok()
-            .map(PathBuf::from);
-        let openai_model = std::env::var("MARKS_OPENAI_MODEL").ok();
-        if agent_provider == AgentProviderKind::OpenAi {
-            if openai_api_key_file.is_none() {
-                return Err(
-                    "MARKS_OPENAI_API_KEY_FILE is required when MARKS_AGENT_PROVIDER=openai".into(),
-                );
-            }
-            let Some(model) = openai_model.as_deref() else {
-                return Err(
-                    "MARKS_OPENAI_MODEL is required when MARKS_AGENT_PROVIDER=openai".into(),
-                );
+        #[cfg(feature = "agent-chat")]
+        let (agent_provider, openai_api_key_file, openai_model) = {
+            let provider = match std::env::var("MARKS_AGENT_PROVIDER") {
+                Err(std::env::VarError::NotPresent) => AgentProviderKind::Disabled,
+                Ok(value) if value == "disabled" => AgentProviderKind::Disabled,
+                Ok(value) if value == "openai" => AgentProviderKind::OpenAi,
+                Ok(value) => {
+                    return Err(format!(
+                        "MARKS_AGENT_PROVIDER must be disabled or openai, got {value:?}"
+                    ));
+                }
+                Err(error) => return Err(format!("cannot read MARKS_AGENT_PROVIDER: {error}")),
             };
-            validate_model_name(model)?;
+            let key_file = std::env::var("MARKS_OPENAI_API_KEY_FILE")
+                .ok()
+                .map(PathBuf::from);
+            let model = std::env::var("MARKS_OPENAI_MODEL").ok();
+            if provider == AgentProviderKind::OpenAi {
+                if key_file.is_none() {
+                    return Err(
+                        "MARKS_OPENAI_API_KEY_FILE is required when MARKS_AGENT_PROVIDER=openai"
+                            .into(),
+                    );
+                }
+                let Some(model) = model.as_deref() else {
+                    return Err(
+                        "MARKS_OPENAI_MODEL is required when MARKS_AGENT_PROVIDER=openai".into(),
+                    );
+                };
+                validate_model_name(model)?;
+            }
+            (provider, key_file, model)
+        };
+        #[cfg(not(feature = "agent-chat"))]
+        if let Ok(provider) = std::env::var("MARKS_AGENT_PROVIDER")
+            && provider != "disabled"
+        {
+            return Err(format!(
+                "MARKS_AGENT_PROVIDER={provider:?} requires a server built with the agent-chat feature"
+            ));
         }
         Ok(Self {
             listen,
@@ -286,6 +303,7 @@ impl Config {
             database_heartbeat_ms,
             database_heartbeat_stale_ms,
             max_frame_bytes: crate::engine_profile::get()?.max_frame_bytes,
+            #[cfg(feature = "agent-chat")]
             agent: AgentConfig {
                 provider: agent_provider,
                 openai_api_key_file,
@@ -357,6 +375,7 @@ fn validate_origin(origin: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(feature = "agent-chat")]
 fn validate_model_name(model: &str) -> Result<(), String> {
     if model.is_empty()
         || model.len() > 128

@@ -20,7 +20,7 @@ export function MiniToolbar({ selected, disabled: _disabled, getView: _getView }
         <button
           key={command.id}
           type="button"
-          className={`${command.pressed ? 'active ' : ''}${command.agentRaised ? 'agent-raised' : ''}`.trim() || undefined}
+          className={`${command.pressed ? 'active ' : ''}${__MARKS_FEATURES__.agentChat && command.agentRaised ? 'agent-raised' : ''}`.trim() || undefined}
           data-command-id={command.id}
           title={command.unavailableReason ?? command.description}
           aria-label={command.label}

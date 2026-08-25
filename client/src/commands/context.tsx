@@ -28,7 +28,8 @@ export interface CommandCenterValue {
   receipts: readonly CommandReceipt[];
   commands: (surface: CommandSurface) => ProjectedCommand[];
   quickAccess: ProjectedCommand[];
-  agentTools: AgentToolDefinition[];
+  /** Present only in artifacts that compile the agent-chat surface. */
+  agentTools?: AgentToolDefinition[];
   invoke: (id: CommandId, source?: CommandSource, input?: Record<string, unknown>) => Promise<CommandReceipt>;
   start: (
     id: CommandId,

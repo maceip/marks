@@ -66,14 +66,34 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Resolve the stable service build plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          plan=$(node --experimental-strip-types scripts/product-variant.ts resolve \
+            --variant stable --data-mode service --format canonical --require-deployable)
+          digest=$(node --experimental-strip-types scripts/product-variant.ts resolve \
+            --variant stable --data-mode service --format sha256 --require-deployable)
+          {
+            printf 'MARKS_PRODUCT_VARIANT=stable\n'
+            printf 'MARKS_BUILD_PLAN_SHA256=%s\n' "$digest"
+            printf 'MARKS_BUILD_PLAN_JSON=%s\n' "$plan"
+            printf 'MARKS_EXPECT_PRODUCT_VARIANT=stable\n'
+            printf 'MARKS_EXPECT_BUILD_PLAN_SHA256=%s\n' "$digest"
+          } >> "$GITHUB_ENV"
+
       - name: Build release marks-server
-        run: cargo build -p marks-server --release --locked
+        run: cargo build -p marks-server --release --locked --no-default-features
         env:
           MARKS_BUILD_REVISION: ${{ github.sha }}
           MARKS_SOURCE_DIRTY: '0'
 
       - name: Build production service-mode client
-        run: VITE_MARKS_DATA_MODE=service VITE_MARKS_TEST_SERVICE_WORKER=1 npm run build
+        run: >-
+          npm run build:variant -- --variant stable --data-mode service
+          --out-dir "$GITHUB_WORKSPACE/client/dist" --require-deployable
+        env:
+          VITE_MARKS_TEST_SERVICE_WORKER: '1'
 
       - name: Enforce production UI budgets
         run: npm run check:ui-budgets
@@ -194,14 +214,34 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Resolve the stable service build plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          plan=$(node --experimental-strip-types scripts/product-variant.ts resolve \
+            --variant stable --data-mode service --format canonical --require-deployable)
+          digest=$(node --experimental-strip-types scripts/product-variant.ts resolve \
+            --variant stable --data-mode service --format sha256 --require-deployable)
+          {
+            printf 'MARKS_PRODUCT_VARIANT=stable\n'
+            printf 'MARKS_BUILD_PLAN_SHA256=%s\n' "$digest"
+            printf 'MARKS_BUILD_PLAN_JSON=%s\n' "$plan"
+            printf 'MARKS_EXPECT_PRODUCT_VARIANT=stable\n'
+            printf 'MARKS_EXPECT_BUILD_PLAN_SHA256=%s\n' "$digest"
+          } >> "$GITHUB_ENV"
+
       - name: Build marks-server
-        run: cargo build -p marks-server --locked
+        run: cargo build -p marks-server --locked --no-default-features
         env:
           MARKS_BUILD_REVISION: ${{ github.sha }}
           MARKS_SOURCE_DIRTY: '0'
 
       - name: Production service-mode client
-        run: VITE_MARKS_DATA_MODE=service VITE_MARKS_TEST_SERVICE_WORKER=1 npm run build
+        run: >-
+          npm run build:variant -- --variant stable --data-mode service
+          --out-dir "$GITHUB_WORKSPACE/client/dist" --require-deployable
+        env:
+          VITE_MARKS_TEST_SERVICE_WORKER: '1'
 
       - name: Install Playwright browser with a bounded retry
         shell: bash

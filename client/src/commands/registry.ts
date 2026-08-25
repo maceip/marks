@@ -12,6 +12,12 @@ import type {
 } from './types.ts';
 import { EMPTY_PARAMETERS } from './types.ts';
 
+// Node unit tests execute this registry without Vite. Production replaces the
+// property-level branch with a literal and erases disabled command definitions.
+const RIBBON_WILD_BUILD_ENABLED = typeof __MARKS_VITE_BUILD__ === 'undefined'
+  ? RIBBON_WILD_ENABLED
+  : __MARKS_FEATURES__.ribbonWild;
+
 const ALL: readonly CommandSurface[] = ['ribbon', 'phone', 'foldable', 'palette', 'agent'];
 const EDIT: readonly CommandModality[] = ['edit', 'split'];
 const IMAGE_URL_PARAMETERS = {
@@ -196,7 +202,7 @@ const definitions: CommandDefinition[] = [
   ui('insert.cross-document-block', 'Document block', 'practical-blocks', 'insert', 'Links', 'duplicate', { description: 'Insert an access-checked reference to another document section', requiresDocument: true, capability: 'edit', priority: 72, risk: 'write' }),
   ui('review.quality-contract', 'Quality', 'practical-quality', 'review', 'Assurance', 'sparkles', { description: 'Declare the audience and inspect readability against its contract', requiresDocument: true, priority: 86 }),
 
-  ...(RIBBON_WILD_ENABLED ? [
+  ...(RIBBON_WILD_BUILD_ENABLED ? [
     ui('wild.intent-horizon', 'Horizon', 'wild-intent-horizon', 'review', 'Possibility', 'sparkles', { description: 'Infer and declare inspectable next actions for this exact document', requiresDocument: true, priority: 97, presentation: 'large' }),
     ui('wild.causal-lightpath', 'Lightpath', 'wild-causal-lightpath', 'review', 'Possibility', 'mermaid', { description: 'Inspect receipts from real ribbon and agent commands', requiresDocument: true, priority: 83 }),
     ui('wild.consequence-lanes', 'Lanes', 'wild-consequence-lanes', 'review', 'Possibility', 'split', { description: 'Stage a command and predict its source, render, collaboration, durability, and external effects', requiresDocument: true, priority: 88 }),
@@ -294,12 +300,14 @@ export const LEGACY_ACTION_TO_COMMAND: Readonly<Record<UiActionId, CommandId>> =
   'practical-paste': 'tools.paste-intent',
   'practical-blocks': 'insert.cross-document-block',
   'practical-quality': 'review.quality-contract',
-  'wild-intent-horizon': 'wild.intent-horizon',
-  'wild-causal-lightpath': 'wild.causal-lightpath',
-  'wild-consequence-lanes': 'wild.consequence-lanes',
-  'wild-context-half-life': 'wild.context-half-life',
-  'wild-counterfactual-shelf': 'wild.counterfactual-shelf',
-});
+  ...(RIBBON_WILD_BUILD_ENABLED ? {
+    'wild-intent-horizon': 'wild.intent-horizon',
+    'wild-causal-lightpath': 'wild.causal-lightpath',
+    'wild-consequence-lanes': 'wild.consequence-lanes',
+    'wild-context-half-life': 'wild.context-half-life',
+    'wild-counterfactual-shelf': 'wild.counterfactual-shelf',
+  } as const : {}),
+} as Record<UiActionId, CommandId>);
 
 export function getCommand(id: CommandId): CommandDefinition | undefined {
   return byId.get(id);

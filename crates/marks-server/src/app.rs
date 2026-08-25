@@ -1,3 +1,4 @@
+#[cfg(feature = "agent-chat")]
 use crate::agent::{AgentHub, AgentProvider};
 use crate::artifact::ArtifactIdentity;
 use crate::assets::AssetStore;
@@ -32,19 +33,35 @@ pub struct App {
     pub rate: RateLimiter,
     pub limits: esbt::ResourceLimits,
     pub health: Arc<Health>,
+    #[cfg(feature = "agent-chat")]
     pub agents: Arc<AgentHub>,
 }
 
 impl App {
     pub fn new(config: Config) -> Result<Arc<Self>, String> {
-        Self::new_with_agent_provider(config, None)
+        #[cfg(feature = "agent-chat")]
+        {
+            Self::new_with_agent_provider(config, None)
+        }
+        #[cfg(not(feature = "agent-chat"))]
+        {
+            Self::build_common(config)
+        }
     }
 
     /// Provider injection is used by deterministic integration tests. The
     /// production constructor always builds the server-configured provider.
+    #[cfg(feature = "agent-chat")]
     pub fn new_with_agent_provider(
         config: Config,
         provider: Option<Arc<dyn AgentProvider>>,
+    ) -> Result<Arc<Self>, String> {
+        Self::build_common(config, provider)
+    }
+
+    fn build_common(
+        config: Config,
+        #[cfg(feature = "agent-chat")] provider: Option<Arc<dyn AgentProvider>>,
     ) -> Result<Arc<Self>, String> {
         let config = Arc::new(config);
         let artifact = ArtifactIdentity::load(config.static_dir.as_deref())?;
@@ -84,6 +101,7 @@ impl App {
             .map_err(|error| format!("database write probe: {error:?}"))?;
         let bundle_exports = Arc::new(Semaphore::new(config.max_concurrent_bundle_exports));
         let import_jobs = Arc::new(Semaphore::new(4));
+        #[cfg(feature = "agent-chat")]
         let agents = AgentHub::new(db.clone(), config.agent.clone(), provider)?;
         Ok(Arc::new(Self {
             config,
@@ -96,17 +114,27 @@ impl App {
             rate: RateLimiter::new(),
             limits,
             health,
+            #[cfg(feature = "agent-chat")]
             agents,
         }))
+    }
+
+    pub(crate) fn cancel_agent_session(&self, session_id: &str) {
+        #[cfg(feature = "agent-chat")]
+        self.agents.cancel_session(session_id);
+        #[cfg(not(feature = "agent-chat"))]
+        let _ = session_id;
     }
 }
 
 pub fn router(app: Arc<App>) -> Router {
     let asset_upload =
         post(routes::assets::upload).layer(DefaultBodyLimit::max(app.config.max_asset_bytes));
+    #[cfg(feature = "agent-chat")]
     let agent_create = post(routes::agent::create_run).layer(DefaultBodyLimit::max(
         crate::agent::protocol::MAX_AGENT_BODY_BYTES,
     ));
+    #[cfg(feature = "agent-chat")]
     let agent_tool_result = post(routes::agent::tool_result).layer(DefaultBodyLimit::max(
         crate::agent::protocol::MAX_AGENT_BODY_BYTES,
     ));
@@ -175,13 +203,6 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/v1/auth/devices/{id}", delete(routes::auth::device_revoke))
         .route("/v1/auth/evt/challenges", post(routes::auth::evt_challenge))
         .route("/v1/auth/evt/redeem", post(routes::auth::evt_redeem))
-        // Session-only in-page agent gateway. Browser requests cannot select
-        // a provider, endpoint, model, or credential.
-        .route("/v1/agent/capabilities", get(routes::agent::capabilities))
-        .route("/v1/agent/runs", agent_create)
-        .route("/v1/agent/runs/{id}/events", get(routes::agent::events))
-        .route("/v1/agent/runs/{id}/tool-results", agent_tool_result)
-        .route("/v1/agent/runs/{id}", delete(routes::agent::cancel))
         // Bounded, authenticated document conversion. URL imports resolve and
         // pin public IPs on every redirect; parsers run in a killable worker.
         .route("/v1/import/file", import_file)
@@ -287,8 +308,20 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/collab/yjs/{id}", get(crate::room::ws::collab_retired))
         .route("/healthz", get(routes::health))
         .route("/readyz", get(routes::ready))
-        .route("/v1/artifact", get(routes::artifact))
-        .with_state(app.clone());
+        .route("/v1/artifact", get(routes::artifact));
+
+    // Session-only in-page agent gateway. Stable builds do not compile this
+    // route module at all; provider, endpoint, model, and credential remain
+    // runtime deployment policy in an agent-chat-capable binary.
+    #[cfg(feature = "agent-chat")]
+    let api = api
+        .route("/v1/agent/capabilities", get(routes::agent::capabilities))
+        .route("/v1/agent/runs", agent_create)
+        .route("/v1/agent/runs/{id}/events", get(routes::agent::events))
+        .route("/v1/agent/runs/{id}/tool-results", agent_tool_result)
+        .route("/v1/agent/runs/{id}", delete(routes::agent::cancel));
+
+    let api = api.with_state(app.clone());
 
     let router = match &app.config.static_dir {
         Some(directory) => {

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "generatedBy": "node scripts/inventory-design-system.mjs",
   "authority": {
     "contract": "docs/DESIGN-SYSTEM.md",
@@ -1688,7 +1688,24 @@
       "surfaceMaterialTags": 0,
       "surfaceMaterialHostReferences": 0,
       "materialVariants": [],
-      "sha256": "8ebaa98134d9784865e44f66b8e862ab1fb47e88f770afb7dc17d27e9f483099"
+      "sha256": "13d406c1e1a344026860ccbfb021e9ba508ac887a8802aa6edcd165b991f1ba4"
+    },
+    {
+      "path": "client/src/commands/AgentCommandBridge.tsx",
+      "area": "commands",
+      "exports": [
+        "AgentCommandBridge"
+      ],
+      "uiPrimitives": [],
+      "styleImports": [
+        "client/src/styles/agent.css"
+      ],
+      "jsxComponents": [],
+      "nativeControls": {},
+      "surfaceMaterialTags": 0,
+      "surfaceMaterialHostReferences": 0,
+      "materialVariants": [],
+      "sha256": "726a037822ccc10300c37320d6e3cfbce49e4c65d848234565d5b97846c2b066"
     },
     {
       "path": "client/src/commands/context.tsx",
@@ -1703,7 +1720,7 @@
       "surfaceMaterialTags": 0,
       "surfaceMaterialHostReferences": 0,
       "materialVariants": [],
-      "sha256": "941838c017e73f4502047eff37048e9e5f1cd9ee5f3946f8c797de6da0e8d02b"
+      "sha256": "3c98af5b1a95d67d0cea5f74678c254e6104e5c102406ac204c764e981f19042"
     },
     {
       "path": "client/src/commands/react.tsx",
@@ -1714,7 +1731,9 @@
       "uiPrimitives": [],
       "styleImports": [],
       "jsxComponents": [
-        "CommandCenter.Provider"
+        "AgentCommandBridge",
+        "CommandCenter.Provider",
+        "Suspense"
       ],
       "nativeControls": {
         "input": 1
@@ -1722,7 +1741,7 @@
       "surfaceMaterialTags": 0,
       "surfaceMaterialHostReferences": 0,
       "materialVariants": [],
-      "sha256": "561858110b1cf6497c32fcbdf780275d6ac34ec61563ee3fd3a7f3726ddff6d7"
+      "sha256": "ac88f45bcb5aa22967a4c8d8b0cf8197b417c459c4bc69169905a95cb462fce3"
     },
     {
       "path": "client/src/components/agent/AgentChatPill.tsx",
@@ -1817,7 +1836,7 @@
       "materialVariants": [
         "floating"
       ],
-      "sha256": "17b4c66f70fb8f3bf71fc3866bfbec245fc84e631bda8bb011034ab803fd3003"
+      "sha256": "155718c3f02c3b981283e71de7fbd8c3c3349dcbec47391cfa5434ee22a3c5cb"
     },
     {
       "path": "client/src/components/chrome/AppRail.tsx",
@@ -1877,7 +1896,7 @@
       "surfaceMaterialTags": 0,
       "surfaceMaterialHostReferences": 0,
       "materialVariants": [],
-      "sha256": "899ea034d35cade6f586defacbd9c39d8b3d020498b58e52994283edb54fd120"
+      "sha256": "a06330ecd34e60bf02386e428cc77a1366dac85fd869e526083d95cbd5c149d6"
     },
     {
       "path": "client/src/components/chrome/DocumentChrome.tsx",
@@ -1963,7 +1982,7 @@
       "surfaceMaterialTags": 0,
       "surfaceMaterialHostReferences": 0,
       "materialVariants": [],
-      "sha256": "d5ddbcaef759cca83db5120bb7b97881907657b568578ed84aab20045828d894"
+      "sha256": "3b16a7116f249c45b524862b81ebbd5a57b493890a1a0855fd4f534aad344a53"
     },
     {
       "path": "client/src/components/chrome/PhoneComposer.tsx",
@@ -1991,7 +2010,7 @@
         "chrome",
         "floating"
       ],
-      "sha256": "2bc2601781fd6672105a1a87466c1a938a68fbe9245e03405d28c32624f130e4"
+      "sha256": "e19a2a4586038a167cfe82c62cf5af94a24ae185baff2eddbfecc18bbf4c93db"
     },
     {
       "path": "client/src/components/chrome/RibbonCommand.tsx",
@@ -2019,7 +2038,7 @@
       "surfaceMaterialTags": 0,
       "surfaceMaterialHostReferences": 0,
       "materialVariants": [],
-      "sha256": "15098698f6890d706c0682beb7a2a5240f3b6cf357cca2ce1409e7afefefc5cc"
+      "sha256": "49ce9a12c07623a2b782f7be4d2775dea3040394475544a6cc6e0fe152440359"
     },
     {
       "path": "client/src/components/glyphs/Glyph.tsx",
@@ -2321,7 +2340,7 @@
       "materialVariants": [
         "panel"
       ],
-      "sha256": "7aa98cc593617c300868550ea0a26728bfa0834055013fc302c3b05d3755df9d"
+      "sha256": "95db3bea259c5f270bb68a708ecc6a7fa468d655ef32c2727116f19607503b2d"
     },
     {
       "path": "client/src/components/shell/LiquidDock.tsx",
@@ -2963,7 +2982,12 @@
         ],
         "imports": [],
         "tokens": {
-          "definitions": [],
+          "definitions": [
+            "--motion-agent-content-delay",
+            "--motion-agent-highlight",
+            "--motion-agent-shell-enter",
+            "--motion-agent-status-pulse"
+          ],
           "references": [
             "--color-action",
             "--color-bg-raised",
@@ -2988,8 +3012,8 @@
             "--ribbon-height"
           ]
         },
-        "bytes": 3406,
-        "sha256": "4c5294eeb8885b5e68a1bdf3eb1a144fd1e051547e6330d7a9834be8f808d181"
+        "bytes": 3567,
+        "sha256": "63529658fea76740987df6d343dc682e0071d1ad9dcacad8d9b8da8be9e0d050"
       },
       {
         "path": "client/src/design-system/design-system.css",
@@ -3031,13 +3055,14 @@
             "--radius-pill"
           ]
         },
-        "bytes": 9709,
-        "sha256": "a43b8bca704eca9aeeba79979dab398ad5c7adc8cafa5eb9d111855758e4b635"
+        "bytes": 9649,
+        "sha256": "3f5a2b263de000989213d49033130977b2b95b8a485481dd1834419843e610fe"
       },
       {
         "path": "client/src/styles/agent.css",
         "role": "application",
         "importedBy": [
+          "client/src/commands/AgentCommandBridge.tsx",
           "client/src/components/agent/AgentPill.tsx"
         ],
         "imports": [],
@@ -3054,6 +3079,7 @@
             "--color-feedback-danger-soft",
             "--color-feedback-success",
             "--color-feedback-success-soft",
+            "--color-feedback-warning",
             "--color-fg-default",
             "--color-fg-muted",
             "--color-fg-subtle",
@@ -3064,15 +3090,19 @@
             "--layout-mobile-ribbon-height",
             "--layout-statusbar-height",
             "--material-border",
+            "--material-elevation",
             "--material-refraction",
             "--material-tint-liquid",
-            "--motion-agent-pill-pulse",
+            "--motion-control-pulse",
+            "--motion-indicator-pulse",
+            "--motion-medium",
+            "--motion-practical-enter",
             "--radius-pill",
             "--segment-1-width"
           ]
         },
-        "bytes": 8961,
-        "sha256": "e9d8273e3ea661d85fc01f8073463b2f712a424247f7372490187dea0f7d9d4b"
+        "bytes": 11283,
+        "sha256": "cd70c27f989ab6f34bae0d1b9e58800610381b4af3418da7067b19f5cf88af02"
       },
       {
         "path": "client/src/styles/base.css",
@@ -3375,7 +3405,6 @@
             "--color-feedback-danger",
             "--color-feedback-success",
             "--color-feedback-success-soft",
-            "--color-feedback-warning",
             "--color-fg-default",
             "--color-fg-muted",
             "--color-fg-subtle",
@@ -3401,7 +3430,6 @@
             "--material-tint",
             "--material-tint-liquid",
             "--material-tint-strong",
-            "--motion-agent-command-pulse",
             "--motion-fast",
             "--motion-instant",
             "--motion-translate-sm",
@@ -3416,8 +3444,8 @@
             "--segment-1-width"
           ]
         },
-        "bytes": 30673,
-        "sha256": "842a3e5e609a9a5aad977170f38f69d03bd502e36dc318a0b2de8ef8df30cdac"
+        "bytes": 29041,
+        "sha256": "3769853943f09f85995d3cd367da1d473b820922f01a7e4700fea770219f944c"
       },
       {
         "path": "client/src/styles/document-tokens.css",
@@ -3942,8 +3970,8 @@
             "--segment-1-width"
           ]
         },
-        "bytes": 18194,
-        "sha256": "4dd32d7ee8a94fe91f14cdb62971954413e98e3a1d7a5b957836f66fbfb5a92a"
+        "bytes": 17754,
+        "sha256": "3c9afb935ef0b652fe088fe17435a180ed57688e2c7bfff1651827e4ab9a4cd7"
       },
       {
         "path": "client/src/styles/preview.css",
@@ -4106,17 +4134,13 @@
             "--material-tint",
             "--material-tint-liquid",
             "--material-tint-strong",
-            "--motion-agent-command-pulse",
-            "--motion-agent-content-delay",
-            "--motion-agent-highlight",
-            "--motion-agent-pill-pulse",
-            "--motion-agent-shell-enter",
-            "--motion-agent-status-pulse",
+            "--motion-control-pulse",
             "--motion-deliberate",
             "--motion-distance-lg",
             "--motion-distance-md",
             "--motion-distance-sm",
             "--motion-fast",
+            "--motion-indicator-pulse",
             "--motion-instant",
             "--motion-loop",
             "--motion-medium",
@@ -4226,8 +4250,8 @@
             "--surface-quality"
           ]
         },
-        "bytes": 9996,
-        "sha256": "231461252c7c34c67618e88c0f9a90bb1bec15c89b64b11086c0ac2f3cd6e17e"
+        "bytes": 9840,
+        "sha256": "1ff2ca29a8cb2aec3e7fe4d967c051de2aab0fb32ab8a933adfeaa3e1ac754fb"
       },
       {
         "path": "client/src/styles/wild.css",
@@ -4268,7 +4292,7 @@
             "--material-saturation",
             "--material-tint",
             "--material-tint-strong",
-            "--motion-agent-pill-pulse",
+            "--motion-indicator-pulse",
             "--motion-medium",
             "--motion-stagger",
             "--radius-pill",
@@ -4277,8 +4301,8 @@
             "--wild-width"
           ]
         },
-        "bytes": 19972,
-        "sha256": "630e4354b50816609871bb99c97608eff06baf8516c2f6edba6958ec38ae5b0b"
+        "bytes": 19618,
+        "sha256": "04688150fed6e05818af0dc56650164b5bcae325de836f735efc3c3ad9e18a9e"
       },
       {
         "path": "client/src/styles/workspace.css",
@@ -4324,6 +4348,18 @@
           "phone-category",
           "quick-access",
           "foldable-ribbon"
+        ],
+        "featureExtensions": [
+          {
+            "owner": "client/src/styles/agent.css",
+            "requiredClassPrefix": "agent-",
+            "reason": "Agent-qualified ribbon states are lazy feature CSS and do not redefine the shared ribbon anatomy.",
+            "qualifiedClasses": [
+              "phone-category-grid",
+              "quick-access",
+              "ribbon-command"
+            ]
+          }
         ],
         "ownedClasses": [
           "foldable-ribbon",

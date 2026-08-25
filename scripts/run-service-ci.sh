@@ -14,8 +14,8 @@ Usage:
   scripts/run-service-ci.sh --url http://127.0.0.1:3000
 
 Prove service-mode artifact identity, durable edit/reload/offline workflows,
-and multi-peer room convergence against a live marks-server. The browser must
-be a VITE_MARKS_DATA_MODE=service build.
+and multi-peer room convergence against a live marks-server. Browser and
+server must carry the same service-mode product build plan.
 
 Options:
   --bin PATH           marks-server binary to start
@@ -29,8 +29,10 @@ Options:
   --help               show this help
 
 Examples:
-  cargo build -p marks-server
-  VITE_MARKS_DATA_MODE=service npm run build
+  npm run build:variant -- --variant stable --data-mode service --out-dir "$PWD/client/dist" --require-deployable
+  # Resolve the same plan into MARKS_PRODUCT_VARIANT, MARKS_BUILD_PLAN_JSON,
+  # and MARKS_BUILD_PLAN_SHA256 before building marks-server.
+  cargo build -p marks-server --locked --no-default-features
   scripts/run-service-ci.sh --bin target/debug/marks-server --static-dir client/dist
 EOF
 }
@@ -140,18 +142,18 @@ trap cleanup EXIT
 if [ -z "$URL" ]; then
   if [ ! -x "$BIN" ]; then
     echo "Error: marks-server binary is not executable: $BIN" >&2
-    echo "  cargo build -p marks-server" >&2
+    echo "  Build the matching server plan; see docs/PRODUCT-VARIANTS.md." >&2
     exit 2
   fi
   if [ -z "$STATIC_DIR" ]; then
     echo "Error: --static-dir is required when starting --bin." >&2
-    echo "  VITE_MARKS_DATA_MODE=service npm run build" >&2
+    echo "  npm run build:variant -- --variant stable --data-mode service --out-dir \"$ROOT/client/dist\" --require-deployable" >&2
     echo "  scripts/run-service-ci.sh --bin $BIN --static-dir client/dist" >&2
     exit 2
   fi
   if [ ! -f "$STATIC_DIR/index.html" ]; then
     echo "Error: $STATIC_DIR/index.html is missing (need a service-mode client build)." >&2
-    echo "  VITE_MARKS_DATA_MODE=service npm run build" >&2
+    echo "  npm run build:variant -- --variant stable --data-mode service --out-dir \"$ROOT/client/dist\" --require-deployable" >&2
     exit 2
   fi
   URL="http://${LISTEN}"

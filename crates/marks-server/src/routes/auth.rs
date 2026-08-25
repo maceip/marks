@@ -1282,7 +1282,7 @@ pub async fn session_delete(
     app.rooms.control(Control::SessionRevoked {
         session_id: cookie.session.id().as_str().to_owned(),
     });
-    app.agents.cancel_session(cookie.session.id().as_str());
+    app.cancel_agent_session(cookie.session.id().as_str());
     let mut response = (
         [(header::SET_COOKIE, cleared_cookie())],
         Json(json!({ "revoked": true })),
@@ -1395,7 +1395,7 @@ pub async fn device_revoke(
         device_id: target_id.as_str().to_owned(),
     });
     for session_id in revoked_sessions {
-        app.agents.cancel_session(&session_id);
+        app.cancel_agent_session(&session_id);
     }
     Ok(Json(json!({ "revoked": true })).into_response())
 }

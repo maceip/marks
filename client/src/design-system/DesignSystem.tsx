@@ -32,7 +32,6 @@ import {
 } from '../components/ui';
 import { PresenceBar } from '../components/shell/PresenceBar';
 import { LiquidDock } from '../components/shell/LiquidDock';
-import { AGENT_CHAT_ENABLED } from '../lib/product';
 import { catalogPeers, catalogStates, catalogThread, palette, sectionLinks } from './fixtures';
 import {
   DESIGN_SYSTEM_CONTRACT_VERSION,
@@ -49,7 +48,7 @@ import './design-system.css';
 type Toggle = 'light' | 'dark';
 type Material = 'cinematic' | 'balanced' | 'foundation' | 'opaque';
 
-const AgentChatPill = __MARKS_AGENT_CHAT_ENABLED__
+const AgentChatPill = __MARKS_FEATURES__.agentChat
   ? lazy(() => import('../components/agent/AgentChatPill').then((module) => ({ default: module.AgentChatPill })))
   : null;
 
@@ -270,7 +269,7 @@ export function DesignSystem({ onBack }: { onBack: () => void }) {
           <Tabs label="Document views" selectedId={catalogTab} onChange={setCatalogTab} items={['write', 'preview', 'review', 'history'].map((id) => ({ id, label: id[0].toUpperCase() + id.slice(1) }))} />
         </Section>
 
-        <Section id="chrome" title={AGENT_CHAT_ENABLED ? 'Ribbon and agent chat' : 'Ribbon'}>
+        <Section id="chrome" title={__MARKS_FEATURES__.agentChat ? 'Ribbon and agent chat' : 'Ribbon'}>
           <div className="ds-ribbon">
             <div className="ds-titlebar">Quick access <b>Document title</b> Presence</div>
             <div className="ribbon-body">
@@ -297,7 +296,7 @@ export function DesignSystem({ onBack }: { onBack: () => void }) {
               voiceSupported
             />
           </div>
-          {AGENT_CHAT_ENABLED && <AgentChatCatalog />}
+          {__MARKS_FEATURES__.agentChat && <AgentChatCatalog />}
         </Section>
 
         <Section id="collaboration" title="Presence and comments">

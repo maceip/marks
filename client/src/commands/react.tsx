@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   type ReactNode,
   useCallback,
   useEffect,
@@ -24,20 +26,16 @@ import {
 } from './profile.ts';
 import { getCommand } from './registry.ts';
 import { CommandRuntime } from './runtime.ts';
-import { AGENT_CHAT_ENABLED } from '../lib/product.ts';
-import type {
-  CommandEnvironment,
-  CommandId,
-  CommandRun,
-  CommandSource,
-} from './types.ts';
+import type { CommandEnvironment, CommandId, CommandSource } from './types.ts';
 import { CommandCenter, type CommandCenterValue } from './context.tsx';
 
-const wildObservations = __MARKS_RIBBON_WILD_ENABLED__
+const wildObservations = __MARKS_FEATURES__.ribbonWild
   ? import('../wild/observations.ts')
   : null;
-const loadAgentWebMcp = __MARKS_AGENT_CHAT_ENABLED__
-  ? () => import('./webmcp.ts')
+const AgentCommandBridge = __MARKS_FEATURES__.agentChat
+  ? lazy(() => import('./AgentCommandBridge.tsx').then((module) => ({
+      default: module.AgentCommandBridge,
+    })))
   : null;
 
 export interface CommandProviderProps {
@@ -247,7 +245,7 @@ export function CommandProvider({ documentId, environment: providedEnvironment, 
   }, []);
 
   const activeRaised = useMemo(() => {
-    if (!AGENT_CHAT_ENABLED) return new Set<CommandId>();
+    if (!__MARKS_FEATURES__.agentChat) return new Set<CommandId>();
     const next = new Set(directed);
     for (const run of snapshot.runs) {
       if (run.source === 'agent' || run.source === 'bridge') {
@@ -325,18 +323,20 @@ export function CommandProvider({ documentId, environment: providedEnvironment, 
     ribbon: composeRibbon(environment, {
       surface: ribbonSurfaceForShell(environment.shell),
       expanded: profile.expanded,
-      agentRaised: activeRaised,
+      ...(__MARKS_FEATURES__.agentChat ? { agentRaised: activeRaised } : {}),
     }),
     ribbonFor: (surface, expanded = profile.expanded) => composeRibbon(environment, {
       surface,
       expanded,
-      agentRaised: activeRaised,
+      ...(__MARKS_FEATURES__.agentChat ? { agentRaised: activeRaised } : {}),
     }),
-    commands: (surface) => !AGENT_CHAT_ENABLED && surface === 'agent'
+    commands: (surface) => !__MARKS_FEATURES__.agentChat && surface === 'agent'
       ? []
-      : projectCommands(environment, surface, { agentRaised: activeRaised }),
+      : projectCommands(environment, surface, __MARKS_FEATURES__.agentChat
+        ? { agentRaised: activeRaised }
+        : {}),
     quickAccess: projectQuickAccess(environment, profile.pinned),
-    agentTools: AGENT_CHAT_ENABLED ? toAgentTools(environment) : [],
+    ...(__MARKS_FEATURES__.agentChat ? { agentTools: toAgentTools(environment) } : {}),
     invoke,
     start: (id, source = 'human', input = {}) => runtime.start(id, { source, input }),
     propose: (id, input = {}) => runtime.propose(id, input),
@@ -352,55 +352,8 @@ export function CommandProvider({ documentId, environment: providedEnvironment, 
     }),
     focusCommands,
   }), [activeRaised, environment, focusCommands, invoke, persistProfile, profile, runtime, snapshot.receipts, snapshot.runs]);
-  const valueRef = useRef(value);
-  valueRef.current = value;
-
   useEffect(() => {
-    if (!AGENT_CHAT_ENABLED) return;
-    const bridge: MarksRibbonBridge = {
-      version: 1,
-      listTools: () => toAgentTools(valueRef.current.environment),
-      propose: (commandId, input = {}) => valueRef.current.propose(commandId, input),
-      approve: (runId) => valueRef.current.approve(runId),
-      cancel: (runId) => valueRef.current.cancel(runId),
-      focus: (commandIds, ttlMs) => valueRef.current.focusCommands(commandIds, ttlMs),
-      state: () => ({ runs: valueRef.current.runs, receipts: valueRef.current.receipts }),
-    };
-    window.marksRibbon = bridge;
-    return () => {
-      if (window.marksRibbon === bridge) delete window.marksRibbon;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!AGENT_CHAT_ENABLED || !loadAgentWebMcp) return;
-    let active = true;
-    let dispose: () => void = () => undefined;
-    void loadAgentWebMcp().then(({ registerMarksWebMcp }) => registerMarksWebMcp({
-      tools: () => toAgentTools(environmentRef.current),
-      focus: (commandIds, ttlMs) => valueRef.current.focusCommands(commandIds, ttlMs),
-      execute: async (commandId, input, signal) => {
-        const started = runtime.start(commandId, { source: 'bridge', input });
-        const cancel = () => runtime.cancel(started.run.id);
-        if (signal.aborted) cancel();
-        else signal.addEventListener('abort', cancel, { once: true });
-        try {
-          return await started.finished;
-        } finally {
-          signal.removeEventListener('abort', cancel);
-        }
-      },
-    })).then((cleanup) => {
-      if (active) dispose = cleanup;
-      else cleanup();
-    }).catch(() => undefined);
-    return () => {
-      active = false;
-      dispose();
-    };
-  }, [runtime]);
-
-  useEffect(() => {
+    if (!__MARKS_FEATURES__.agentChat) return;
     window.dispatchEvent(new CustomEvent('marks:command-state', {
       detail: { runs: snapshot.runs, receipts: snapshot.receipts },
     }));
@@ -409,6 +362,11 @@ export function CommandProvider({ documentId, environment: providedEnvironment, 
   return (
     <CommandCenter.Provider value={value}>
       {children}
+      {AgentCommandBridge && (
+        <Suspense fallback={null}>
+          <AgentCommandBridge runtime={runtime} center={value} />
+        </Suspense>
+      )}
       <input
         ref={inputRef}
         type="file"
@@ -437,20 +395,4 @@ export function CommandProvider({ documentId, environment: providedEnvironment, 
       />
     </CommandCenter.Provider>
   );
-}
-
-export interface MarksRibbonBridge {
-  version: 1;
-  listTools(): ReturnType<typeof toAgentTools>;
-  propose(commandId: CommandId, input?: Record<string, unknown>): CommandRun;
-  approve(runId: string): void;
-  cancel(runId: string): void;
-  focus(commandIds: CommandId[], ttlMs?: number): void;
-  state(): Pick<CommandCenterValue, 'runs' | 'receipts'>;
-}
-
-declare global {
-  interface Window {
-    marksRibbon?: MarksRibbonBridge;
-  }
 }

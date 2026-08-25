@@ -207,8 +207,9 @@ npm run test:browser
 npm run test:harness
 npm run harness:probe
 npm run typecheck
-# against a production build with the Rust server already running:
-VITE_MARKS_DATA_MODE=service npm run build
+# against a matching stable/service product build with the Rust server already running:
+npm run build:variant -- --variant stable --data-mode service \
+  --out-dir "$PWD/client/dist" --require-deployable
 npm run ci:service         # Playwright service UI plus native second peer
 npm run smoke:platforms    # Playwright + Puppeteer + agent-browser glass checks
 ```

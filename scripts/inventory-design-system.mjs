@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
-export const DESIGN_SYSTEM_INVENTORY_SCHEMA = 2;
+export const DESIGN_SYSTEM_INVENTORY_SCHEMA = 3;
 export const DEFAULT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const DEFAULT_INVENTORY_PATH = 'docs/design-system-inventory.json';
 
@@ -36,6 +36,11 @@ const STYLE_OWNERS = [{
   family: 'ribbon',
   owner: 'client/src/styles/components/ribbon.css',
   classPrefixes: ['ribbon-', 'phone-ribbon', 'phone-category', 'quick-access', 'foldable-ribbon'],
+  featureExtensions: [{
+    owner: 'client/src/styles/agent.css',
+    requiredClassPrefix: 'agent-',
+    reason: 'Agent-qualified ribbon states are lazy feature CSS and do not redefine the shared ribbon anatomy.',
+  }],
 }];
 
 const slash = (value) => value.split(path.sep).join('/');
@@ -277,10 +282,21 @@ function stripCssComments(source) {
 function ownedClassTokens(source, prefixes) {
   const clean = stripCssComments(source);
   const matches = [];
-  for (const match of clean.matchAll(/\.([_a-z][_a-z0-9-]*)/giu)) {
-    if (!prefixes.some((prefix) => match[1].startsWith(prefix))) continue;
-    const line = clean.slice(0, match.index).split('\n').length;
-    matches.push({ className: match[1], line });
+  for (const rule of clean.matchAll(/([^{}]+)\{/gu)) {
+    const prelude = rule[1];
+    const preludeOffset = rule.index + rule[0].indexOf(prelude);
+    let selectorOffset = 0;
+    for (const selector of prelude.split(',')) {
+      const classes = [...selector.matchAll(/\.([_a-z][_a-z0-9-]*)/giu)];
+      const selectorClasses = classes.map((match) => match[1]);
+      for (const match of classes) {
+        if (!prefixes.some((prefix) => match[1].startsWith(prefix))) continue;
+        const index = preludeOffset + selectorOffset + match.index;
+        const line = clean.slice(0, index).split('\n').length;
+        matches.push({ className: match[1], line, selectorClasses });
+      }
+      selectorOffset += selector.length + 1;
+    }
   }
   return matches;
 }
@@ -461,16 +477,27 @@ async function buildStyles(root, sourceIndex) {
     };
   });
   const ownership = STYLE_OWNERS.map((contract) => {
+    const { featureExtensions = [], ...canonicalContract } = contract;
     const usages = styleFiles.flatMap((file) => ownedClassTokens(sources.get(file), contract.classPrefixes)
       .map((usage) => ({ file, ...usage })));
+    const allowedFeatureUsage = (usage) => featureExtensions.some((extension) => (
+      usage.file === extension.owner
+      && usage.selectorClasses.some((className) => className.startsWith(extension.requiredClassPrefix))
+    ));
     const uniqueViolations = new Map();
-    for (const usage of usages.filter((entry) => entry.file !== contract.owner)) {
+    for (const usage of usages.filter((entry) => entry.file !== contract.owner && !allowedFeatureUsage(entry))) {
       uniqueViolations.set(`${usage.file}:${usage.className}`, uniqueViolations.get(`${usage.file}:${usage.className}`) ?? usage);
     }
     return {
-      ...contract,
+      ...canonicalContract,
+      featureExtensions: featureExtensions.map((extension) => ({
+        ...extension,
+        qualifiedClasses: [...new Set(usages
+          .filter((usage) => usage.file === extension.owner && allowedFeatureUsage(usage))
+          .map((usage) => usage.className))].sort(),
+      })),
       ownedClasses: [...new Set(usages.filter((usage) => usage.file === contract.owner).map((usage) => usage.className))].sort(),
-      violations: [...uniqueViolations.values()],
+      violations: [...uniqueViolations.values()].map(({ selectorClasses: _, ...violation }) => violation),
     };
   });
   return {
@@ -631,6 +658,10 @@ export function validateDesignSystemInventory(inventory) {
   for (const orphan of inventory.styles?.orphanFiles ?? []) errors.push(`style file has no source importer: ${orphan}`);
   for (const ownership of inventory.styles?.ownership ?? []) {
     if (!ownership.ownedClasses.length) errors.push(`style owner ${ownership.owner} declares no ${ownership.family} classes`);
+    for (const extension of ownership.featureExtensions ?? []) {
+      if (!extension.reason) errors.push(`feature stylesheet ${extension.owner} needs a reason to extend the ${ownership.family} class family`);
+      if (!extension.qualifiedClasses.length) errors.push(`feature stylesheet ${extension.owner} declares no ${extension.requiredClassPrefix} qualified ${ownership.family} selectors`);
+    }
     for (const violation of ownership.violations) {
       errors.push(`${violation.file}:${violation.line} declares .${violation.className}; ${ownership.owner} exclusively owns the ${ownership.family} class family`);
     }

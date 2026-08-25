@@ -31,9 +31,17 @@ impl TestServer {
     }
 
     pub async fn spawn_with(db_path: PathBuf, configure: impl FnOnce(&mut Config)) -> TestServer {
-        Self::spawn_with_provider(db_path, configure, None).await
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test listener");
+        let addr = listener.local_addr().expect("local addr");
+        let mut config = test_config(addr, &db_path);
+        configure(&mut config);
+        let app = App::new(config).expect("build app");
+        Self::start(db_path, listener, addr, app).await
     }
 
+    #[cfg(feature = "agent-chat")]
     pub async fn spawn_with_provider(
         db_path: PathBuf,
         configure: impl FnOnce(&mut Config),
@@ -43,50 +51,18 @@ impl TestServer {
             .await
             .expect("bind test listener");
         let addr = listener.local_addr().expect("local addr");
-        let mut config = Config {
-            listen: addr,
-            database: db_path.clone(),
-            asset_dir: db_path.with_extension("assets"),
-            max_asset_bytes: 10 * 1024 * 1024,
-            max_asset_bytes_per_document: 128 * 1024 * 1024,
-            max_concurrent_bundle_exports: 4,
-            backup_dir: None,
-            backup_interval_ms: 24 * 60 * 60 * 1000,
-            backup_retain: 14,
-            origin: format!("http://{addr}"),
-            static_dir: None,
-            asset_pool: None,
-            import_worker_path: Some(PathBuf::from(env!("CARGO_BIN_EXE_marks-server"))),
-            dbsc_enabled: true,
-            evt_enabled: true,
-            evt_locator_key: vec![7_u8; 32],
-            evt_locator_key_version: 1,
-            evt_adapter_version: "test-adapter-1".to_owned(),
-            scratch_ttl_ms: 24 * 60 * 60 * 1000,
-            session_ttl_ms: 30 * 24 * 60 * 60 * 1000,
-            session_rotate_after_ms: 24 * 60 * 60 * 1000,
-            pairing_ttl_ms: 2 * 60 * 1000,
-            challenge_ttl_ms: 2 * 60 * 1000,
-            compact_every_updates: 4,
-            compact_every_operations: marks_server::engine_profile::get()
-                .unwrap()
-                .server_compact_operations,
-            commit_batch_delay_ms: 10,
-            commit_batch_max: 64,
-            room_idle_ms: 1_000,
-            max_resident_rooms: 64,
-            max_connections_per_room: 16,
-            max_mutations_per_second: 10_000,
-            max_mutation_bytes_per_second: 256 * 1024 * 1024,
-            websocket_ping_ms: 1_000,
-            websocket_idle_ms: 5_000,
-            database_heartbeat_ms: 1_000,
-            database_heartbeat_stale_ms: 5_000,
-            max_frame_bytes: marks_server::engine_profile::get().unwrap().max_frame_bytes,
-            agent: Default::default(),
-        };
+        let mut config = test_config(addr, &db_path);
         configure(&mut config);
         let app = App::new_with_agent_provider(config, provider).expect("build app");
+        Self::start(db_path, listener, addr, app).await
+    }
+
+    async fn start(
+        db_path: PathBuf,
+        listener: tokio::net::TcpListener,
+        addr: SocketAddr,
+        app: Arc<App>,
+    ) -> TestServer {
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let serve_app = app.clone();
         let task = tokio::spawn(async move {
@@ -125,6 +101,52 @@ impl TestServer {
             let _ = task.await;
         }
         self.db_path.clone()
+    }
+}
+
+fn test_config(addr: SocketAddr, db_path: &std::path::Path) -> Config {
+    Config {
+        listen: addr,
+        database: db_path.to_path_buf(),
+        asset_dir: db_path.with_extension("assets"),
+        max_asset_bytes: 10 * 1024 * 1024,
+        max_asset_bytes_per_document: 128 * 1024 * 1024,
+        max_concurrent_bundle_exports: 4,
+        backup_dir: None,
+        backup_interval_ms: 24 * 60 * 60 * 1000,
+        backup_retain: 14,
+        origin: format!("http://{addr}"),
+        static_dir: None,
+        asset_pool: None,
+        import_worker_path: Some(PathBuf::from(env!("CARGO_BIN_EXE_marks-server"))),
+        dbsc_enabled: true,
+        evt_enabled: true,
+        evt_locator_key: vec![7_u8; 32],
+        evt_locator_key_version: 1,
+        evt_adapter_version: "test-adapter-1".to_owned(),
+        scratch_ttl_ms: 24 * 60 * 60 * 1000,
+        session_ttl_ms: 30 * 24 * 60 * 60 * 1000,
+        session_rotate_after_ms: 24 * 60 * 60 * 1000,
+        pairing_ttl_ms: 2 * 60 * 1000,
+        challenge_ttl_ms: 2 * 60 * 1000,
+        compact_every_updates: 4,
+        compact_every_operations: marks_server::engine_profile::get()
+            .unwrap()
+            .server_compact_operations,
+        commit_batch_delay_ms: 10,
+        commit_batch_max: 64,
+        room_idle_ms: 1_000,
+        max_resident_rooms: 64,
+        max_connections_per_room: 16,
+        max_mutations_per_second: 10_000,
+        max_mutation_bytes_per_second: 256 * 1024 * 1024,
+        websocket_ping_ms: 1_000,
+        websocket_idle_ms: 5_000,
+        database_heartbeat_ms: 1_000,
+        database_heartbeat_stale_ms: 5_000,
+        max_frame_bytes: marks_server::engine_profile::get().unwrap().max_frame_bytes,
+        #[cfg(feature = "agent-chat")]
+        agent: Default::default(),
     }
 }
 

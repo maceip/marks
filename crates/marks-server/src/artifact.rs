@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -8,11 +8,46 @@ use std::path::Path;
 const EMBEDDED_MANIFEST: &str = include_str!("../../../client/public/esbt.component.manifest.json");
 const ENGINE_PROFILE: &[u8] = include_bytes!("../../../engine-profile.json");
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
+const MAX_BUILD_RECEIPT_BYTES: u64 = 64 * 1024;
 const MAX_COMPONENT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_WIT_BYTES: u64 = 1024 * 1024;
 const MAX_CORE_MODULES: usize = 16;
 const COMPONENT_HEADER: &[u8] = b"\0asm\x0d\0\x01\0";
 const CORE_MODULE_HEADER: &[u8] = b"\0asm\x01\0\0\0";
+const BUILD_PLAN_SCHEMA: &str = "marks.product-build-plan.v1";
+const BUILD_RECEIPT_SCHEMA: &str = "marks.product-build-receipt.v1";
+const BUILD_RECEIPT_FILE: &str = "marks-product-build.json";
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProductClientBuildPlan {
+    pub data_mode: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProductServerBuildPlan {
+    pub cargo_features: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProductBuildPlan {
+    pub schema: String,
+    pub product_variant: String,
+    pub deployable: bool,
+    pub features: BTreeMap<String, bool>,
+    pub client: ProductClientBuildPlan,
+    pub server: ProductServerBuildPlan,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProductBuildReceipt {
+    schema: String,
+    build_plan: ProductBuildPlan,
+    build_plan_sha256: String,
+}
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 struct ArtifactFile {
@@ -65,6 +100,11 @@ pub struct ArtifactIdentity {
     pub schema: &'static str,
     pub server_version: &'static str,
     pub build_revision: &'static str,
+    pub product_variant: String,
+    pub build_plan_sha256: String,
+    pub build_plan: ProductBuildPlan,
+    pub features: BTreeMap<String, bool>,
+    pub server_features: Vec<String>,
     pub server_source_dirty: bool,
     pub server_engine_revision: &'static str,
     pub component_engine_revision: String,
@@ -84,6 +124,7 @@ pub struct ArtifactIdentity {
     pub compiler: String,
     pub target: String,
     pub static_artifact_verified: bool,
+    pub static_build_plan_verified: bool,
     pub profile_coherent: bool,
     pub engine_coherent: bool,
     pub release_ready: bool,
@@ -91,10 +132,23 @@ pub struct ArtifactIdentity {
 
 impl ArtifactIdentity {
     pub fn load(static_dir: Option<&Path>) -> Result<Self, String> {
+        let build_plan = parse_build_plan(
+            env!("MARKS_BUILD_PLAN_JSON"),
+            "server-embedded product build plan",
+        )?;
+        let build_plan_sha256 = env!("MARKS_BUILD_PLAN_SHA256");
+        if build_plan.product_variant != env!("MARKS_PRODUCT_VARIANT")
+            || digest_build_plan(&build_plan)? != build_plan_sha256
+        {
+            return Err("server-embedded product build plan identity is incoherent".to_owned());
+        }
         let component = parse_manifest(EMBEDDED_MANIFEST, "build-bound ESBT component manifest")?;
-        let static_artifact_verified = match static_dir {
-            Some(root) => verify_deployed_artifact(root, &component)?,
-            None => false,
+        let (static_artifact_verified, static_build_plan_verified) = match static_dir {
+            Some(root) => (
+                verify_deployed_artifact(root, &component)?,
+                verify_deployed_build_plan(root, &build_plan, build_plan_sha256)?,
+            ),
+            None => (false, false),
         };
         let server_engine_revision = env!("MARKS_ESBT_REVISION");
         let build_revision = env!("MARKS_BUILD_REVISION");
@@ -105,6 +159,9 @@ impl ArtifactIdentity {
             component.engine_revision == server_engine_revision && profile_coherent;
         let release_ready = engine_coherent
             && static_artifact_verified
+            && static_build_plan_verified
+            && build_plan.deployable
+            && build_plan.client.data_mode == "service"
             && !component.source_dirty
             && !server_source_dirty
             && build_revision != "development";
@@ -112,6 +169,11 @@ impl ArtifactIdentity {
             schema: "marks-artifact.component",
             server_version: env!("CARGO_PKG_VERSION"),
             build_revision,
+            product_variant: build_plan.product_variant.clone(),
+            build_plan_sha256: build_plan_sha256.to_owned(),
+            build_plan: build_plan.clone(),
+            features: build_plan.features.clone(),
+            server_features: build_plan.server.cargo_features.clone(),
             server_source_dirty,
             server_engine_revision,
             component_engine_revision: component.engine_revision,
@@ -135,11 +197,152 @@ impl ArtifactIdentity {
             compiler: component.compiler,
             target: component.target,
             static_artifact_verified,
+            static_build_plan_verified,
             profile_coherent,
             engine_coherent,
             release_ready,
         })
     }
+}
+
+#[cfg(test)]
+fn embedded_product_build_receipt() -> Result<String, String> {
+    let build_plan = parse_build_plan(
+        env!("MARKS_BUILD_PLAN_JSON"),
+        "server-embedded product build plan",
+    )?;
+    let receipt = ProductBuildReceipt {
+        schema: BUILD_RECEIPT_SCHEMA.to_owned(),
+        build_plan,
+        build_plan_sha256: env!("MARKS_BUILD_PLAN_SHA256").to_owned(),
+    };
+    canonical_json(&serde_json::to_value(receipt).map_err(|error| error.to_string())?)
+}
+
+fn parse_build_plan(text: &str, label: &str) -> Result<ProductBuildPlan, String> {
+    if text.len() as u64 > MAX_BUILD_RECEIPT_BYTES {
+        return Err(format!("{label} exceeds {MAX_BUILD_RECEIPT_BYTES} bytes"));
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|error| format!("{label}: {error}"))?;
+    if canonical_json(&value)? != text {
+        return Err(format!("{label} is not canonical minified JSON"));
+    }
+    let plan: ProductBuildPlan =
+        serde_json::from_value(value).map_err(|error| format!("{label}: {error}"))?;
+    if plan.schema != BUILD_PLAN_SCHEMA
+        || !valid_identifier(&plan.product_variant)
+        || plan.features.is_empty()
+        || !plan.features.contains_key("agent-chat")
+        || plan
+            .features
+            .keys()
+            .any(|feature| !valid_identifier(feature))
+        || !matches!(plan.client.data_mode.as_str(), "local" | "service")
+        || plan
+            .server
+            .cargo_features
+            .iter()
+            .any(|feature| !valid_identifier(feature))
+        || !plan
+            .server
+            .cargo_features
+            .windows(2)
+            .all(|pair| pair[0] < pair[1])
+        || plan.features.get("agent-chat").copied().unwrap_or(false)
+            != plan
+                .server
+                .cargo_features
+                .iter()
+                .any(|feature| feature == "agent-chat")
+    {
+        return Err(format!("{label} has invalid or incoherent fields"));
+    }
+    Ok(plan)
+}
+
+fn digest_build_plan(plan: &ProductBuildPlan) -> Result<String, String> {
+    let value = serde_json::to_value(plan).map_err(|error| error.to_string())?;
+    Ok(hex_digest(Sha256::digest(
+        canonical_json(&value)?.as_bytes(),
+    )))
+}
+
+fn verify_deployed_build_plan(
+    root: &Path,
+    expected: &ProductBuildPlan,
+    expected_hash: &str,
+) -> Result<bool, String> {
+    let path = root.join(BUILD_RECEIPT_FILE);
+    let metadata = path
+        .metadata()
+        .map_err(|error| format!("deployed product build receipt: {error}"))?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_BUILD_RECEIPT_BYTES {
+        return Err("deployed product build receipt is not one bounded regular file".to_owned());
+    }
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| format!("deployed product build receipt: {error}"))?;
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|error| format!("deployed product build receipt: {error}"))?;
+    if canonical_json(&value)? != text {
+        return Err("deployed product build receipt is not canonical minified JSON".to_owned());
+    }
+    let receipt: ProductBuildReceipt = serde_json::from_value(value)
+        .map_err(|error| format!("deployed product build receipt: {error}"))?;
+    if receipt.schema != BUILD_RECEIPT_SCHEMA
+        || !valid_hash(&receipt.build_plan_sha256)
+        || digest_build_plan(&receipt.build_plan)? != receipt.build_plan_sha256
+        || receipt.build_plan_sha256 != expected_hash
+        || &receipt.build_plan != expected
+    {
+        return Err("deployed product build receipt differs from the server build plan".to_owned());
+    }
+    Ok(true)
+}
+
+fn canonical_json(value: &serde_json::Value) -> Result<String, String> {
+    fn append(value: &serde_json::Value, output: &mut String) -> Result<(), String> {
+        match value {
+            serde_json::Value::Null => output.push_str("null"),
+            serde_json::Value::Bool(value) => {
+                output.push_str(if *value { "true" } else { "false" })
+            }
+            serde_json::Value::Number(value) => output.push_str(&value.to_string()),
+            serde_json::Value::String(value) => {
+                output.push_str(&serde_json::to_string(value).map_err(|error| error.to_string())?)
+            }
+            serde_json::Value::Array(values) => {
+                output.push('[');
+                for (index, value) in values.iter().enumerate() {
+                    if index != 0 {
+                        output.push(',');
+                    }
+                    append(value, output)?;
+                }
+                output.push(']');
+            }
+            serde_json::Value::Object(object) => {
+                output.push('{');
+                let mut fields = object.iter().collect::<Vec<_>>();
+                fields.sort_unstable_by_key(|(key, _)| *key);
+                for (index, (key, value)) in fields.into_iter().enumerate() {
+                    if index != 0 {
+                        output.push(',');
+                    }
+                    output
+                        .push_str(&serde_json::to_string(key).map_err(|error| error.to_string())?);
+                    output.push(':');
+                    append(value, output)?;
+                }
+                output.push('}');
+            }
+        }
+        Ok(())
+    }
+
+    let mut output = String::new();
+    append(value, &mut output)?;
+    Ok(output)
 }
 
 fn parse_manifest(text: &str, label: &str) -> Result<ComponentManifest, String> {
@@ -187,6 +390,15 @@ fn valid_revision(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn valid_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-'))
+        && value.as_bytes()[0].is_ascii_lowercase()
 }
 
 fn valid_hash(value: &str) -> bool {
@@ -359,6 +571,11 @@ mod tests {
             let name = module.path.trim_start_matches('/');
             std::fs::copy(public.join(name), root.join(name)).expect("copy core module");
         }
+        std::fs::write(
+            root.join(BUILD_RECEIPT_FILE),
+            embedded_product_build_receipt().expect("embedded product receipt"),
+        )
+        .expect("write product receipt");
         assert!(ArtifactIdentity::load(Some(&root)).is_ok());
 
         std::fs::write(
@@ -371,6 +588,42 @@ mod tests {
             error.contains("declared") || error.contains("does not match"),
             "{error}"
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn product_receipt_rejects_cross_variant_static_artifacts() {
+        let plan = parse_build_plan(
+            env!("MARKS_BUILD_PLAN_JSON"),
+            "server-embedded product build plan",
+        )
+        .expect("embedded plan");
+        let mut mismatched = plan.clone();
+        mismatched.product_variant = "other-variant".to_owned();
+        let digest = digest_build_plan(&mismatched).expect("mismatched digest");
+        let receipt = ProductBuildReceipt {
+            schema: BUILD_RECEIPT_SCHEMA.to_owned(),
+            build_plan: mismatched,
+            build_plan_sha256: digest,
+        };
+        let root = std::env::temp_dir().join(format!(
+            "marks-product-receipt-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("static root");
+        std::fs::write(
+            root.join(BUILD_RECEIPT_FILE),
+            canonical_json(&serde_json::to_value(receipt).expect("receipt JSON"))
+                .expect("canonical receipt"),
+        )
+        .expect("write receipt");
+        let error = verify_deployed_build_plan(&root, &plan, env!("MARKS_BUILD_PLAN_SHA256"))
+            .expect_err("cross-variant static receipt must fail");
+        assert!(error.contains("differs"), "{error}");
         let _ = std::fs::remove_dir_all(root);
     }
 }

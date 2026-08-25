@@ -3,6 +3,7 @@
 # successful same-repository push run of CI on main, or from an explicit
 # workflow_dispatch on main.
 name: Production deploy and rollback
+run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'rollback' && 'Production rollback' || 'Production standard' }}
 
 on:
   workflow_run:
@@ -26,15 +27,16 @@ on:
         required: false
         type: string
 
-permissions:
-  contents: read
+permissions: {}
 
 # Deployment and rollback both mutate the same current/previous release links.
-# Never interrupt a running remote operation; a second request waits here and
-# the remote flock remains the final serialization boundary.
+# Standard operations serialize in one lane; rollback has a distinct priority
+# lane so an automatic deploy can never replace a pending rollback. Rollback
+# explicitly cancels standard runs through the Actions API, while every new
+# deploy waits for all noncompleted rollback runs before touching production.
 concurrency:
-  group: marks-production
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'rollback' && 'marks-production-rollback' || 'marks-production-standard' }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'rollback' }}
 
 jobs:
   production:
@@ -52,16 +54,118 @@ jobs:
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    # Manual full validation plus the host's deterministic npm, fetch, Docker,
+    # SQLite/canary, readiness, and observation ceilings can legitimately
+    # exceed two hours. Keep Actions above that bounded worst case; host-side
+    # cleanup never relies on a remote job cancellation.
+    timeout-minutes: 300
+    permissions:
+      contents: read
+      # Only the two API steps below export GH_TOKEN to a shell. Checkout gets
+      # its normal token input but declines persistence, so repository scripts
+      # cannot reuse this grant through Git credentials.
+      actions: write
     environment:
       name: Production
       url: https://marks.secure.build
 
     steps:
+      - name: Preempt standard production runs for rollback
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'rollback'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          command -v gh >/dev/null
+          command -v jq >/dev/null
+
+          list_standard_runs() {
+            gh api --paginate "/repos/$REPOSITORY/actions/workflows/production.yml/runs?per_page=100" |
+              jq -s '[
+                .[].workflow_runs[]
+                | select(.display_title == "Production standard")
+                | select(.status != "completed")
+                | .id
+              ]'
+          }
+
+          cancellation_deadline_seconds=120
+          cancellation_deadline=$((SECONDS + cancellation_deadline_seconds))
+          declare -A cancellation_requested=()
+          while :; do
+            standard_runs_json=$(list_standard_runs)
+            standard_run_count=$(jq 'length' <<< "$standard_runs_json")
+            [[ "$standard_run_count" =~ ^[0-9]+$ ]]
+            if (( standard_run_count == 0 )); then
+              break
+            fi
+            mapfile -t standard_run_ids < <(jq -r '.[]' <<< "$standard_runs_json")
+            for run_id in "${standard_run_ids[@]}"; do
+              if [[ -n "${cancellation_requested[$run_id]+requested}" ]]; then
+                continue
+              fi
+              echo "Canceling standard production run $run_id in favor of rollback"
+              if ! cancel_error=$(gh api --method POST \
+                "/repos/$REPOSITORY/actions/runs/$run_id/cancel" 2>&1); then
+                run_status=$(gh api "/repos/$REPOSITORY/actions/runs/$run_id" --jq .status)
+                if [[ "$run_status" != completed ]]; then
+                  printf '%s\n' "$cancel_error" >&2
+                  exit 1
+                fi
+              fi
+              cancellation_requested[$run_id]=1
+            done
+            if (( SECONDS >= cancellation_deadline )); then
+              echo "$standard_run_count standard production run(s) did not cancel within ${cancellation_deadline_seconds}s" >&2
+              exit 1
+            fi
+            # Re-list and cancel every newly visible standard run on each pass.
+            # This closes eventual-consistency misses without waiting on a
+            # standard run whose deploy gate is itself waiting for rollback.
+            echo "Waiting for $standard_run_count standard production run(s) to finish cancellation"
+            sleep 2
+          done
+
+      - name: Wait for rollback priority before deploy
+        if: github.event_name == 'workflow_run' || inputs.operation == 'deploy'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          command -v gh >/dev/null
+          command -v jq >/dev/null
+          rollback_priority_deadline_seconds=900
+          rollback_priority_deadline=$((SECONDS + rollback_priority_deadline_seconds))
+          while :; do
+            rollback_run_count=$(
+              gh api --paginate "/repos/$REPOSITORY/actions/workflows/production.yml/runs?per_page=100" |
+                jq -s '[
+                  .[].workflow_runs[]
+                  | select(.display_title == "Production rollback")
+                  | select(.status != "completed")
+                ] | length'
+            )
+            [[ "$rollback_run_count" =~ ^[0-9]+$ ]]
+            if (( rollback_run_count == 0 )); then
+              break
+            fi
+            if (( SECONDS >= rollback_priority_deadline )); then
+              echo "rollback still owns production priority after ${rollback_priority_deadline_seconds}s" >&2
+              exit 1
+            fi
+            echo "Waiting for $rollback_run_count priority rollback run(s) to finish"
+            sleep 5
+          done
+
       - name: Check out the trusted production revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
           # status, releases, and rollback never read Git history, so they
           # take a depth-one checkout; deployment keeps complete history for
           # the deployed-to-head impact comparison.
@@ -99,12 +203,13 @@ jobs:
                 exit 2
                 ;;
             esac
-            if [[ -n "$release_id" && ! "$release_id" =~ ^[A-Za-z0-9._-]+$ ]]; then
-              echo "release_id may contain only letters, numbers, dot, underscore, and dash" >&2
-              exit 2
-            fi
             if [[ -n "$release_id" && "$operation" != rollback ]]; then
               echo "release_id is valid only for rollback" >&2
+              exit 2
+            fi
+            release_id_pattern='^[0-9a-f]{40}\.stable\.[0-9a-f]{64}$'
+            if [[ -n "$release_id" && ! "$release_id" =~ $release_id_pattern ]]; then
+              echo "release_id must be one retained stable v2 release identity; leave it empty to select previous" >&2
               exit 2
             fi
           fi
@@ -122,11 +227,38 @@ jobs:
         with:
           node-version: '24'
 
+      - name: Resolve the fixed production product build plan
+        id: product
+        if: steps.request.outputs.operation == 'deploy'
+        shell: bash
+        run: |
+          set -euo pipefail
+          variant=stable
+          digest=$(node --experimental-strip-types scripts/product-variant.ts resolve \
+            --variant "$variant" --data-mode service \
+            --format sha256 --require-deployable)
+          plan=$(node --experimental-strip-types scripts/product-variant.ts resolve \
+            --variant "$variant" --data-mode service \
+            --format canonical --require-deployable)
+          [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$(PLAN_JSON="$plan" node -e 'process.stdout.write(JSON.parse(process.env.PLAN_JSON).productVariant)' )" == "$variant" ]]
+          {
+            printf 'variant=%s\n' "$variant"
+            printf 'build_plan_sha256=%s\n' "$digest"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo '### Requested production build identity'
+            echo
+            echo "- Product variant: \`$variant\`"
+            echo "- Build plan SHA-256: \`$digest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Configure pinned deployment SSH identity
         shell: bash
         env:
           DEPLOY_PRIVATE_KEY: ${{ secrets.MARKS_DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.MARKS_DEPLOY_KNOWN_HOSTS }}
+          REQUESTED_OPERATION: ${{ steps.request.outputs.operation }}
         run: |
           set -euo pipefail
           [[ -n "$DEPLOY_PRIVATE_KEY" ]] || {
@@ -172,7 +304,15 @@ jobs:
           rm -f -- "$key_path"
           printf 'SSH_AUTH_SOCK=%s\n' "$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
           printf 'SSH_AGENT_PID=%s\n' "$SSH_AGENT_PID" >> "$GITHUB_ENV"
-          ssh -o ConnectTimeout=15 secure.build probe
+          if [[ "$REQUESTED_OPERATION" == deploy ]]; then
+            # Deploy requires the helper's bounded-build-filesystem proof.
+            ssh -o ConnectTimeout=15 secure.build probe
+          else
+            # Status/releases/rollback stay available if the disposable build
+            # mount is offline. This still proves the pinned key, host, forced
+            # command, sudo boundary, and root helper are reachable.
+            ssh -o ConnectTimeout=15 secure.build status >/dev/null
+          fi
 
       - name: Determine deployed-to-head runtime impact
         id: impact
@@ -181,26 +321,39 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           REVISION: ${{ steps.request.outputs.revision }}
+          REQUESTED_VARIANT: ${{ steps.product.outputs.variant }}
+          REQUESTED_PLAN_SHA256: ${{ steps.product.outputs.build_plan_sha256 }}
         run: |
           set -euo pipefail
           status_receipt=$(ssh secure.build status)
           printf '%s\n' "$status_receipt"
           current=$(awk '$1 == "current:" { print $2 }' <<< "$status_receipt")
+          current_revision=$(awk '$1 == "revision:" { print $2 }' <<< "$status_receipt")
+          current_variant=$(awk '$1 == "product-variant:" { print $2 }' <<< "$status_receipt")
+          current_plan_sha256=$(awk '$1 == "build-plan-sha256:" { print $2 }' <<< "$status_receipt")
           [[ -n "$current" ]] || {
             echo "restricted status did not report the current release" >&2
             exit 1
           }
 
+          [[ "$REQUESTED_VARIANT" == stable && "$REQUESTED_PLAN_SHA256" =~ ^[0-9a-f]{64}$ ]]
           profile=manual-full
           runtime_changed=true
           should_deploy=true
           reasons=manual-deploy
-          if [[ "$EVENT_NAME" == workflow_run ]]; then
-            if [[ "$current" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "${current}^{commit}"; then
+          if [[ "$current_revision" == "$REVISION" \
+            && "$current_variant" == "$REQUESTED_VARIANT" \
+            && "$current_plan_sha256" == "$REQUESTED_PLAN_SHA256" ]]; then
+            profile=already-active
+            runtime_changed=false
+            should_deploy=false
+            reasons=exact-build-identity-already-active
+          elif [[ "$EVENT_NAME" == workflow_run ]]; then
+            if [[ "$current_revision" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "${current_revision}^{commit}"; then
               impact_output="$RUNNER_TEMP/marks-production-impact-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
               : > "$impact_output"
               node scripts/ci-impact.mjs \
-                --base "$current" \
+                --base "$current_revision" \
                 --head "$REVISION" \
                 --github-output "$impact_output"
               profile=$(awk -F= '$1 == "profile" { print substr($0, index($0, "=") + 1) }' "$impact_output")
@@ -208,7 +361,13 @@ jobs:
               reasons=$(awk -F= '$1 == "reasons" { print substr($0, index($0, "=") + 1) }' "$impact_output")
               rm -f -- "$impact_output"
               [[ "$runtime_changed" == true || "$runtime_changed" == false ]]
-              if [[ "$runtime_changed" == false ]]; then
+              if [[ "$current_variant" != "$REQUESTED_VARIANT" \
+                || "$current_plan_sha256" != "$REQUESTED_PLAN_SHA256" ]]; then
+                reasons="$reasons,product-build-identity-changed"
+              fi
+              if [[ "$runtime_changed" == false \
+                && "$current_variant" == "$REQUESTED_VARIANT" \
+                && "$current_plan_sha256" == "$REQUESTED_PLAN_SHA256" ]]; then
                 should_deploy=false
               fi
             elif [[ "$current" == legacy-* ]]; then
@@ -222,6 +381,9 @@ jobs:
 
           {
             printf 'current=%s\n' "$current"
+            printf 'current_revision=%s\n' "$current_revision"
+            printf 'current_variant=%s\n' "$current_variant"
+            printf 'current_plan_sha256=%s\n' "$current_plan_sha256"
             printf 'profile=%s\n' "$profile"
             printf 'runtime_changed=%s\n' "$runtime_changed"
             printf 'should_deploy=%s\n' "$should_deploy"
@@ -246,8 +408,14 @@ jobs:
         shell: bash
         env:
           MARKS_CI_VERIFIED_SHA: ${{ steps.request.outputs.revision }}
+          MARKS_CI_VERIFIED_VARIANT: ${{ steps.product.outputs.variant }}
+          MARKS_CI_VERIFIED_PLAN_SHA256: ${{ steps.product.outputs.build_plan_sha256 }}
           MARKS_CI_RUN_ID: ${{ steps.request.outputs.ci_run_id }}
-        run: bash scripts/deploy-secure-build.sh deploy-verified "$MARKS_CI_VERIFIED_SHA"
+        run: >-
+          bash scripts/deploy-secure-build.sh deploy-verified
+          "$MARKS_CI_VERIFIED_SHA"
+          "$MARKS_CI_VERIFIED_VARIANT"
+          "$MARKS_CI_VERIFIED_PLAN_SHA256"
 
       - name: Run the complete gate for a manual deploy
         if: >-
@@ -262,7 +430,7 @@ jobs:
           steps.impact.outputs.should_deploy == 'false'
         shell: bash
         run: |
-          echo "CI passed, but ${{ steps.impact.outputs.current }}..${{ steps.request.outputs.revision }} contains no runtime change."
+          echo "CI passed; the requested stable build is already active or the revision contains no runtime change."
           echo "Production remains on ${{ steps.impact.outputs.current }}."
 
       - name: Fast rollback to previous or a retained release
@@ -272,11 +440,50 @@ jobs:
           RELEASE_ID: ${{ steps.request.outputs.release_id }}
         run: |
           set -euo pipefail
-          if [[ -n "$RELEASE_ID" ]]; then
-            bash scripts/deploy-secure-build.sh rollback "$RELEASE_ID"
-          else
-            bash scripts/deploy-secure-build.sh rollback
-          fi
+          lock_error='marks-release-root: another Marks deployment or rollback holds the release lock'
+          rollback_retry_deadline_seconds=300
+          rollback_retry_deadline=$((SECONDS + rollback_retry_deadline_seconds))
+          rollback_retry_delay=2
+
+          while :; do
+            if [[ -n "$RELEASE_ID" ]]; then
+              if rollback_output=$(bash scripts/deploy-secure-build.sh rollback "$RELEASE_ID" 2>&1); then
+                printf '%s\n' "$rollback_output"
+                break
+              else
+                rollback_status=$?
+              fi
+            else
+              if rollback_output=$(bash scripts/deploy-secure-build.sh rollback 2>&1); then
+                printf '%s\n' "$rollback_output"
+                break
+              else
+                rollback_status=$?
+              fi
+            fi
+
+            printf '%s\n' "$rollback_output" >&2
+            if [[ "$rollback_output" != "$lock_error" ]]; then
+              exit "$rollback_status"
+            fi
+            if (( SECONDS >= rollback_retry_deadline )); then
+              echo "rollback could not acquire the host release lock within ${rollback_retry_deadline_seconds}s" >&2
+              exit "$rollback_status"
+            fi
+
+            rollback_retry_remaining=$((rollback_retry_deadline - SECONDS))
+            if (( rollback_retry_delay > rollback_retry_remaining )); then
+              rollback_retry_delay=$rollback_retry_remaining
+            fi
+            echo "host release lock is still draining after preemption; retrying rollback in ${rollback_retry_delay}s" >&2
+            sleep "$rollback_retry_delay"
+            if (( rollback_retry_delay < 20 )); then
+              rollback_retry_delay=$((rollback_retry_delay * 2))
+              if (( rollback_retry_delay > 20 )); then
+                rollback_retry_delay=20
+              fi
+            fi
+          done
 
       - name: Show production status
         if: steps.request.outputs.operation == 'status'
@@ -310,6 +517,8 @@ jobs:
           RUNTIME_CHANGED: ${{ steps.impact.outputs.runtime_changed }}
           SHOULD_DEPLOY: ${{ steps.impact.outputs.should_deploy }}
           IMPACT_REASONS: ${{ steps.impact.outputs.reasons }}
+          PRODUCT_VARIANT: ${{ steps.product.outputs.variant }}
+          BUILD_PLAN_SHA256: ${{ steps.product.outputs.build_plan_sha256 }}
         run: |
           {
             echo '### Marks production operation'
@@ -322,6 +531,8 @@ jobs:
               echo "- Runtime changed: \`$RUNTIME_CHANGED\`"
               echo "- Deployment executed: \`$SHOULD_DEPLOY\`"
               echo "- Impact reasons: \`$IMPACT_REASONS\`"
+              echo "- Product variant: \`$PRODUCT_VARIANT\`"
+              echo "- Build plan SHA-256: \`$BUILD_PLAN_SHA256\`"
             fi
             if [[ -n "$RELEASE_ID" ]]; then
               echo "- Requested release: \`$RELEASE_ID\`"

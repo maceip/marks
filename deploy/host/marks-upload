@@ -1,28 +1,49 @@
 #!/usr/bin/python3
-"""Bounded, link-free archive intake for the Marks deployment account."""
+"""Serialized, bounded, link-free archive intake for Marks deployments."""
 
+import fcntl
 import os
 import re
 import shutil
+import stat
 import sys
 import tarfile
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
+from typing import BinaryIO, Iterator, TextIO
 
 ROOT = Path("/var/lib/marks-deploy/incoming")
+STATE_OWNER_UID = 0
+STATE_OWNER_GID = 0
 SHA_RE = re.compile(r"[0-9a-f]{40}")
+STAGING_RE = re.compile(r"\.[0-9a-f]{40}\.upload\.[a-z0-9_]+")
+LOCK_NAME = ".marks-upload.lock"
+
 MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 MAX_EXPANDED_BYTES = 1024 * 1024 * 1024
+MAX_INCOMING_BYTES = 2 * 1024 * 1024 * 1024
 MAX_MEMBERS = 50_000
+MAX_TREES = 4
+MAX_PATH_DEPTH = 32
+MAX_PATH_BYTES = 4096
+MAX_COMPONENT_BYTES = 255
+
+# Account for inode and directory-entry storage in addition to each object's
+# apparent or allocated bytes. At runtime this floor is raised to the incoming
+# filesystem's allocation unit.
+ENTRY_STORAGE_RESERVE = 4096
 
 
 class LimitedReader:
-    def __init__(self, stream):
+    def __init__(self, stream: BinaryIO):
         self.stream = stream
         self.total = 0
 
-    def read(self, size=-1):
-        data = self.stream.read(size)
+    def read(self, size: int = -1) -> bytes:
+        remaining = MAX_ARCHIVE_BYTES - self.total
+        bounded_size = remaining + 1 if size < 0 or size > remaining + 1 else size
+        data = self.stream.read(bounded_size)
         self.total += len(data)
         if self.total > MAX_ARCHIVE_BYTES:
             raise ValueError("compressed archive exceeds 512 MiB")
@@ -41,30 +62,228 @@ def safe_name(raw: str) -> PurePosixPath:
     path = PurePosixPath(raw)
     if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
         raise ValueError(f"unsafe archive path: {raw!r}")
+    if len(path.parts) > MAX_PATH_DEPTH:
+        raise ValueError(f"archive path exceeds {MAX_PATH_DEPTH} components: {raw!r}")
+    encoded_parts = [os.fsencode(part) for part in path.parts]
+    if any(len(part) > MAX_COMPONENT_BYTES for part in encoded_parts):
+        raise ValueError(f"archive path has an overlong component: {raw!r}")
+    if sum(len(part) for part in encoded_parts) + len(encoded_parts) - 1 > MAX_PATH_BYTES:
+        raise ValueError(f"archive path exceeds {MAX_PATH_BYTES} bytes: {raw!r}")
     return path
 
 
-def remove_tree(path: Path) -> None:
+def validate_directory(path: Path, uid: int, gid: int, mode: int, label: str) -> os.stat_result:
     try:
-        st = path.lstat()
+        info = path.lstat()
+    except FileNotFoundError as error:
+        raise ValueError(f"{label} is missing; it must be provisioned by an administrator") from error
+    if not stat.S_ISDIR(info.st_mode):
+        raise ValueError(f"{label} must be a real directory")
+    if info.st_uid != uid or info.st_gid != gid:
+        raise ValueError(f"{label} has unsafe ownership")
+    if stat.S_IMODE(info.st_mode) != mode:
+        raise ValueError(f"{label} must have mode {mode:04o}")
+    return info
+
+
+def validate_layout() -> os.stat_result:
+    # The deployment account must never create or own the common state parent.
+    # This makes replacement of incoming/ impossible through the forced-command
+    # account even though that account owns the incoming directory itself.
+    validate_directory(ROOT.parent, STATE_OWNER_UID, STATE_OWNER_GID, 0o755, "deployment state root")
+    return validate_directory(ROOT, os.geteuid(), os.getegid(), 0o700, "incoming root")
+
+
+def validate_lock(info: os.stat_result) -> None:
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise ValueError("upload lock must be one regular, unlinked file")
+    if info.st_uid != os.geteuid() or info.st_gid != os.getegid():
+        raise ValueError("upload lock has unsafe ownership")
+    if stat.S_IMODE(info.st_mode) != 0o600:
+        raise ValueError("upload lock must have mode 0600")
+
+
+@contextmanager
+def locked_incoming() -> Iterator[None]:
+    root_info = validate_layout()
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise ValueError("this platform cannot open the upload lock without following links")
+    root_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    root_fd = os.open(ROOT, root_flags)
+    lock_fd = -1
+    try:
+        opened_root = os.fstat(root_fd)
+        if (opened_root.st_dev, opened_root.st_ino) != (root_info.st_dev, root_info.st_ino):
+            raise ValueError("incoming root changed while it was opened")
+
+        lock_flags = os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW
+        try:
+            lock_fd = os.open(LOCK_NAME, lock_flags, dir_fd=root_fd)
+        except FileNotFoundError as error:
+            raise ValueError("upload lock is missing; it must be provisioned by an administrator") from error
+        lock_info = os.fstat(lock_fd)
+        validate_lock(lock_info)
+
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ValueError("another upload or cleanup is active; retry later") from error
+
+        # Validate both the pathname and already-open descriptions again after
+        # acquiring. A replaced directory or lock can never become authoritative.
+        current_root = validate_layout()
+        current_lock = (ROOT / LOCK_NAME).lstat()
+        held_lock = os.fstat(lock_fd)
+        validate_lock(current_lock)
+        validate_lock(held_lock)
+        if (current_root.st_dev, current_root.st_ino) != (opened_root.st_dev, opened_root.st_ino):
+            raise ValueError("incoming root changed while acquiring the upload lock")
+        if (current_lock.st_dev, current_lock.st_ino) != (held_lock.st_dev, held_lock.st_ino):
+            raise ValueError("upload lock changed while acquiring it")
+        yield
+    finally:
+        if lock_fd >= 0:
+            os.close(lock_fd)
+        os.close(root_fd)
+
+
+def remove_tree(path: Path) -> None:
+    if path.parent != ROOT:
+        raise ValueError("refusing to remove a path outside incoming")
+    try:
+        info = path.lstat()
     except FileNotFoundError:
         return
-    if not path.is_dir() or path.is_symlink():
-        raise ValueError("refusing to remove a non-directory staging target")
-    shutil.rmtree(path)
+    if not stat.S_ISDIR(info.st_mode):
+        raise ValueError("refusing to remove a non-directory incoming target")
+    if info.st_uid != os.geteuid() or info.st_gid != os.getegid():
+        raise ValueError("refusing to remove an incoming target owned by another user")
+    if not shutil.rmtree.avoids_symlink_attacks:
+        raise ValueError("this platform cannot safely remove incoming trees")
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        # The root deploy helper may atomically claim a completed revision.
+        return
 
 
-def upload(sha: str) -> None:
-    ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
+def cleanup_staging() -> int:
+    removed = 0
+    for candidate in list(ROOT.iterdir()):
+        if candidate.name == LOCK_NAME or not STAGING_RE.fullmatch(candidate.name):
+            continue
+        remove_tree(candidate)
+        removed += 1
+    return removed
+
+
+def storage_reserve() -> int:
+    filesystem = os.statvfs(ROOT)
+    allocation_unit = filesystem.f_frsize or filesystem.f_bsize
+    return max(ENTRY_STORAGE_RESERVE, allocation_unit)
+
+
+def tree_usage(path: Path) -> tuple[int, int]:
+    """Return conservative accounted bytes and object count without following links."""
+    total = 0
+    objects = 0
+    reserve = storage_reserve()
+    pending = [path]
+    while pending:
+        current = pending.pop()
+        try:
+            info = current.lstat()
+        except FileNotFoundError:
+            # Completed uploads can be claimed by the root helper concurrently.
+            if current == path:
+                return 0, 0
+            raise ValueError("incoming tree changed during validation")
+        if info.st_uid != os.geteuid() or info.st_gid != os.getegid():
+            raise ValueError(f"incoming object has unsafe ownership: {current.name}")
+        if info.st_mode & (stat.S_ISUID | stat.S_ISGID | stat.S_ISVTX):
+            raise ValueError(f"incoming object has unsafe mode bits: {current.name}")
+        objects += 1
+        if objects > MAX_TREES * (MAX_MEMBERS + 1):
+            raise ValueError("incoming namespace exceeds its object limit")
+        total += max(info.st_size, info.st_blocks * 512) + reserve
+        if total > MAX_INCOMING_BYTES:
+            raise ValueError("incoming storage exceeds 2 GiB")
+        if stat.S_ISDIR(info.st_mode):
+            try:
+                pending.extend(current.iterdir())
+            except FileNotFoundError as error:
+                raise ValueError("incoming tree changed during validation") from error
+        elif stat.S_ISREG(info.st_mode):
+            if info.st_nlink != 1:
+                raise ValueError(f"hard-linked incoming file rejected: {current.name}")
+        else:
+            raise ValueError(f"linked or special incoming object rejected: {current.name}")
+    return total, objects
+
+
+def incoming_inventory() -> tuple[int, int, int]:
+    total = 0
+    objects = 0
+    trees = 0
+    for candidate in list(ROOT.iterdir()):
+        if candidate.name == LOCK_NAME:
+            continue
+        if STAGING_RE.fullmatch(candidate.name):
+            raise ValueError("abandoned upload staging was not cleaned")
+        if not SHA_RE.fullmatch(candidate.name):
+            raise ValueError(f"unexpected object in incoming: {candidate.name}")
+        usage, count = tree_usage(candidate)
+        if count == 0:
+            continue
+        trees += 1
+        total += usage
+        objects += count
+        if trees > MAX_TREES:
+            raise ValueError(f"incoming contains more than {MAX_TREES} upload trees")
+        if objects > MAX_TREES * (MAX_MEMBERS + 1):
+            raise ValueError("incoming namespace exceeds its object limit")
+        if total > MAX_INCOMING_BYTES:
+            raise ValueError("incoming storage exceeds 2 GiB")
+    return trees, total, objects
+
+
+def ensure_upload_budget(
+    existing_bytes: int,
+    expanded_bytes: int,
+    object_count: int,
+    reserve: int,
+) -> None:
+    accounted = existing_bytes + expanded_bytes + object_count * reserve
+    if accounted > MAX_INCOMING_BYTES:
+        raise ValueError("upload would exceed the 2 GiB aggregate incoming limit")
+
+
+def upload(
+    sha: str,
+    stream: BinaryIO | None = None,
+    output: TextIO | None = None,
+) -> None:
     final = ROOT / sha
-    if final.exists() or final.is_symlink():
+    try:
+        final.lstat()
+    except FileNotFoundError:
+        pass
+    else:
         raise ValueError("an upload for this revision already exists; run cleanup first")
+
+    trees, existing_bytes, _ = incoming_inventory()
+    if trees >= MAX_TREES:
+        raise ValueError(f"incoming already contains the maximum of {MAX_TREES} upload trees")
+
     temporary = Path(tempfile.mkdtemp(prefix=f".{sha}.upload.", dir=ROOT))
     seen: set[PurePosixPath] = set()
+    materialized: dict[PurePosixPath, str] = {PurePosixPath(): "directory"}
     count = 0
     expanded = 0
+    reserve = storage_reserve()
+    reader = LimitedReader(stream if stream is not None else sys.stdin.buffer)
     try:
-        with tarfile.open(fileobj=LimitedReader(sys.stdin.buffer), mode="r|*") as archive:
+        with tarfile.open(fileobj=reader, mode="r|*") as archive:
             for member in archive:
                 count += 1
                 if count > MAX_MEMBERS:
@@ -73,51 +292,123 @@ def upload(sha: str) -> None:
                 if name in seen:
                     raise ValueError(f"duplicate archive entry: {name}")
                 seen.add(name)
-                target = temporary.joinpath(*name.parts)
-                target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+
+                new_parents: list[PurePosixPath] = []
+                prefix = PurePosixPath()
+                for component in name.parts[:-1]:
+                    prefix /= component
+                    kind = materialized.get(prefix)
+                    if kind == "file":
+                        raise ValueError(f"archive path traverses a regular file: {name}")
+                    if kind is None:
+                        new_parents.append(prefix)
+
+                existing_kind = materialized.get(name)
                 if member.isdir():
-                    target.mkdir(mode=0o755, exist_ok=True)
-                    continue
-                if not member.isreg():
+                    if member.size != 0:
+                        raise ValueError(f"archive directory has a nonzero size: {name}")
+                    if existing_kind == "file":
+                        raise ValueError(f"archive directory conflicts with a regular file: {name}")
+                    new_target_kind = "directory" if existing_kind is None else None
+                    projected_expanded = expanded
+                elif member.isreg():
+                    if member.size < 0:
+                        raise ValueError(f"archive entry has a negative size: {name}")
+                    if existing_kind is not None:
+                        raise ValueError(f"archive file conflicts with an existing path: {name}")
+                    new_target_kind = "file"
+                    projected_expanded = expanded + member.size
+                    if projected_expanded > MAX_EXPANDED_BYTES:
+                        raise ValueError("archive expands beyond 1 GiB")
+                else:
                     raise ValueError(f"archive entry is not a regular file or directory: {name}")
-                expanded += member.size
-                if expanded > MAX_EXPANDED_BYTES:
-                    raise ValueError("archive expands beyond 1 GiB")
+
+                projected_objects = len(materialized) + len(new_parents) + (1 if new_target_kind else 0)
+                if projected_objects > MAX_MEMBERS + 1:
+                    raise ValueError("archive materializes more than 50000 filesystem objects")
+                ensure_upload_budget(existing_bytes, projected_expanded, projected_objects, reserve)
+
+                for parent in new_parents:
+                    temporary.joinpath(*parent.parts).mkdir(mode=0o755)
+                    materialized[parent] = "directory"
+
+                target = temporary.joinpath(*name.parts)
+                if member.isdir():
+                    if new_target_kind:
+                        target.mkdir(mode=0o755)
+                        materialized[name] = new_target_kind
+                    continue
+                materialized[name] = "file"
+                expanded = projected_expanded
                 source = archive.extractfile(member)
                 if source is None:
                     raise ValueError(f"cannot read archive entry: {name}")
                 mode = 0o755 if member.mode & 0o111 else 0o644
-                with target.open("xb") as output:
+                with target.open("xb") as destination:
                     remaining = member.size
                     while remaining:
                         chunk = source.read(min(1024 * 1024, remaining))
                         if not chunk:
                             raise ValueError(f"truncated archive entry: {name}")
-                        output.write(chunk)
+                        destination.write(chunk)
                         remaining -= len(chunk)
                 os.chmod(target, mode)
 
         required = ("Cargo.lock", "package-lock.json", "package.json", "deploy/systemd/marks.service")
         for relative in required:
             candidate = temporary / relative
-            if not candidate.is_file() or candidate.is_symlink():
-                raise ValueError(f"required source file is missing: {relative}")
+            try:
+                info = candidate.lstat()
+            except FileNotFoundError as error:
+                raise ValueError(f"required source file is missing: {relative}") from error
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise ValueError(f"required source file is missing or unsafe: {relative}")
+
+        staged_bytes, staged_objects = tree_usage(temporary)
+        if staged_objects > MAX_MEMBERS + 1:
+            raise ValueError("staged upload exceeds its object limit")
+        if existing_bytes + staged_bytes > MAX_INCOMING_BYTES:
+            raise ValueError("upload would exceed the 2 GiB aggregate incoming limit")
+
+        # With every competing uploader holding the same validated lock, this
+        # rename publishes one complete tree and can never replace a peer.
+        try:
+            final.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise ValueError("an upload for this revision appeared before publication")
         os.rename(temporary, final)
-        print(f"uploaded {sha}: {count} entries, {expanded} expanded bytes")
+        print(
+            f"uploaded {sha}: {count} entries, {expanded} expanded bytes, "
+            f"{existing_bytes + staged_bytes} aggregate accounted bytes",
+            file=output if output is not None else sys.stdout,
+        )
     except Exception:
         remove_tree(temporary)
         raise
 
 
+def perform(
+    action: str,
+    sha: str,
+    stream: BinaryIO | None = None,
+    output: TextIO | None = None,
+) -> None:
+    with locked_incoming():
+        removed = cleanup_staging()
+        if action == "upload":
+            upload(sha, stream, output)
+        else:
+            remove_tree(ROOT / sha)
+            suffix = f"; removed {removed} abandoned staging tree(s)" if removed else ""
+            print(f"cleaned {sha}{suffix}", file=output if output is not None else sys.stdout)
+
+
 def main() -> None:
     if len(sys.argv) != 3 or sys.argv[1] not in ("upload", "cleanup"):
         raise SystemExit("usage: marks-upload upload|cleanup <40-char-sha>")
-    sha = revision(sys.argv[2])
-    if sys.argv[1] == "upload":
-        upload(sha)
-    else:
-        remove_tree(ROOT / sha)
-        print(f"cleaned {sha}")
+    perform(sys.argv[1], revision(sys.argv[2]))
 
 
 if __name__ == "__main__":

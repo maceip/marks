@@ -13,7 +13,11 @@ test('scheduled proof uses the current service boundary and explicit rendering b
   assert.match(workflow, /^\s*schedule:\s*$/m);
   assert.match(workflow, /^\s*workflow_dispatch:\s*$/m);
   assert.match(workflow, /^\s*push:\s*$/m);
-  assert.match(workflow, /VITE_MARKS_DATA_MODE=service VITE_MARKS_TEST_SERVICE_WORKER=1 npm run build/);
+  assert.match(workflow, /scripts\/product-variant\.ts resolve/);
+  assert.match(workflow, /--variant stable --data-mode service --format canonical --require-deployable/);
+  assert.match(workflow, /npm run build:variant/);
+  assert.match(workflow, /MARKS_BUILD_PLAN_SHA256/);
+  assert.match(workflow, /MARKS_EXPECT_PRODUCT_VARIANT=stable/);
   assert.match(workflow, /scripts\/run-service-ci\.sh --bin target\/release\/marks-server/);
   assert.match(workflow, /npm run measure --/);
   assert.match(workflow, /--budget-first-ms 15000/);

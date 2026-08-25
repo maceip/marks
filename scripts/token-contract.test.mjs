@@ -45,21 +45,34 @@ test('component CSS honors the semantic token contract', async () => {
   assert.deepEqual(violations, [], violations.join('\n'));
 });
 
-const requiredTokens = [
+const requiredSharedTokens = [
   '--color-primary', '--color-secondary', '--color-tertiary', '--color-destructive',
   '--color-success', '--color-warning', '--color-info', '--color-focus-ring',
   '--elevation-xs', '--elevation-xl', '--elevation-overlay',
   '--radius-tight', '--radius-sheet',
   '--interact-press-translate', '--interact-icon-tilt',
-  '--motion-agent-shell-enter', '--motion-agent-content-delay', '--motion-agent-status-pulse', '--motion-agent-highlight',
   '--color-reader-page', '--color-reader-text', '--color-reader-border', '--color-reader-muted',
   '--surface-quality', '--material-shader-mix', '--glass-blur-chrome',
+];
+
+const requiredAgentTokens = [
+  '--motion-agent-shell-enter', '--motion-agent-content-delay',
+  '--motion-agent-status-pulse', '--motion-agent-highlight',
 ];
 
 test('tokens.css publishes the August 2026 intent, elevation, radius, and material set', async () => {
   const tokens = await readFile(new URL('../client/src/styles/tokens.css', import.meta.url), 'utf8');
   const foundation = await readFile(new URL('../client/src/styles/foundation-tokens.css', import.meta.url), 'utf8');
   const source = `${tokens}\n${foundation}`;
-  const missing = requiredTokens.filter((token) => !source.includes(`${token}:`));
+  const missing = requiredSharedTokens.filter((token) => !source.includes(`${token}:`));
   assert.deepEqual(missing, [], `missing tokens: ${missing.join(', ')}`);
+});
+
+test('agent-only motion tokens remain in the lazy agent stylesheet', async () => {
+  const sharedTokens = await readFile(new URL('../client/src/styles/tokens.css', import.meta.url), 'utf8');
+  const agentStyles = await readFile(new URL('../client/src/components/agent/agent-chat.css', import.meta.url), 'utf8');
+  const missing = requiredAgentTokens.filter((token) => !agentStyles.includes(`${token}:`));
+  const leaked = requiredAgentTokens.filter((token) => sharedTokens.includes(`${token}:`));
+  assert.deepEqual(missing, [], `missing agent-owned tokens: ${missing.join(', ')}`);
+  assert.deepEqual(leaked, [], `agent-only tokens leaked into shared CSS: ${leaked.join(', ')}`);
 });

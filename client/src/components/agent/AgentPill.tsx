@@ -25,12 +25,11 @@ import type {
 import { useCommandCenter } from '../../commands/context.tsx';
 import { getCommand } from '../../commands/registry.ts';
 import type { CommandReceipt, CommandRun } from '../../commands/types.ts';
-import { RIBBON_WILD_ENABLED } from '../../lib/product.ts';
 import { Glyph } from '../glyphs/Glyph';
 import { Icon, SurfaceMaterial } from '../ui';
 import '../../styles/agent.css';
 
-const SUGGESTIONS = RIBBON_WILD_ENABLED
+const SUGGESTIONS = __MARKS_FEATURES__.ribbonWild
   ? [
       'Check document health',
       'What should I do next?',
@@ -75,9 +74,10 @@ export interface AgentPillProps {
   documentId: string;
   /** A command opened a companion inspector; keep the running receipt visible without covering it. */
   linkedSurface?: string | null;
+  linkedPanelSize?: 'standard' | 'wide' | null;
 }
 
-export function AgentPill({ documentId, linkedSurface = null }: AgentPillProps) {
+export function AgentPill({ documentId, linkedSurface = null, linkedPanelSize = null }: AgentPillProps) {
   const center = useCommandCenter();
   const [input, setInput] = useState('');
   const [expanded, setExpanded] = useState(false);
@@ -377,7 +377,7 @@ export function AgentPill({ documentId, linkedSurface = null }: AgentPillProps) 
       });
       return;
     }
-    const tools = toHostedAgentTools(center.agentTools, advertised.limits);
+    const tools = toHostedAgentTools(center.agentTools ?? [], advertised.limits);
     if (!tools.length) {
       setPlan({ request, steps: [], message: 'No agent-safe ribbon commands are available in this context.' });
       return;
@@ -521,7 +521,7 @@ export function AgentPill({ documentId, linkedSurface = null }: AgentPillProps) 
 
   return (
     <aside
-      className={`agent-pill surface-material-host${expanded ? ' expanded' : ''}${busy || pending.length ? ' active' : ''}${linkedSurface ? ' inspector-linked' : ''}${phoneMinimized ? ' phone-minimized' : ''}`}
+      className={`agent-pill surface-material-host${expanded ? ' expanded' : ''}${busy || pending.length ? ' active' : ''}${linkedSurface ? ' inspector-linked' : ''}${linkedPanelSize ? ` inspector-${linkedPanelSize}` : ''}${phoneMinimized ? ' phone-minimized' : ''}`}
       data-linked-surface={linkedSurface ?? undefined}
       aria-label="Marks command agent"
     >

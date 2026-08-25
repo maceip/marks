@@ -215,52 +215,6 @@
 
 .ribbon-tab .ribbon-keytip { bottom: -7px; right: 50%; transform: translateX(50%); }
 
-.agent-tab-dot {
-  display: inline-block;
-  width: 5px;
-  height: 5px;
-  margin-left: 4px;
-  border-radius: 50%;
-  background: var(--color-brand-positive);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-brand-positive) 16%, transparent);
-}
-
-.ribbon-command.agent-raised,
-.style-chip.agent-raised,
-.quick-access .agent-raised {
-  border-color: color-mix(in srgb, var(--color-brand-positive) 52%, var(--material-border));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-brand-positive) 14%, transparent), var(--material-elevation);
-}
-
-.ribbon-command.agent-running::after {
-  position: absolute;
-  inset: -3px;
-  border: 2px solid var(--color-brand-positive);
-  border-radius: inherit;
-  content: '';
-  animation: agent-command-pulse var(--motion-agent-command-pulse) ease-in-out infinite alternate;
-  pointer-events: none;
-}
-
-.ribbon-command.agent-awaiting-approval::after {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  width: 12px;
-  height: 12px;
-  border: 2px solid var(--color-bg-surface);
-  border-radius: 50%;
-  background: var(--color-feedback-warning);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-feedback-warning) 18%, transparent);
-  content: '';
-  pointer-events: none;
-}
-
-@keyframes agent-command-pulse {
-  from { opacity: .28; transform: scale(.98); }
-  to { opacity: .9; transform: scale(1.03); }
-}
-
 .quick-access-customize {
   width: 16px;
   padding: 0;
@@ -305,10 +259,6 @@
 }
 .quick-access-menu button:hover { background: var(--color-bg-raised); }
 .quick-access-menu .quick-access-profile { grid-template-columns: 1fr; border-top: 1px solid var(--material-border); color: var(--color-action); }
-
-@media (prefers-reduced-motion: reduce) {
-  .ribbon-command.agent-running::after { animation: none; opacity: .8; }
-}
 
 /* Flyouts temporarily escape the deck's scroll clipping while remaining
    contained by the measured ribbon rather than the trigger group. */
@@ -611,7 +561,6 @@
 .phone-category-all small { overflow: hidden; color: var(--color-fg-subtle); font-size: 8px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
 .phone-category-grid > button > b { color: var(--color-fg-subtle); font-size: 13px; text-align: center; }
 .phone-category-grid > button[aria-pressed='true'] > b { color: var(--color-action); }
-.phone-category-grid .agent-tab-dot { position: absolute; top: 6px; right: 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--color-brand-positive); }
 .phone-category-all { position: relative; z-index: 1; grid-template-columns: 34px minmax(0, 1fr); margin: 0 7px 7px; border-color: var(--material-border); }
 
 .phone-composer.keyboard-open .phone-ribbon {

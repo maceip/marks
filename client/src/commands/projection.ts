@@ -46,6 +46,11 @@ const TAB_ORDER: RibbonTabId[] = [
 ];
 
 const ESSENTIAL_TABS = new Set<RibbonTabId>(['import', 'login', 'file', 'home', 'insert', 'review', 'view']);
+// Node unit tests exercise the complete projection contract without Vite.
+// Browser builds replace both sentinels, leaving the catalog property as a
+// literal so stable artifacts erase the agent-only projection shape.
+const AGENT_CHAT_PROJECTION_ENABLED = typeof __MARKS_VITE_BUILD__ === 'undefined'
+  || __MARKS_FEATURES__.agentChat;
 
 /** A phone deck is a focused Office-mobile command row, not a shrunken desktop tab. */
 const PHONE_ESSENTIAL_COMMANDS = new Set<CommandId>([
@@ -300,7 +305,9 @@ export function projectCommands(
   surface: CommandSurface,
   options: ProjectionOptions = {},
 ): ProjectedCommand[] {
-  const raised = options.agentRaised ?? new Set<CommandId>();
+  const raised = AGENT_CHAT_PROJECTION_ENABLED
+    ? options.agentRaised ?? new Set<CommandId>()
+    : null;
   return COMMANDS.flatMap((command) => {
     const availability = commandAvailability(command, environment, surface);
     if (!availability.visible) return [];
@@ -309,7 +316,7 @@ export function projectCommands(
       enabled: availability.enabled,
       unavailableReason: availability.reason,
       pressed: pressed(command, environment),
-      agentRaised: raised.has(command.id),
+      ...(AGENT_CHAT_PROJECTION_ENABLED ? { agentRaised: raised?.has(command.id) ?? false } : {}),
     }];
   });
 }
@@ -320,7 +327,7 @@ export function composeRibbon(
 ): ProjectedRibbonTab[] {
   const expanded = options.expanded ?? false;
   const projected = projectCommands(environment, options.surface ?? 'ribbon', options).filter((command) => {
-    if (expanded || command.contextual || command.agentRaised) return true;
+    if (expanded || command.contextual || (AGENT_CHAT_PROJECTION_ENABLED && command.agentRaised)) return true;
     if (options.surface === 'phone') return PHONE_ESSENTIAL_COMMANDS.has(command.id);
     if (!ESSENTIAL_TABS.has(command.tab)) return false;
     return command.priority >= 54;
@@ -344,7 +351,9 @@ export function composeRibbon(
       label,
       priority: Math.max(...commands.map((command) => command.priority)),
       contextual: commands.some((command) => command.contextual),
-      agentRaised: commands.some((command) => command.agentRaised),
+      ...(AGENT_CHAT_PROJECTION_ENABLED ? {
+        agentRaised: commands.some((command) => command.agentRaised),
+      } : {}),
       commands: commands.sort((a, b) => b.priority - a.priority),
     })).sort((a, b) => {
       const aOrder = preferredGroups.indexOf(a.label);
@@ -360,7 +369,9 @@ export function composeRibbon(
       id: tabId,
       label: TAB_LABELS[tabId],
       contextual: projectedGroups.some((group) => group.contextual),
-      agentRaised: projectedGroups.some((group) => group.agentRaised),
+      ...(AGENT_CHAT_PROJECTION_ENABLED ? {
+        agentRaised: projectedGroups.some((group) => group.agentRaised),
+      } : {}),
       groups: projectedGroups,
     }];
   });

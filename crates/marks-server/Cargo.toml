@@ -6,6 +6,12 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+# Shipping variants select server capabilities explicitly. Keeping the default
+# empty makes a plain/stable build physically omit the hosted-agent gateway.
+default = []
+agent-chat = ["dep:async-trait"]
+
 [dependencies]
 marks-auth = { path = "../marks-auth" }
 # The authoritative ESBT sequence CRDT (Mechaoui & Imine, arXiv:2607.28101).
@@ -14,7 +20,7 @@ esbt = { git = "https://github.com/maceip/ESBT-web", rev = "40a1771343a08d8d74a7
 
 axum = { version = "0.8", features = ["ws"] }
 aho-corasick = "1"
-async-trait = "0.1"
+async-trait = { version = "0.1", optional = true }
 bytes = "1"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io", "rt"] }
@@ -42,3 +48,12 @@ zip = { version = "4", default-features = false, features = ["deflate"] }
 [dev-dependencies]
 p256.workspace = true
 tokio-tungstenite = "0.28"
+
+[build-dependencies]
+serde_json = "1"
+sha2.workspace = true
+
+[[test]]
+name = "agent_gateway"
+path = "tests/agent_gateway.rs"
+required-features = ["agent-chat"]

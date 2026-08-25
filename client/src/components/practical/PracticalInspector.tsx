@@ -35,7 +35,7 @@ import { createMarkdownIt } from '../../markdown/md.ts';
 import { formatBytes } from '../../lib/format.ts';
 import type { DocumentAssetDto, DocumentMeta, ExternalLinkCheckDto } from '../../lib/api.ts';
 import { loadServiceApi } from '../../lib/service-api.ts';
-import { AGENT_CHAT_ENABLED, UI_DATA_MODE } from '../../lib/product.ts';
+import { UI_DATA_MODE } from '../../lib/product.ts';
 import { PRACTICAL_SURFACES } from '../../lib/practical-surfaces.ts';
 import type { Shell } from '../../lib/posture.ts';
 import type { ViewMode } from '../shell/TopBar.tsx';
@@ -206,7 +206,7 @@ function FindingSurface({
         <div className="exposure-map">
           <span><i className="exposure-local" />Markdown analysis stays in this browser worker</span>
           <span><i className="exposure-explicit" />External link and citation lookups run only when pressed</span>
-          {AGENT_CHAT_ENABLED && (
+          {__MARKS_FEATURES__.agentChat && (
             <span><i className="exposure-agent" />Hosted agent receives pill prompts and command schemas, never document source</span>
           )}
         </div>

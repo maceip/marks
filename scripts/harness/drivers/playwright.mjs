@@ -1,13 +1,19 @@
-import { chromium } from 'playwright';
+import { chromium, firefox, webkit } from 'playwright';
 import { discoverChrome } from '../chrome.mjs';
 import { CHROME_LAUNCH_ARGS, DEFAULT_VIEWPORT, launchEnv, resolveAppUrl } from '../env.mjs';
 
 export async function launch(options = {}) {
-  const chrome = options.chrome ?? discoverChrome();
-  const executablePath = options.executablePath ?? process.env.CHROMIUM_PATH ?? undefined;
-  const browser = await chromium.launch({
-    executablePath,
-    args: CHROME_LAUNCH_ARGS,
+  const browserName = process.env.MARKS_BROWSER ?? 'chromium';
+  const browserType = { chromium, firefox, webkit }[browserName];
+  if (!browserType) {
+    throw new Error(`MARKS_BROWSER must be chromium, firefox, or webkit (got ${browserName})`);
+  }
+  const chrome = browserName === 'chromium' ? options.chrome ?? discoverChrome() : null;
+  const executablePath = browserName === 'chromium'
+    ? options.executablePath ?? process.env.CHROMIUM_PATH ?? undefined
+    : undefined;
+  const browser = await browserType.launch({
+    ...(browserName === 'chromium' ? { executablePath, args: CHROME_LAUNCH_ARGS } : {}),
     env: launchEnv(),
     headless: options.headless !== false,
   });
@@ -15,13 +21,14 @@ export async function launch(options = {}) {
     viewport: options.viewport ?? DEFAULT_VIEWPORT,
   });
   const page = await context.newPage();
-  return wrap({ browser, context, page, base: options.base, chrome });
+  return wrap({ browser, context, page, base: options.base, chrome, browserName });
 }
 
-export function wrap({ browser, context, page, base, chrome }) {
+export function wrap({ browser, context, page, base, chrome, browserName = 'chromium' }) {
   return {
     name: 'playwright',
     engine: 'playwright',
+    browserName,
     page,
     chromeHint: chrome?.playwright ?? chrome?.automation ?? null,
     async goto(path = '/') {

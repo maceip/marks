@@ -7,6 +7,7 @@
 //! supplies what those deliberately leave out: HTTP, randomness, storage,
 //! transactions, rate limits, rooms, and live-socket revocation.
 
+#[cfg(feature = "agent-chat")]
 pub mod agent;
 pub mod app;
 pub mod artifact;
@@ -105,19 +106,22 @@ pub async fn serve(
     }
 
     let _ = heartbeat_stop.send(true);
-    let agent_app = app.clone();
-    let agent_shutdown = tokio::spawn(async move {
-        agent_app.agents.shutdown().await;
-    });
     let room_app = app.clone();
     let room_shutdown = tokio::spawn(async move {
         room_app.rooms.shutdown().await;
     });
     let mut owners = vec![
         ("database heartbeat", heartbeat),
-        ("agent hub", agent_shutdown),
         ("document rooms", room_shutdown),
     ];
+    #[cfg(feature = "agent-chat")]
+    {
+        let agent_app = app.clone();
+        let agent_shutdown = tokio::spawn(async move {
+            agent_app.agents.shutdown().await;
+        });
+        owners.push(("agent hub", agent_shutdown));
+    }
     if let Some(backup) = backup {
         owners.push(("backup", backup));
     }

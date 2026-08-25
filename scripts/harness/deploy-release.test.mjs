@@ -18,6 +18,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const localScript = resolve(root, 'scripts/deploy-secure-build.sh');
 const releaseRoot = resolve(root, 'deploy/host/marks-release-root');
 const productionWorkflow = resolve(root, '.github/workflows/production.yml');
+const ciWorkflow = resolve(root, '.github/workflows/ci.yml');
 
 function runBash(script, args = [], options = {}) {
   return spawnSync('/bin/bash', [script, ...args], {
@@ -31,10 +32,14 @@ test('operator entry point documents deploy, status, and one-command rollback', 
   const result = runBash(localScript, ['--help']);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /deploy-secure-build\.sh deploy/);
-  assert.match(result.stdout, /deploy-secure-build\.sh deploy-verified <revision>/);
+  assert.match(
+    result.stdout,
+    /deploy-secure-build\.sh deploy-verified <revision> <product-variant> <build-plan-sha256>/,
+  );
   assert.match(result.stdout, /deploy-secure-build\.sh rollback \[release-id\]/);
   assert.match(result.stdout, /automatically restore a failed\s+activation/);
   assert.match(result.stdout, /remote command grammar are fixed/);
+  assert.match(result.stdout, /fixed to the checked-in stable variant/);
   assert.doesNotMatch(result.stdout, /--skip-tests/);
 });
 
@@ -44,7 +49,7 @@ test('deployment client uses only the fixed Marks restricted protocol', () => {
   assert.match(entryPoint, /probe\|upload\|cleanup\|deploy\|rollback\|status\|releases/);
   assert.match(entryPoint, /restricted_command probe/);
   assert.match(entryPoint, /git -C "\$ROOT" archive --format=tar "\$revision"[\s\\]+\n\s*\| restricted_command upload "\$revision"/);
-  assert.match(entryPoint, /restricted_command deploy "\$revision"/);
+  assert.match(entryPoint, /restricted_command deploy "\$revision" "\$variant" "\$plan_digest"/);
   assert.match(entryPoint, /restricted_command cleanup "\$STAGED_REVISION"/);
   assert.match(entryPoint, /ClearAllForwardings=yes/);
   assert.match(entryPoint, /RequestTTY=no/);
@@ -73,14 +78,63 @@ test('GitHub production deploy follows only successful same-repository main CI',
   assert.match(workflow, /run: npm run deploy:secure-build/);
   assert.match(workflow, /scripts\/deploy-secure-build\.sh deploy-verified/);
   assert.match(workflow, /MARKS_CI_VERIFIED_SHA/);
+  assert.match(workflow, /^\s*timeout-minutes: 300\s*$/m);
+  assert.match(workflow, /MARKS_CI_VERIFIED_VARIANT/);
+  assert.match(workflow, /MARKS_CI_VERIFIED_PLAN_SHA256/);
+  assert.match(workflow, /scripts\/product-variant\.ts resolve/);
+  assert.match(workflow, /variant=stable/);
+  assert.match(workflow, /steps\.product\.outputs\.build_plan_sha256/);
   assert.match(workflow, /MARKS_CI_RUN_ID/);
   assert.match(workflow, /node scripts\/ci-impact\.mjs/);
   assert.match(workflow, /steps\.impact\.outputs\.should_deploy == 'true'/);
   assert.match(workflow, /Skip application deployment when no runtime artifact changed/);
   assert.match(workflow, /^\s*environment:\s*\n\s*name: Production$/m);
-  assert.match(workflow, /^\s*group: marks-production$/m);
-  assert.match(workflow, /^\s*cancel-in-progress: false$/m);
-  assert.match(workflow, /^permissions:\s*\n\s*contents: read$/m);
+  assert.match(
+    workflow,
+    /^\s*group: \$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.operation == 'rollback' && 'marks-production-rollback' \|\| 'marks-production-standard' \}\}$/m,
+  );
+  assert.match(
+    workflow,
+    /^\s*cancel-in-progress: \$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.operation == 'rollback' \}\}$/m,
+  );
+  assert.doesNotMatch(workflow, /^\s*cancel-in-progress: (?:true|false)$/m);
+  assert.match(workflow, /^permissions: \{\}$/m);
+  assert.match(workflow, /^\s{4}permissions:\s*\n\s{6}contents: read\s*\n(?:\s{6}#[^\n]*\n)+\s{6}actions: write$/m);
+  assert.match(workflow, /^\s*persist-credentials: false$/m);
+});
+
+test('CI proves shipping and independent feature variants from canonical isolated cuts', () => {
+  const workflow = readFileSync(ciWorkflow, 'utf8');
+  assert.match(workflow, /scripts\/product-variant\.ts list/);
+  assert.match(workflow, /product_variant_matrix: \$\{\{ steps\.variants\.outputs\.matrix \}\}/);
+  assert.match(
+    workflow,
+    /matrix: \$\{\{ fromJSON\(needs\.impact\.outputs\.product_variant_matrix\) \}\}/,
+  );
+  assert.match(workflow, /if \(!deployable\) return \[\{ variant: name, browser: "chromium" \}\]/);
+  assert.match(workflow, /name === "stable"[\s\S]*\["chromium"\][\s\S]*\["chromium", "firefox", "webkit"\]/);
+  assert.match(workflow, /MARKS_BROWSER: \$\{\{ matrix\.browser \}\}/);
+  assert.match(workflow, /playwright install --with-deps "\$MARKS_BROWSER"/);
+  assert.match(workflow, /scripts\/product-variant\.ts resolve/);
+  assert.match(workflow, /client\/dist-variants\/\$REQUESTED_VARIANT\/service-\$\{digest:0:16\}/);
+  assert.match(workflow, /MARKS_EXPECT_PRODUCT_VARIANT/);
+  assert.match(workflow, /MARKS_EXPECT_BUILD_PLAN_SHA256/);
+  assert.match(workflow, /marks-product-build\.json/);
+  assert.match(workflow, /steps\.plan\.outputs\.deployable == 'true'/);
+  assert.doesNotMatch(
+    workflow,
+    /steps\.plan\.outputs\.deployable == 'false'/,
+    'validation-only plans must still run their structural server test and lint cuts',
+  );
+  assert.match(workflow, /cargo build -p marks-server --release --locked/);
+  assert.match(workflow, /target\/debug\/marks-server/);
+  assert.match(workflow, /MARKS_VARIANT_DEPLOYABLE === "true"/);
+  assert.match(workflow, /artifact\.staticBuildPlanVerified !== true/);
+  assert.match(
+    workflow,
+    /Enforce product feature source and catalog contracts[\s\S]*product-feature-source-contract\.test\.mjs/,
+  );
+  assert.match(workflow, /needs: \[impact, test, service-collab, product-variants\]/);
 });
 
 test('GitHub fast rollback is manual, serialized, pinned, and does not rebuild', () => {
@@ -88,7 +142,7 @@ test('GitHub fast rollback is manual, serialized, pinned, and does not rebuild',
   assert.match(workflow, /^\s*workflow_dispatch:\s*$/m);
   assert.match(workflow, /^\s*default: rollback$/m);
   assert.match(workflow, /bash scripts\/deploy-secure-build\.sh rollback "\$RELEASE_ID"/);
-  assert.match(workflow, /bash scripts\/deploy-secure-build\.sh rollback\s*$/m);
+  assert.match(workflow, /bash scripts\/deploy-secure-build\.sh rollback 2>&1/);
   assert.match(workflow, /secrets\.MARKS_DEPLOY_SSH_KEY/);
   assert.match(workflow, /secrets\.MARKS_DEPLOY_KNOWN_HOSTS/);
   assert.match(workflow, /StrictHostKeyChecking yes/);
@@ -96,7 +150,11 @@ test('GitHub fast rollback is manual, serialized, pinned, and does not rebuild',
   assert.match(workflow, /User marks-deploy/);
   assert.match(workflow, /ClearAllForwardings yes/);
   assert.match(workflow, /RequestTTY no/);
-  assert.match(workflow, /ssh -o ConnectTimeout=15 secure\.build probe/);
+  assert.match(workflow, /REQUESTED_OPERATION: \$\{\{ steps\.request\.outputs\.operation \}\}/);
+  assert.match(
+    workflow,
+    /if \[\[ "\$REQUESTED_OPERATION" == deploy \]\]; then[\s\S]*ssh -o ConnectTimeout=15 secure\.build probe[\s\S]*else[\s\S]*ssh -o ConnectTimeout=15 secure\.build status >\/dev\/null/,
+  );
   assert.match(workflow, /eval "\$\(ssh-agent -s\)"/);
   assert.match(workflow, /ssh-add "\$key_path"/);
   assert.match(workflow, /rm -f -- "\$key_path"/);
@@ -121,6 +179,99 @@ test('GitHub fast rollback is manual, serialized, pinned, and does not rebuild',
     workflow.indexOf('- name: Show production status'),
   );
   assert.doesNotMatch(rollbackStep, /npm|cargo|playwright|deploy-secure-build\.sh deploy/);
+  assert.match(
+    rollbackStep,
+    /lock_error='marks-release-root: another Marks deployment or rollback holds the release lock'/,
+  );
+  assert.match(rollbackStep, /rollback_retry_deadline_seconds=300/);
+  assert.match(rollbackStep, /rollback_retry_deadline=\$\(\(SECONDS \+ rollback_retry_deadline_seconds\)\)/);
+  assert.match(rollbackStep, /if \[\[ "\$rollback_output" != "\$lock_error" \]\]; then\s+exit "\$rollback_status"/);
+  assert.match(rollbackStep, /if \(\( SECONDS >= rollback_retry_deadline \)\); then/);
+  assert.match(rollbackStep, /rollback_retry_delay=20/);
+  assert.doesNotMatch(rollbackStep, /grep|=~[^\n]*lock_error|\*\$lock_error/);
+});
+
+test('two concurrency lanes and API gates preserve rollback priority across interleavings', () => {
+  const workflow = readFileSync(productionWorkflow, 'utf8');
+  const runName = workflow.match(/^run-name: (.+)$/m);
+  const group = workflow.match(/^\s*group: (.+)$/m);
+  const cancellation = workflow.match(/^\s*cancel-in-progress: (.+)$/m);
+  assert.ok(runName && group && cancellation);
+  assert.equal(
+    runName[1],
+    "${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'rollback' && 'Production rollback' || 'Production standard' }}",
+  );
+  assert.equal(
+    group[1],
+    "${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'rollback' && 'marks-production-rollback' || 'marks-production-standard' }}",
+  );
+  assert.equal(
+    cancellation[1],
+    "${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'rollback' }}",
+  );
+
+  const route = (eventName, operation) => {
+    const rollback = eventName === 'workflow_dispatch' && operation === 'rollback';
+    return {
+      group: rollback ? 'marks-production-rollback' : 'marks-production-standard',
+      cancel: rollback,
+    };
+  };
+  assert.deepEqual(route('workflow_dispatch', 'rollback'), {
+    group: 'marks-production-rollback', cancel: true,
+  });
+  assert.deepEqual(route('workflow_dispatch', 'deploy'), {
+    group: 'marks-production-standard', cancel: false,
+  });
+  assert.deepEqual(route('workflow_run', 'deploy'), {
+    group: 'marks-production-standard', cancel: false,
+  });
+  assert.doesNotMatch(workflow, /^\s*group: marks-production$/m);
+
+  const preempt = workflow.slice(
+    workflow.indexOf('- name: Preempt standard production runs for rollback'),
+    workflow.indexOf('- name: Wait for rollback priority before deploy'),
+  );
+  const deployWait = workflow.slice(
+    workflow.indexOf('- name: Wait for rollback priority before deploy'),
+    workflow.indexOf('- name: Check out the trusted production revision'),
+  );
+  assert.match(preempt, /if: github\.event_name == 'workflow_dispatch' && inputs\.operation == 'rollback'/);
+  assert.match(preempt, /GH_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.match(preempt, /select\(\.display_title == "Production standard"\)/);
+  assert.match(preempt, /select\(\.status != "completed"\)/);
+  assert.match(preempt, /actions\/runs\/\$run_id\/cancel/);
+  assert.match(preempt, /declare -A cancellation_requested=\(\)/);
+  assert.match(preempt, /cancellation_requested\[\$run_id\]=1/);
+  assert.match(preempt, /while :; do[\s\S]*standard_runs_json=\$\(list_standard_runs\)[\s\S]*for run_id in "\$\{standard_run_ids\[@\]\}"; do[\s\S]*\/cancel/);
+  assert.match(preempt, /cancellation_deadline_seconds=120/);
+  assert.match(deployWait, /if: github\.event_name == 'workflow_run' \|\| inputs\.operation == 'deploy'/);
+  assert.match(deployWait, /GH_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.match(deployWait, /select\(\.display_title == "Production rollback"\)/);
+  assert.match(deployWait, /select\(\.status != "completed"\)/);
+  assert.match(deployWait, /rollback_priority_deadline_seconds=900/);
+  assert.equal((workflow.match(/GH_TOKEN: \$\{\{ github\.token \}\}/g) ?? []).length, 2);
+  assert.equal((workflow.match(/^\s*name: Production$/gm) ?? []).length, 1);
+});
+
+test('workflow rejects explicit legacy, revision-only, and non-stable rollback targets', () => {
+  const workflow = readFileSync(productionWorkflow, 'utf8');
+  const requestStep = workflow.slice(
+    workflow.indexOf('- name: Resolve and validate the production request'),
+    workflow.indexOf('- name: Setup Node.js v24'),
+  );
+  const match = requestStep.match(/release_id_pattern='([^']+)'/);
+  assert.ok(match, 'request validation must declare one explicit release identity pattern');
+  const releaseId = new RegExp(match[1]);
+  const revision = 'a'.repeat(40);
+  const digest = 'b'.repeat(64);
+
+  assert.match(`${revision}.stable.${digest}`, releaseId);
+  assert.doesNotMatch(revision, releaseId);
+  assert.doesNotMatch('legacy-20260825T120000Z', releaseId);
+  assert.doesNotMatch(`${revision}.beta.${digest}`, releaseId);
+  assert.match(requestStep, /\[\[ -n "\$release_id" && ! "\$release_id" =~ \$release_id_pattern \]\]/);
+  assert.match(requestStep, /leave it empty to select previous/);
 });
 
 test('systemd always resolves the binary and static bundle through one release link', () => {
@@ -171,6 +322,49 @@ test('status sends one fixed read-only request to the restricted account', () =>
   }
 });
 
+test('public verification rejects a readiness receipt for another build plan', () => {
+  const fixture = realpathSync(mkdtempSync(resolve(tmpdir(), 'marks-ready-receipt-test.')));
+  const revision = 'a'.repeat(40);
+  const digest = 'b'.repeat(64);
+  const otherDigest = 'c'.repeat(64);
+  try {
+    const fakeSsh = resolve(fixture, 'ssh');
+    const fakeCurl = resolve(fixture, 'curl');
+    writeFileSync(fakeSsh, `#!/usr/bin/env bash
+cat <<'EOF'
+current:  ${revision}.stable.${digest}
+previous:
+revision: ${revision}
+product-variant: stable
+build-plan-sha256: ${digest}
+EOF
+`);
+    writeFileSync(fakeCurl, `#!/usr/bin/env bash
+url=\${!#}
+case "$url" in
+  */healthz) printf '%s\\n' '{"ok":true}' ;;
+  */readyz) printf '%s\\n' '{"ok":true,"productVariant":"stable","buildPlanSha256":"${otherDigest}","staticBuildPlanVerified":true,"releaseReady":true}' ;;
+  */v1/artifact) printf '%s\\n' '{"buildRevision":"${revision}","productVariant":"stable","buildPlanSha256":"${digest}","staticArtifactVerified":true,"staticBuildPlanVerified":true,"profileCoherent":true,"engineCoherent":true,"releaseReady":true,"serverSourceDirty":false,"componentSourceDirty":false}' ;;
+  *) exit 22 ;;
+esac
+`);
+    chmodSync(fakeSsh, 0o755);
+    chmodSync(fakeCurl, 0o755);
+
+    const result = runBash(localScript, ['verify'], {
+      env: {
+        ...process.env,
+        PATH: `${fixture}:${process.env.PATH}`,
+      },
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /public readiness build plan digest is not the active release plan/);
+    assert.match(result.stderr, /public verification failed/);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 test('unsafe rollback identifiers are rejected before SSH', () => {
   const fixture = realpathSync(mkdtempSync(resolve(tmpdir(), 'marks-ssh-reject-test.')));
   try {
@@ -187,10 +381,34 @@ test('unsafe rollback identifiers are rejected before SSH', () => {
       },
     });
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /unsafe remote argument/);
+    assert.match(result.stderr, /not one retained stable v2 release identity/);
     assert.equal(existsSync(invoked), false);
   } finally {
     rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('dot path rollback identifiers are rejected before SSH', () => {
+  for (const identifier of ['.', '..']) {
+    const fixture = realpathSync(mkdtempSync(resolve(tmpdir(), 'marks-ssh-dot-reject-test.')));
+    try {
+      const invoked = resolve(fixture, 'ssh-invoked');
+      const fakeSsh = resolve(fixture, 'ssh');
+      writeFileSync(fakeSsh, '#!/usr/bin/env bash\ntouch "$MARKS_SSH_INVOKED"\n');
+      chmodSync(fakeSsh, 0o755);
+      const result = runBash(localScript, ['rollback', identifier], {
+        env: {
+          ...process.env,
+          MARKS_SSH_INVOKED: invoked,
+          PATH: `${fixture}:${process.env.PATH}`,
+        },
+      });
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /not one retained stable v2 release identity/);
+      assert.equal(existsSync(invoked), false);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
   }
 });
 
@@ -198,16 +416,31 @@ test('deploy-verified cannot be used as a local skip-tests switch', () => {
   const result = runBash(localScript, [
     'deploy-verified',
     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'stable',
+    'b'.repeat(64),
   ], {
     env: {
       ...process.env,
       GITHUB_ACTIONS: '',
       GITHUB_EVENT_NAME: '',
       MARKS_CI_VERIFIED_SHA: '',
+      MARKS_CI_VERIFIED_VARIANT: '',
+      MARKS_CI_VERIFIED_PLAN_SHA256: '',
       MARKS_CI_RUN_ID: '',
     },
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /available only in GitHub Actions/);
   assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /checking restricted deployment protocol/);
+});
+
+test('production deployment is hard-bound to the stable product variant identity', () => {
+  const entryPoint = readFileSync(localScript, 'utf8');
+  const helper = readFileSync(releaseRoot, 'utf8');
+  assert.match(entryPoint, /^TARGET_PRODUCT_VARIANT=stable$/m);
+  assert.match(entryPoint, /resolve_product_variant "\$TARGET_PRODUCT_VARIANT"/);
+  assert.match(entryPoint, /verified product build identity is not the current stable plan/);
+  assert.match(helper, /^TARGET_PRODUCT_VARIANT = "stable"$/m);
+  assert.match(helper, /this deployment target is fixed to \{TARGET_PRODUCT_VARIANT\}/);
+  assert.match(helper, /release_identity\(revision, build\["variant"\], build\["digest"\]\)/);
 });

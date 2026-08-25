@@ -1,0 +1,370 @@
+#!/usr/bin/python3
+"""Fixed, unprivileged SQLite worker for the root release boundary.
+
+The root helper executes this installed root-owned program as the marks service
+uid inside a constrained transient unit. SQLite never parses service-controlled
+bytes with root authority. Paths used by the CLI are fixed sandbox mount points;
+the function parameters exist only for direct unprivileged unit tests.
+"""
+
+import hashlib
+import json
+import os
+import re
+import secrets
+import sqlite3
+import stat
+import sys
+from pathlib import Path
+
+SOURCE = Path("/marks-live/marks.db3")
+SNAPSHOT = Path("/marks-output/snapshot.db3")
+PUBLISH_SOURCE = Path("/marks-input/snapshot.db3")
+BACKUP_ROOT = Path("/marks-live/backups")
+CANARY_SEED = Path("/marks-seed.db3")
+CANARY_DATABASE = Path("/marks-canary/marks.db3")
+CANARY_SERVER = Path("/marks-release/marks-server")
+SCHEMA = "marks.sqlite-worker.v1"
+MAX_DATABASE_BYTES = 512 * 1024**2
+KEEP_PUBLISHED_BACKUPS = 4
+PUBLISH_NAME_RE = re.compile(
+    r"pre-activation-[0-9]{8}T[0-9]{6}Z-[A-Za-z0-9._-]{1,64}\.db3"
+)
+PUBLISH_TEMP_RE = re.compile(
+    r"\.pre-activation-[0-9]{8}T[0-9]{6}Z-[A-Za-z0-9._-]{1,64}\.db3"
+    r"\.tmp\.[0-9a-f]{32}"
+)
+
+
+def fail(message: str) -> None:
+    raise RuntimeError(message)
+
+
+def safe_regular(path: Path, label: str, *, maximum=MAX_DATABASE_BYTES):
+    try:
+        info = path.lstat()
+    except OSError as error:
+        fail(f"{label} is unavailable: {error}")
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        fail(f"{label} is not one regular no-follow file")
+    if info.st_nlink != 1:
+        fail(f"{label} has multiple filesystem links")
+    if info.st_size < 0 or info.st_size > maximum:
+        fail(f"{label} exceeds its {maximum}-byte bound")
+    return info
+
+
+def source_storage_bytes(source: Path) -> int:
+    total = safe_regular(source, "live database").st_size
+    for suffix in ("-wal", "-shm"):
+        sidecar = Path(f"{source}{suffix}")
+        try:
+            info = sidecar.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+            fail(f"live database {suffix} sidecar is unsafe")
+        if info.st_nlink != 1 or info.st_size < 0:
+            fail(f"live database {suffix} sidecar is unsafe")
+        total += info.st_size
+        if total > MAX_DATABASE_BYTES:
+            fail("live SQLite database and sidecars exceed the 512 MiB bound")
+    return total
+
+
+def open_and_inspect(source: Path):
+    source_bytes = source_storage_bytes(source)
+    connection = sqlite3.connect(f"file:{source}?mode=ro", uri=True, timeout=5)
+    try:
+        page_size = int(connection.execute("PRAGMA page_size").fetchone()[0])
+        page_count = int(connection.execute("PRAGMA page_count").fetchone()[0])
+        if page_size <= 0 or page_count < 0 or page_size * page_count > MAX_DATABASE_BYTES:
+            fail("live SQLite logical size exceeds the 512 MiB bound")
+        integrity = connection.execute("PRAGMA integrity_check").fetchone()
+        if integrity is None or integrity[0] != "ok":
+            fail("live SQLite integrity check failed")
+        try:
+            row = connection.execute(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+            ).fetchone()
+            schema_version = int(row[0])
+        except sqlite3.Error:
+            schema_version = 0
+        if schema_version < 0:
+            fail("live SQLite schema version is invalid")
+        return connection, {
+            "schema": SCHEMA,
+            "sourceBytes": source_bytes,
+            "schemaVersion": schema_version,
+        }, page_size
+    except Exception:
+        connection.close()
+        raise
+
+
+def hash_descriptor(descriptor: int, maximum: int) -> str:
+    digest = hashlib.sha256()
+    total = 0
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    while True:
+        block = os.read(descriptor, min(1024 * 1024, maximum + 1 - total))
+        if not block:
+            break
+        total += len(block)
+        if total > maximum:
+            fail("snapshot grew beyond its byte bound")
+        digest.update(block)
+    return digest.hexdigest()
+
+
+def inspect(source: Path = SOURCE):
+    connection, receipt, _page_size = open_and_inspect(source)
+    connection.close()
+    return receipt
+
+
+def snapshot(source: Path = SOURCE, destination: Path = SNAPSHOT):
+    if destination.exists() or destination.is_symlink():
+        fail("snapshot destination already exists")
+    origin, receipt, page_size = open_and_inspect(source)
+    try:
+        copy = sqlite3.connect(destination, timeout=5)
+        try:
+            maximum_pages = MAX_DATABASE_BYTES // page_size
+            observed_limit = int(
+                copy.execute(f"PRAGMA max_page_count={maximum_pages}").fetchone()[0]
+            )
+            if observed_limit > maximum_pages:
+                fail("snapshot page limit was not enforced")
+
+            def progress(_status, _remaining, total):
+                if total < 0 or total * page_size > MAX_DATABASE_BYTES:
+                    fail("snapshot exceeded its logical page bound")
+
+            origin.backup(copy, pages=64, progress=progress)
+            integrity = copy.execute("PRAGMA integrity_check").fetchone()
+            if integrity is None or integrity[0] != "ok":
+                fail("snapshot SQLite integrity check failed")
+        finally:
+            copy.close()
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
+    finally:
+        origin.close()
+
+    info = safe_regular(destination, "snapshot")
+    # The snapshot stays behind a root-only staging parent and is exposed to
+    # the distinct DynamicUser canary only through a read-only bind mount.
+    os.chmod(destination, 0o444)
+    descriptor = os.open(destination, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        digest = hash_descriptor(descriptor, MAX_DATABASE_BYTES)
+    finally:
+        os.close(descriptor)
+    return {
+        **receipt,
+        "snapshotBytes": info.st_size,
+        "sha256": digest,
+    }
+
+
+def publish(name: str, source: Path = PUBLISH_SOURCE, backup_root: Path = BACKUP_ROOT):
+    if not PUBLISH_NAME_RE.fullmatch(name):
+        fail("backup publication name is invalid")
+    try:
+        backup_root.mkdir(mode=0o700, parents=False, exist_ok=True)
+    except OSError as error:
+        fail(f"backup directory is unavailable: {error}")
+    source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+    directory_fd = os.open(backup_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    temporary = f".{name}.tmp.{secrets.token_hex(16)}"
+    destination_fd = None
+    temporary_created = False
+    try:
+        entries = os.listdir(directory_fd)
+        if name in entries:
+            raise FileExistsError(f"published backup already exists: {name}")
+        for entry in entries:
+            if not PUBLISH_TEMP_RE.fullmatch(entry):
+                continue
+            info = os.stat(entry, dir_fd=directory_fd, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or stat.S_ISLNK(info.st_mode)
+                or info.st_nlink not in (1, 2)
+                or (info.st_uid, info.st_gid) != (os.getuid(), os.getgid())
+                or info.st_size < 0
+                or info.st_size > MAX_DATABASE_BYTES
+            ):
+                fail("backup directory contains an unsafe worker temporary")
+            os.unlink(entry, dir_fd=directory_fd)
+
+        retained = []
+        for entry in entries:
+            if not PUBLISH_NAME_RE.fullmatch(entry):
+                continue
+            info = os.stat(entry, dir_fd=directory_fd, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or stat.S_ISLNK(info.st_mode)
+                or info.st_nlink != 1
+                or info.st_size <= 0
+                or info.st_size > MAX_DATABASE_BYTES
+            ):
+                fail("published-backup retention encountered an unsafe object")
+            retained.append(entry)
+        # Make room before the new copy so worker-created backups never exceed
+        # four files or 2 GiB, even transiently. Other service backup formats
+        # are outside this exact-name retention policy.
+        retained.sort(reverse=True)
+        for stale in retained[KEEP_PUBLISHED_BACKUPS - 1:]:
+            os.unlink(stale, dir_fd=directory_fd)
+
+        before = os.fstat(source_fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            fail("published snapshot source is unsafe")
+        if before.st_size < 0 or before.st_size > MAX_DATABASE_BYTES:
+            fail("published snapshot source exceeds its byte bound")
+        destination_fd = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=directory_fd,
+        )
+        temporary_created = True
+        copied = 0
+        digest = hashlib.sha256()
+        while copied < before.st_size:
+            block = os.read(source_fd, min(1024 * 1024, before.st_size - copied))
+            if not block:
+                fail("snapshot source was truncated during publication")
+            remaining = memoryview(block)
+            while remaining:
+                written = os.write(destination_fd, remaining)
+                remaining = remaining[written:]
+            copied += len(block)
+            digest.update(block)
+        if os.read(source_fd, 1):
+            fail("snapshot source grew during publication")
+        after = os.fstat(source_fd)
+        fingerprint = lambda info: (
+            info.st_dev,
+            info.st_ino,
+            info.st_size,
+            info.st_mtime_ns,
+            info.st_ctime_ns,
+        )
+        if fingerprint(before) != fingerprint(after):
+            fail("snapshot source changed during publication")
+        os.fsync(destination_fd)
+        os.close(destination_fd)
+        destination_fd = None
+        os.link(
+            temporary,
+            name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+        os.unlink(temporary, dir_fd=directory_fd)
+        os.fsync(directory_fd)
+        return {
+            "schema": SCHEMA,
+            "published": name,
+            "snapshotBytes": copied,
+            "sha256": digest.hexdigest(),
+        }
+    finally:
+        if destination_fd is not None:
+            os.close(destination_fd)
+        if temporary_created:
+            try:
+                os.unlink(temporary, dir_fd=directory_fd)
+            except FileNotFoundError:
+                pass
+        os.close(directory_fd)
+        os.close(source_fd)
+
+
+def launch_canary(
+    seed: Path = CANARY_SEED,
+    destination: Path = CANARY_DATABASE,
+    server: Path = CANARY_SERVER,
+) -> None:
+    """Copy an optional fixed seed into tmpfs, then exec the fixed candidate."""
+    try:
+        seed_info = seed.lstat()
+    except FileNotFoundError:
+        seed_info = None
+    if seed_info is not None:
+        if (
+            stat.S_ISLNK(seed_info.st_mode)
+            or not stat.S_ISREG(seed_info.st_mode)
+            or seed_info.st_nlink != 1
+            or seed_info.st_size <= 0
+            or seed_info.st_size > MAX_DATABASE_BYTES
+        ):
+            fail("canary seed is unsafe")
+        source_fd = os.open(seed, os.O_RDONLY | os.O_NOFOLLOW)
+        destination_fd = os.open(
+            destination,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+        )
+        try:
+            before = os.fstat(source_fd)
+            copied = 0
+            while copied < before.st_size:
+                block = os.read(source_fd, min(1024 * 1024, before.st_size - copied))
+                if not block:
+                    fail("canary seed was truncated during bounded copy")
+                remaining = memoryview(block)
+                while remaining:
+                    written = os.write(destination_fd, remaining)
+                    remaining = remaining[written:]
+                copied += len(block)
+            if os.read(source_fd, 1):
+                fail("canary seed grew during bounded copy")
+            after = os.fstat(source_fd)
+            fingerprint = lambda info: (
+                info.st_dev, info.st_ino, info.st_size,
+                info.st_mtime_ns, info.st_ctime_ns,
+            )
+            if fingerprint(before) != fingerprint(after):
+                fail("canary seed changed during bounded copy")
+            os.fchmod(destination_fd, 0o600)
+            os.fsync(destination_fd)
+        finally:
+            os.close(destination_fd)
+            os.close(source_fd)
+    server_info = safe_regular(server, "canary server", maximum=256 * 1024**2)
+    if not server_info.st_mode & stat.S_IXUSR:
+        fail("canary server is not executable")
+    os.execv(server, [str(server)])
+
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        fail("missing SQLite worker operation")
+    operation = sys.argv[1]
+    if operation == "inspect" and len(sys.argv) == 2:
+        receipt = inspect()
+    elif operation == "snapshot" and len(sys.argv) == 2:
+        receipt = snapshot()
+    elif operation == "publish" and len(sys.argv) == 3:
+        receipt = publish(sys.argv[2])
+    elif operation == "launch-canary" and len(sys.argv) == 2:
+        launch_canary()
+        return
+    else:
+        fail("unsupported SQLite worker operation")
+    print(json.dumps(receipt, separators=(",", ":"), sort_keys=True))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        print(f"marks-sqlite-worker: {error}", file=sys.stderr)
+        raise SystemExit(2)

@@ -22,6 +22,11 @@ test('inventory covers canonical icons, nested styles, components, and pattern d
   const ribbonOwner = inventory.styles.ownership.find((entry) => entry.family === 'ribbon');
   assert.equal(ribbonOwner.owner, 'client/src/styles/components/ribbon.css');
   assert.ok(ribbonOwner.ownedClasses.includes('ribbon-command'));
+  const agentExtension = ribbonOwner.featureExtensions.find((entry) => entry.owner === 'client/src/styles/agent.css');
+  assert.equal(agentExtension.requiredClassPrefix, 'agent-');
+  assert.ok(agentExtension.qualifiedClasses.includes('ribbon-command'));
+  assert.ok(agentExtension.qualifiedClasses.includes('quick-access'));
+  assert.ok(agentExtension.qualifiedClasses.includes('phone-category-grid'));
 });
 
 test('PNG icon assets carry enforceable dimensions, alpha, and content identities', async () => {

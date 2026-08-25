@@ -38,7 +38,7 @@ import { useTheme } from './hooks/useTheme';
 import { useUiPreferences } from './hooks/useUiPreferences';
 import { EMPTY_SNAPSHOT, type HudSnapshot } from './lib/hud';
 import { LatencyTracker } from './lib/latency';
-import { AGENT_CHAT_ENABLED, RIBBON_WILD_ENABLED, UI_DATA_MODE, UI_MEDIA } from './lib/product';
+import { UI_DATA_MODE, UI_MEDIA } from './lib/product';
 import {
   ghostShiftForDocument,
   resetGhostPositionForDocument,
@@ -73,7 +73,7 @@ const CommandProvider = lazy(() =>
 const AppRail = lazy(() =>
   import('./components/chrome/AppRail').then((module) => ({ default: module.AppRail })),
 );
-const AgentPill = __MARKS_AGENT_CHAT_ENABLED__
+const AgentPill = __MARKS_FEATURES__.agentChat
   ? lazy(() => import('./components/agent/AgentPill').then((module) => ({ default: module.AgentPill })))
   : null;
 const DraftToolsSheet = lazy(() =>
@@ -97,10 +97,10 @@ const PerfHud = lazy(() =>
 const PracticalInspector = lazy(() =>
   import('./components/practical/PracticalInspector').then((module) => ({ default: module.PracticalInspector })),
 );
-const WildStudio = __MARKS_RIBBON_WILD_ENABLED__
+const WildStudio = __MARKS_FEATURES__.ribbonWild
   ? lazy(() => import('./components/wild/WildStudio').then((module) => ({ default: module.WildStudio })))
   : null;
-const WildTelemetry = __MARKS_RIBBON_WILD_ENABLED__
+const WildTelemetry = __MARKS_FEATURES__.ribbonWild
   ? lazy(() => import('./components/wild/WildTelemetry').then((module) => ({ default: module.WildTelemetry })))
   : null;
 
@@ -708,7 +708,7 @@ export function App() {
   const openBenchmark = useCallback(() => {
     setReviewSurface(null);
     setPracticalSurface(null);
-    setWildSurface(null);
+    if (__MARKS_FEATURES__.ribbonWild) setWildSurface(null);
     if (overlayNavigation) setSidebarOpen(false);
     navigate({ name: 'benchmark' });
   }, [navigate, overlayNavigation]);
@@ -738,12 +738,12 @@ export function App() {
       if (practical) {
         if (!docId || !session) return;
         setPracticalSurface(practical);
-        setWildSurface(null);
+        if (__MARKS_FEATURES__.ribbonWild) setWildSurface(null);
         setReviewSurface(null);
         setDraftToolsOpen(false);
         return;
       }
-      const wild = RIBBON_WILD_ENABLED ? wildCapabilityForAction(action) : null;
+      const wild = __MARKS_FEATURES__.ribbonWild ? wildCapabilityForAction(action) : null;
       if (wild) {
         if (!docId || !session) return;
         setWildSurface(wild);
@@ -835,7 +835,7 @@ export function App() {
           }
           setOverlaysMounted(true);
           setPracticalSurface(null);
-          setWildSurface(null);
+          if (__MARKS_FEATURES__.ribbonWild) setWildSurface(null);
           setReviewSurface((current) =>
             current?.type === action ? null : { type: action, documentId: docId, title },
           );
@@ -858,7 +858,7 @@ export function App() {
               setOutlineOpen(false);
               setReviewSurface(null);
               setPracticalSurface(null);
-              setWildSurface(null);
+              if (__MARKS_FEATURES__.ribbonWild) setWildSurface(null);
             } else {
               const restore = focusRestoreRef.current;
               setSidebarOpen(restore?.sidebarOpen ?? !overlayNavigation);
@@ -925,7 +925,7 @@ export function App() {
         case 'draft-tools':
           if (session?.capabilities().edit) {
             setPracticalSurface(null);
-            setWildSurface(null);
+            if (__MARKS_FEATURES__.ribbonWild) setWildSurface(null);
             setDraftToolsOpen(true);
           }
           else notify('Draft tools are read-only', 'Your current role cannot change this document.', 'neutral');
@@ -1028,14 +1028,14 @@ export function App() {
     setOutlineOpen(false);
     setDraftToolsOpen(false);
     setPracticalSurface(null);
-    setWildSurface(null);
+    if (__MARKS_FEATURES__.ribbonWild) setWildSurface(null);
   }, [route.name]);
 
   useEffect(() => {
     setReviewSurface(null);
     setDraftToolsOpen(false);
     setPracticalSurface(null);
-    setWildSurface(null);
+    if (__MARKS_FEATURES__.ribbonWild) setWildSurface(null);
   }, [docId]);
 
   const commandEnvironment = useMemo<CommandEnvironment>(() => ({
@@ -1109,7 +1109,7 @@ export function App() {
 
   const appSurface = (
     <div
-      className={`app route-${route.name}${sidebarOpen && !focusMode && !posture.foldable ? ' with-sidebar' : ''}${focusMode ? ' focus-mode' : ''}${ribbonCollapsed ? ' ribbon-collapsed' : ''}${practicalSurface ? ' practical-open' : ''}${wildSurface ? ' wild-open' : ''}${dragImportActive ? ' drag-import-active' : ''}`}
+      className={`app route-${route.name}${sidebarOpen && !focusMode && !posture.foldable ? ' with-sidebar' : ''}${focusMode ? ' focus-mode' : ''}${ribbonCollapsed ? ' ribbon-collapsed' : ''}${dragImportActive ? ' drag-import-active' : ''}`}
       data-shell={posture.shell}
       data-doc={docId ?? undefined}
       data-marketing={marketingDocument ? 'true' : undefined}
@@ -1431,7 +1431,7 @@ export function App() {
         </Suspense>
       )}
 
-      {RIBBON_WILD_ENABLED && WildStudio && wildSurface && route.name === 'document' && session && (
+      {__MARKS_FEATURES__.ribbonWild && WildStudio && wildSurface && route.name === 'document' && session && (
         <Suspense fallback={null}>
           <WildStudio
             capability={wildSurface}
@@ -1455,7 +1455,7 @@ export function App() {
         </Suspense>
       )}
 
-      {RIBBON_WILD_ENABLED && WildTelemetry && route.name === 'document' && session && (
+      {__MARKS_FEATURES__.ribbonWild && WildTelemetry && route.name === 'document' && session && (
         <Suspense fallback={null}>
           <WildTelemetry
             documentId={route.id}
@@ -1470,9 +1470,13 @@ export function App() {
         </Suspense>
       )}
 
-      {AGENT_CHAT_ENABLED && AgentPill && route.name === 'document' && session && !focusMode && (
+      {__MARKS_FEATURES__.agentChat && AgentPill && route.name === 'document' && session && !focusMode && (
         <Suspense fallback={null}>
-          <AgentPill documentId={route.id} linkedSurface={practicalSurface ?? wildSurface} />
+          <AgentPill
+            documentId={route.id}
+            linkedSurface={practicalSurface ?? (__MARKS_FEATURES__.ribbonWild ? wildSurface : null)}
+            linkedPanelSize={practicalSurface ? 'standard' : (__MARKS_FEATURES__.ribbonWild && wildSurface ? 'wide' : null)}
+          />
         </Suspense>
       )}
 
