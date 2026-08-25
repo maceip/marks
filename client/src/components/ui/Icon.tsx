@@ -181,8 +181,6 @@ export function Icon({
 
     const control = target.closest<HTMLElement>('button') ?? target;
     let hoverBounds: DOMRect | null = null;
-    let pendingPointer: { x: number; y: number } | null = null;
-    let tiltFrame = 0;
     let pressedPointer: number | null = null;
 
     const clearPress = () => {
@@ -196,17 +194,9 @@ export function Icon({
       clearPress();
     };
     const reset = () => {
-      pendingPointer = null;
       hoverBounds = null;
-      if (tiltFrame) window.cancelAnimationFrame(tiltFrame);
-      tiltFrame = 0;
       clearPress();
       clearTilt(target);
-    };
-    const flushTilt = () => {
-      tiltFrame = 0;
-      if (!pendingPointer || !hoverBounds || motionIsReduced()) return;
-      setTilt(target, pendingPointer.x, pendingPointer.y, hoverBounds);
     };
     const queueTilt = (event: PointerEvent) => {
       if (event.pointerType !== 'mouse' || controlIsUnavailable(control) || motionIsReduced()) {
@@ -214,8 +204,7 @@ export function Icon({
         return;
       }
       hoverBounds ??= control.getBoundingClientRect();
-      pendingPointer = { x: event.clientX, y: event.clientY };
-      if (!tiltFrame) tiltFrame = window.requestAnimationFrame(flushTilt);
+      setTilt(target, event.clientX, event.clientY, hoverBounds);
     };
     const onPointerEnter = (event: PointerEvent) => {
       hoverBounds = control.getBoundingClientRect();
