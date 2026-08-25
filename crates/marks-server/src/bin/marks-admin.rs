@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 fn usage() -> ! {
     eprintln!(
-        "Usage:\n  marks-admin verify <backup-directory>\n  marks-admin restore <backup-directory> <database-path> <asset-directory>\n\nRestore refuses to overwrite either destination; stop marks-server first."
+        "Usage:\n  marks-admin schema\n  marks-admin verify <backup-directory>\n  marks-admin restore <backup-directory> <database-path> <asset-directory>\n\nRestore refuses to overwrite either destination; stop marks-server first."
     );
     std::process::exit(2);
 }
@@ -12,6 +12,13 @@ fn usage() -> ! {
 async fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     let result = match args.as_slice() {
+        // Release tooling records this in release.json so rollback can
+        // compare a candidate binary against the live database schema.
+        [command] if command == "schema" => {
+            let version = marks_server::db::schema_version();
+            println!("{{\"schemaVersion\":{version},\"maxCompatibleSchema\":{version}}}");
+            Ok(())
+        }
         [command, path] if command == "verify" => {
             backup::verify(PathBuf::from(path)).await.map(|manifest| {
                 println!(

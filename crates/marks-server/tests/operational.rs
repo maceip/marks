@@ -180,8 +180,14 @@ async fn artifact_identity_static_mime_and_security_headers_are_process_owned() 
         std::fs::copy(public.join(name), static_dir.join(name)).unwrap();
     }
     std::fs::write(static_dir.join("assets/app-abc.js"), b"export default 1").unwrap();
-    let server =
-        TestServer::spawn_with(db, |config| config.static_dir = Some(static_dir.clone())).await;
+    let pool_dir = static_dir.with_extension("asset-pool");
+    std::fs::create_dir_all(&pool_dir).unwrap();
+    std::fs::write(pool_dir.join("app-old1.js"), b"export default 0").unwrap();
+    let server = TestServer::spawn_with(db, |config| {
+        config.static_dir = Some(static_dir.clone());
+        config.asset_pool = Some(pool_dir.clone());
+    })
+    .await;
     let http = reqwest::Client::new();
 
     let artifact = http
@@ -250,9 +256,32 @@ async fn artifact_identity_static_mime_and_security_headers_are_process_owned() 
         "public, max-age=31536000, immutable"
     );
 
-    // A missing hashed asset — an old release's chunk after a deployment —
-    // must be an uncacheable 404, never the SPA shell: immutable HTML under
-    // a JavaScript URL would poison the browser cache beyond rollback.
+    // A previous release's hashed chunk resolves from the shared retained
+    // pool with the same immutable policy, so a tab opened before a
+    // deployment keeps loading its lazy chunks until it reloads.
+    let pooled = http
+        .get(format!("{}/assets/app-old1.js", server.base))
+        .header("accept", "*/*")
+        .header("sec-fetch-mode", "cors")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(pooled.status(), 200);
+    assert_eq!(
+        pooled.headers()["cache-control"],
+        "public, max-age=31536000, immutable"
+    );
+    assert!(
+        pooled.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .contains("javascript")
+    );
+
+    // A missing hashed asset — absent from the active release and from every
+    // retained release — must be an uncacheable 404, never the SPA shell:
+    // immutable HTML under a JavaScript URL would poison the browser cache
+    // beyond rollback.
     let missing_asset = http
         .get(format!("{}/assets/app-gone.js", server.base))
         .header("accept", "*/*")
@@ -344,6 +373,7 @@ async fn artifact_identity_static_mime_and_security_headers_are_process_owned() 
 
     server.stop().await;
     let _ = std::fs::remove_dir_all(static_dir);
+    let _ = std::fs::remove_dir_all(pool_dir);
 }
 
 #[tokio::test(flavor = "multi_thread")]

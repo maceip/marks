@@ -101,6 +101,14 @@ impl Db {
             [],
             |row| row.get(0),
         )?;
+        // Fail closed instead of silently serving a schema this binary has
+        // never seen: without this, rolling back past a migration would run
+        // old code against new tables and corrupt instead of refusing.
+        if applied > schema_version() {
+            return Err(ApiError::unavailable(
+                "database schema is newer than this binary supports",
+            ));
+        }
         for (version, sql) in MIGRATIONS {
             if *version <= applied {
                 continue;
@@ -134,6 +142,14 @@ fn run_blocking<T>(work: impl FnOnce() -> T) -> T {
     } else {
         work()
     }
+}
+
+/// The schema this binary migrates a database to, which is also the newest
+/// schema it can safely serve. Release receipts record it so rollback
+/// tooling can compare a candidate binary against the live database before
+/// switching releases.
+pub fn schema_version() -> i64 {
+    MIGRATIONS.last().map(|(version, _)| *version).unwrap_or(0)
 }
 
 /// Ordered, transactional migrations. Constraints here are protocol
@@ -587,3 +603,37 @@ const MIGRATIONS: &[(i64, &str)] = &[
     ",
     ),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_newer_schema_refuses_this_binary() {
+        let path = std::env::temp_dir().join(format!(
+            "marks-schema-guard-{}-{}.db3",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        Db::open(&path).expect("initial migration");
+        {
+            let connection = Connection::open(&path).expect("raw connection");
+            connection
+                .execute(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+                    rusqlite::params![schema_version() + 1, 0_i64],
+                )
+                .expect("future migration row");
+        }
+        assert!(
+            Db::open(&path).is_err(),
+            "a database migrated by a newer binary must refuse this one"
+        );
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(path.with_extension(format!("db3{suffix}")));
+        }
+    }
+}

@@ -272,7 +272,10 @@ pub fn router(app: Arc<App>) -> Router {
     let router = match &app.config.static_dir {
         Some(directory) => {
             let directory = directory.clone();
-            api.fallback(move |request: Request| serve_static(directory.clone(), request))
+            let asset_pool = app.config.asset_pool.clone();
+            api.fallback(move |request: Request| {
+                serve_static(directory.clone(), asset_pool.clone(), request)
+            })
         }
         None => api,
     };
@@ -285,9 +288,19 @@ pub fn router(app: Arc<App>) -> Router {
 /// requesting a chunk from the previous release would otherwise cache HTML
 /// under an immutable JavaScript URL for a year, and rollback cannot repair
 /// an already poisoned browser cache.
-async fn serve_static(directory: PathBuf, request: Request) -> Response {
+async fn serve_static(
+    directory: PathBuf,
+    asset_pool: Option<PathBuf>,
+    request: Request,
+) -> Response {
     let navigation = is_navigation(&request);
     let method = request.method().clone();
+    let pooled_asset = request
+        .uri()
+        .path()
+        .strip_prefix("/assets")
+        .filter(|remainder| remainder.starts_with('/'))
+        .map(str::to_owned);
     let response = match ServeDir::new(&directory).oneshot(request).await {
         Ok(response) => response.map(Body::new),
         Err(error) => {
@@ -295,7 +308,29 @@ async fn serve_static(directory: PathBuf, request: Request) -> Response {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-    if response.status() != StatusCode::NOT_FOUND || !navigation {
+    if response.status() != StatusCode::NOT_FOUND {
+        return response;
+    }
+    // A hashed asset missing from the active release may belong to an older
+    // retained release whose tab is still open. The shared pool holds the
+    // union of every retained release's content-hashed assets, so that tab
+    // resolves its lazy chunks instead of receiving 404s until it reloads.
+    if let Some(asset) = pooled_asset {
+        if let Some(pool) = asset_pool {
+            let pooled = Request::builder()
+                .method(method.clone())
+                .uri(asset)
+                .body(Body::empty());
+            if let Ok(pooled) = pooled {
+                let Ok(pooled_response) = ServeDir::new(pool).oneshot(pooled).await;
+                if pooled_response.status() != StatusCode::NOT_FOUND {
+                    return pooled_response.map(Body::new);
+                }
+            }
+        }
+        return response;
+    }
+    if !navigation {
         return response;
     }
     let shell = Request::builder()

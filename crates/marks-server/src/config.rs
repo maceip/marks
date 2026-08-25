@@ -67,6 +67,11 @@ pub struct Config {
     /// Optional directory with the built browser client. When set, unknown
     /// GET paths serve the SPA.
     pub static_dir: Option<PathBuf>,
+    /// Optional shared pool of hashed assets from every retained release.
+    /// An open tab from a previous release resolves its lazy chunks here
+    /// after a deployment instead of receiving 404s. Entries are content-
+    /// hashed by the client build, so the union across releases is safe.
+    pub asset_pool: Option<PathBuf>,
     /// Device Bound Session Credentials: send `Secure-Session-Registration`
     /// on login responses and serve the register/refresh endpoints. Browsers
     /// without DBSC support ignore the header entirely, so this is additive.
@@ -141,6 +146,7 @@ impl Config {
         let origin = std::env::var("MARKS_ORIGIN").unwrap_or_else(|_| format!("http://{listen}"));
         validate_origin(&origin)?;
         let static_dir = std::env::var("MARKS_STATIC_DIR").ok().map(PathBuf::from);
+        let asset_pool = std::env::var("MARKS_ASSET_POOL").ok().map(PathBuf::from);
         // Sessions must outlive script-writable storage eviction: the cookie
         // is server-set (exempt from Safari's 7-day proactive eviction) and
         // rotation on use keeps an active device signed in indefinitely.
@@ -241,6 +247,7 @@ impl Config {
             backup_retain: env_usize("MARKS_BACKUP_RETAIN", 14, 2, 365)?,
             origin,
             static_dir,
+            asset_pool,
             dbsc_enabled,
             evt_enabled,
             evt_locator_key,

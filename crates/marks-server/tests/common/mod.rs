@@ -55,6 +55,7 @@ impl TestServer {
             backup_retain: 14,
             origin: format!("http://{addr}"),
             static_dir: None,
+            asset_pool: None,
             dbsc_enabled: true,
             evt_enabled: true,
             evt_locator_key: vec![7_u8; 32],
