@@ -93,6 +93,7 @@ test('anonymous and copied-slug failures leave opening shells with a retry surfa
   const benchmark = read('client/src/pages/Benchmark.tsx');
   const workerSupervisor = read('client/src/markdown/worker-supervisor.ts');
   const createRequest = read('client/src/browser/create-request.ts');
+  const mermaid = read('client/src/markdown/mermaid.ts');
 
   assert.match(caller, /SERVICE_REQUEST_TIMEOUT_MS/);
   assert.match(pendingDevice, /fetchWithTimeout/);
@@ -125,6 +126,10 @@ test('anonymous and copied-slug failures leave opening shells with a retry surfa
   assert.match(app, /requestId = anonymousStarterRequestId\(\)/);
   assert.match(app, /confirmAnonymousStarterRequest\(requestId\)/);
   assert.match(createRequest, /sessionStorage/);
+  assert.match(mermaid, /validateMermaidSource\(source\)/);
+  assert.match(mermaid, /maxTextSize: MAX_DIAGRAM_BYTES/);
+  assert.match(mermaid, /maxEdges: 64/);
+  assert.match(mermaid, /MERMAID_RENDER_TIMEOUT_MS/);
 });
 
 test('incremental CI is conservative, gated, cached, and keeps full browser coverage', () => {
