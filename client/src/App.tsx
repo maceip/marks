@@ -19,7 +19,6 @@ import { StatusBar } from './components/workspace/StatusBar';
 import { LiquidDock } from './components/shell/LiquidDock';
 import { ABOUT_DOCUMENT_ID, ABOUT_DOCUMENT_TITLE, isAboutDocument } from './content/about';
 import { signalDocumentRepositoryChange } from './data/documents';
-import { Home } from './pages/Home';
 import { readPairingHash } from './lib/pairing-link';
 import { readDocumentShareHash } from './lib/share-link';
 import { loadServiceApi } from './lib/service-api.ts';
@@ -74,6 +73,9 @@ const DraftToolsSheet = lazy(() =>
 );
 const LinkPage = lazy(() =>
   import('./pages/Link').then((module) => ({ default: module.LinkPage })),
+);
+const Home = lazy(() =>
+  import('./pages/Home').then((module) => ({ default: module.Home })),
 );
 const ContextMenu = lazy(() =>
   import('./components/overlays/ContextMenu').then((module) => ({ default: module.ContextMenu })),
@@ -1190,19 +1192,21 @@ export function App() {
         ) : docId ? (
           <OpeningShell cached={Boolean(meta)} offline={surface.network === 'offline'} />
         ) : (
-          <Home
-            documents={documents.documents}
-            loading={documents.loading}
-            workspaceKind={workspaceKind === 'session' ? 'account' : workspaceKind}
-            onCreate={() => void createDocument()}
-            onCreateFromTemplate={(templateId) => void createDocument({ templateId })}
-            onOpen={openDocument}
-            onOpenTemplates={() => openDialog({ type: 'templates' })}
-            onImport={() => importRef.current?.click()}
-            onOpenBenchmark={openBenchmark}
-            onOpenPreferences={() => openDialog({ type: 'preferences' })}
-            onKeepWorkspace={() => openDialog({ type: 'keep-workspace' })}
-          />
+          <Suspense fallback={<OpeningShell cached={false} offline={surface.network === 'offline'} />}>
+            <Home
+              documents={documents.documents}
+              loading={documents.loading}
+              workspaceKind={workspaceKind === 'session' ? 'account' : workspaceKind}
+              onCreate={() => void createDocument()}
+              onCreateFromTemplate={(templateId) => void createDocument({ templateId })}
+              onOpen={openDocument}
+              onOpenTemplates={() => openDialog({ type: 'templates' })}
+              onImport={() => importRef.current?.click()}
+              onOpenBenchmark={openBenchmark}
+              onOpenPreferences={() => openDialog({ type: 'preferences' })}
+              onKeepWorkspace={() => openDialog({ type: 'keep-workspace' })}
+            />
+          </Suspense>
         )}
 
         {route.name === 'document' && session && (
