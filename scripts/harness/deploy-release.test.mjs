@@ -124,10 +124,13 @@ test('production impact accepts only a reachable revision-only v1 comparison bas
   const impactScript = workflowStepScript(workflow, 'Determine deployed-to-head runtime impact');
   const fixture = realpathSync(mkdtempSync(resolve(tmpdir(), 'marks-v1-impact-test.')));
   try {
-    const baseResult = spawnSync('git', ['rev-parse', 'HEAD^'], { cwd: root, encoding: 'utf8' });
-    assert.equal(baseResult.status, 0, baseResult.stderr);
-    const base = baseResult.stdout.trim();
-    const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim();
+    // Deployment-only CI intentionally uses a depth-one checkout. The active
+    // commit is sufficient to prove reachability; the absent v1 product
+    // identity must still force deployment even when the path diff is empty.
+    const headResult = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
+    assert.equal(headResult.status, 0, headResult.stderr);
+    const head = headResult.stdout.trim();
+    const base = head;
     const fakeSsh = resolve(fixture, 'ssh');
     const githubOutput = resolve(fixture, 'github-output');
     writeFileSync(fakeSsh, `#!/usr/bin/env bash
