@@ -41,8 +41,10 @@ GitHub Actions needs two repository or `production` environment secrets:
 The workflow requires strict host-key checking and only the supplied identity;
 it never learns a host key from the deployment connection. Its SSH
 configuration disables forwarding and PTYs. Production deploys and rollbacks
-share the `marks-production` concurrency group, while the remote release lock
-remains the final serialization boundary.
+use separate `marks-production-standard` and `marks-production-rollback`
+concurrency lanes. A rollback cancels noncompleted standard runs, while every
+deploy waits for the rollback lane to drain; the remote release lock remains
+the final serialization boundary.
 
 The production job has a 300-minute ceiling. This leaves margin above the
 manual full gate and the host's deterministic fetch, npm, Docker, SQLite,
