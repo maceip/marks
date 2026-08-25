@@ -482,8 +482,7 @@ pub async fn scratch_self_bootstrap(
 
     for (document_id, epoch) in changed {
         app.rooms
-            .control(Control::EpochChanged { document_id, epoch })
-            .await;
+            .control(Control::EpochChanged { document_id, epoch });
     }
     login_response(&app, &session, &principal_id, &device_id, registration)
 }
@@ -833,8 +832,7 @@ pub async fn pairing_bootstrap(
 
     for (document_id, epoch) in changed {
         app.rooms
-            .control(Control::EpochChanged { document_id, epoch })
-            .await;
+            .control(Control::EpochChanged { document_id, epoch });
     }
     login_response(
         &app,
@@ -978,8 +976,7 @@ pub async fn pairing_approve(
 
     for (document_id, epoch) in changed {
         app.rooms
-            .control(Control::EpochChanged { document_id, epoch })
-            .await;
+            .control(Control::EpochChanged { document_id, epoch });
     }
     Ok(Json(json!({ "approved": true })).into_response())
 }
@@ -1266,11 +1263,9 @@ pub async fn session_delete(
         )?;
         Ok(())
     })?;
-    app.rooms
-        .control(Control::SessionRevoked {
-            session_id: cookie.session.id().as_str().to_owned(),
-        })
-        .await;
+    app.rooms.control(Control::SessionRevoked {
+        session_id: cookie.session.id().as_str().to_owned(),
+    });
     app.agents.cancel_session(cookie.session.id().as_str());
     let mut response = (
         [(header::SET_COOKIE, cleared_cookie())],
@@ -1380,16 +1375,11 @@ pub async fn device_revoke(
         )?;
         Ok(sessions)
     })?;
-    app.rooms
-        .control(Control::DeviceRevoked {
-            device_id: target_id.as_str().to_owned(),
-        })
-        .await;
+    app.rooms.control(Control::DeviceRevoked {
+        device_id: target_id.as_str().to_owned(),
+    });
     for session_id in revoked_sessions {
         app.agents.cancel_session(&session_id);
-        app.rooms
-            .control(Control::SessionRevoked { session_id })
-            .await;
     }
     Ok(Json(json!({ "revoked": true })).into_response())
 }
@@ -1843,8 +1833,7 @@ pub async fn evt_redeem(
 
     for (document_id, epoch) in changed {
         app.rooms
-            .control(Control::EpochChanged { document_id, epoch })
-            .await;
+            .control(Control::EpochChanged { document_id, epoch });
     }
     login_response(&app, &session, &principal_id, &device_id, registration)
 }

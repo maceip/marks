@@ -451,11 +451,17 @@ the same version-1 portable manifest from IndexedDB.
 | `POST` | `/v1/import/file` | session or scratch | session only | Raw body + `X-Marks-Filename`; Markdown, PDF, DOC, DOCX, XLS, or XLSX → `{ "title", "markdown" }` |
 | `POST` | `/v1/import/url` | session or scratch | session only | `{ "url": "https://…" }` → `{ "title", "markdown", "sourceUrl" }` |
 
-File imports are capped at 16 MiB. OOXML archives also have entry-count and
-expanded-byte limits. PDF import extracts embedded text (no OCR). Word import
-keeps document structure as Markdown. Excel import emits bounded pipe tables
-from displayed/cached cell values only; formulas, formula source, scripts,
-macros, charts, and drawings are not imported.
+File imports are capped at 12 MiB, matching the public edge. OOXML archives
+also have entry-count and expanded-byte limits. PDF import extracts embedded
+text (no OCR). Word import keeps document structure as Markdown. Excel import
+emits bounded pipe tables from displayed/cached cell values only; formulas,
+formula source, scripts, macros, charts, and drawings are not imported.
+
+Both routes authenticate, rate-limit, and reserve bounded capacity before body
+upload or outbound work. Capacity exhaustion is rejected immediately. One
+30-second deadline covers upload, DNS, cumulative redirects, body streaming,
+and conversion; PDF, Office, and HTML conversion run in a killable, reaped
+worker process with a bounded response channel.
 
 URL import accepts only public HTTP(S) destinations, revalidates and repins DNS
 on every redirect, refuses loopback/private/link-local destinations, caps both

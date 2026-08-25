@@ -1,5 +1,6 @@
-//! Authenticated, bounded conversion into Markdown. Local Office/PDF bytes
-//! stay in-process; URL imports pin every DNS resolution to a public address.
+//! Authenticated, bounded conversion into Markdown. Potentially hostile parser
+//! work runs in a killable child process; URL imports pin every DNS resolution
+//! to a public address.
 
 use crate::app::App;
 use crate::error::{ApiError, ApiResult};
@@ -7,21 +8,34 @@ use crate::guard;
 use crate::ids::now_ms;
 use crate::routes::documents::{Caller, caller};
 use crate::routes::practical::{CheckError, parse_public_url, pinned_public_get};
-use axum::Json;
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use axum::{Extension, Json};
 use futures_util::StreamExt;
 use office_oxide::{Document, DocumentFormat};
 use serde::{Deserialize, Serialize};
-use std::io::Cursor;
+use std::io::{Cursor, Read, Write};
+use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::process::Command;
+use tokio::sync::OwnedSemaphorePermit;
+use tokio::time::Instant;
 
-pub const MAX_IMPORT_BYTES: usize = 16 * 1024 * 1024;
+/// The public edge accepts at most 12 MiB, so the application advertises and
+/// enforces the same ceiling rather than a larger unreachable internal limit.
+pub const MAX_IMPORT_BYTES: usize = 12 * 1024 * 1024;
 pub const MAX_URL_REQUEST_BYTES: usize = 4 * 1024;
 const MAX_URL_BODY_BYTES: usize = 2 * 1024 * 1024;
 const MAX_URL_REDIRECTS: usize = 5;
+const IMPORT_DEADLINE: Duration = Duration::from_secs(30);
+const WORKER_REAP_RESERVE: Duration = Duration::from_secs(1);
+const MAX_WORKER_HEADER_BYTES: usize = 8 * 1024;
+const MAX_WORKER_STDERR_BYTES: usize = 64 * 1024;
 const MAX_OFFICE_UNCOMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_OFFICE_PARTS: usize = 8_192;
 const MAX_SHEETS: usize = 32;
@@ -30,12 +44,12 @@ const MAX_TABLE_COLUMNS: usize = 256;
 const MAX_TABLE_CELLS: usize = 200_000;
 const MAX_CELL_SCALARS: usize = 4_096;
 
-#[derive(Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ImportResult {
     title: String,
     markdown: String,
-    kind: &'static str,
+    kind: String,
     source_url: Option<String>,
 }
 
@@ -45,12 +59,43 @@ pub struct UrlImportBody {
     url: String,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 enum ImportFailure {
     Unsupported,
     Invalid,
     Empty,
     TooLarge,
+}
+
+/// Installed by route middleware before Axum begins extracting a request
+/// body. Holding the permit across upload/fetch/conversion makes capacity
+/// rejection immediate and gives every import one cumulative deadline.
+pub struct ImportAdmission {
+    deadline: Instant,
+    _permit: OwnedSemaphorePermit,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "operation", rename_all = "snake_case")]
+enum WorkerRequest {
+    File {
+        filename: String,
+        max_units: usize,
+    },
+    Web {
+        html_is_plain_text: bool,
+        final_url: String,
+        host_title: String,
+        max_units: usize,
+    },
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "status", content = "value", rename_all = "snake_case")]
+enum WorkerResponse {
+    Ok(ImportResult),
+    Error(ImportFailure),
 }
 
 fn authorize_import(app: &App, headers: &HeaderMap) -> ApiResult<Caller> {
@@ -68,6 +113,29 @@ fn authorize_import(app: &App, headers: &HeaderMap) -> ApiResult<Caller> {
     Ok(authority)
 }
 
+/// Authenticate, rate-limit, and reserve conversion capacity before request
+/// body extraction or any outbound URL work begins. The timeout wraps body
+/// upload, redirects, streaming, conversion, and response construction as one
+/// operation rather than resetting at each stage or redirect.
+pub async fn admit(State(app): State<Arc<App>>, mut request: Request, next: Next) -> Response {
+    let deadline = Instant::now() + IMPORT_DEADLINE;
+    if let Err(error) = authorize_import(&app, request.headers()) {
+        return error.into_response();
+    }
+    let permit = match app.import_jobs.clone().try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => return ApiError::unavailable("import capacity exhausted").into_response(),
+    };
+    request.extensions_mut().insert(Arc::new(ImportAdmission {
+        deadline,
+        _permit: permit,
+    }));
+    match tokio::time::timeout_at(deadline, next.run(request)).await {
+        Ok(response) => response,
+        Err(_) => ApiError::unavailable("import timed out").into_response(),
+    }
+}
+
 fn import_error(error: ImportFailure) -> ApiError {
     match error {
         ImportFailure::Unsupported => ApiError::bad_request("unsupported import type"),
@@ -81,10 +149,10 @@ fn import_error(error: ImportFailure) -> ApiError {
 /// the ordinary document-create transaction remains the only publication path.
 pub async fn file(
     State(app): State<Arc<App>>,
+    Extension(admission): Extension<Arc<ImportAdmission>>,
     headers: HeaderMap,
     bytes: Bytes,
 ) -> ApiResult<Response> {
-    let _authority = authorize_import(&app, &headers)?;
     if bytes.is_empty() {
         return Err(import_error(ImportFailure::Empty));
     }
@@ -95,18 +163,16 @@ pub async fn file(
         .ok_or_else(|| ApiError::bad_request("missing import filename"))?
         .to_owned();
     let max_units = app.limits.max_document_units;
-    let permit = app
-        .import_jobs
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|_| ApiError::unavailable("import worker unavailable"))?;
-    let converted = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        convert_file(&filename, bytes.to_vec(), max_units)
-    })
-    .await
-    .map_err(|_| ApiError::unavailable("import worker failed"))?
+    let converted = run_worker(
+        &app,
+        &admission,
+        WorkerRequest::File {
+            filename,
+            max_units,
+        },
+        bytes.to_vec(),
+    )
+    .await?
     .map_err(import_error)?;
     Ok(Json(converted).into_response())
 }
@@ -115,10 +181,9 @@ pub async fn file(
 /// local, link-local, documentation, and rebinding destinations fail closed.
 pub async fn url(
     State(app): State<Arc<App>>,
-    headers: HeaderMap,
+    Extension(admission): Extension<Arc<ImportAdmission>>,
     Json(body): Json<UrlImportBody>,
 ) -> ApiResult<Response> {
-    let _authority = authorize_import(&app, &headers)?;
     let mut current = parse_public_url(body.url.trim()).map_err(map_url_error)?;
     let mut response = None;
     for hop in 0..=MAX_URL_REDIRECTS {
@@ -170,18 +235,18 @@ pub async fn url(
     let host_title = current.host_str().unwrap_or("Imported page").to_owned();
     let plain = content_type.starts_with("text/plain");
     let max_units = app.limits.max_document_units;
-    let permit = app
-        .import_jobs
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|_| ApiError::unavailable("import worker unavailable"))?;
-    let converted = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        convert_web_page(&html, plain, &final_url, &host_title, max_units)
-    })
-    .await
-    .map_err(|_| ApiError::unavailable("import worker failed"))?
+    let converted = run_worker(
+        &app,
+        &admission,
+        WorkerRequest::Web {
+            html_is_plain_text: plain,
+            final_url,
+            host_title,
+            max_units,
+        },
+        html.into_bytes(),
+    )
+    .await?
     .map_err(import_error)?;
     Ok(Json(converted).into_response())
 }
@@ -210,6 +275,236 @@ async fn bounded_body(response: reqwest::Response, limit: usize) -> ApiResult<Ve
         bytes.extend_from_slice(&chunk);
     }
     Ok(bytes)
+}
+
+fn encode_worker_request(request: &WorkerRequest, body: Vec<u8>) -> ApiResult<Vec<u8>> {
+    let header = serde_json::to_vec(request).map_err(|_| ApiError::internal())?;
+    if header.len() > MAX_WORKER_HEADER_BYTES || body.len() > MAX_IMPORT_BYTES {
+        return Err(ApiError::bad_request("import request is too large"));
+    }
+    let header_len = u32::try_from(header.len()).map_err(|_| ApiError::internal())?;
+    let mut encoded = Vec::with_capacity(4 + header.len() + body.len());
+    encoded.extend_from_slice(&header_len.to_be_bytes());
+    encoded.extend_from_slice(&header);
+    encoded.extend_from_slice(&body);
+    Ok(encoded)
+}
+
+async fn read_worker_pipe(
+    reader: impl AsyncRead + Unpin,
+    limit: usize,
+) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    reader
+        .take(limit.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)
+        .await?;
+    if bytes.len() > limit {
+        return Err(std::io::Error::other(
+            "import worker output exceeded its bound",
+        ));
+    }
+    Ok(bytes)
+}
+
+async fn reap_worker(child: &mut tokio::process::Child) {
+    let _ = child.start_kill();
+    // `wait` is what releases the OS process-table entry. The child has
+    // already received an unconditional kill, so this is cleanup, not work.
+    let _ = child.wait().await;
+}
+
+async fn run_worker(
+    app: &App,
+    admission: &ImportAdmission,
+    request: WorkerRequest,
+    body: Vec<u8>,
+) -> ApiResult<Result<ImportResult, ImportFailure>> {
+    let max_units = match &request {
+        WorkerRequest::File { max_units, .. } | WorkerRequest::Web { max_units, .. } => *max_units,
+    };
+    let input = encode_worker_request(&request, body)?;
+    let executable = app
+        .config
+        .import_worker_path
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(std::env::current_exe)
+        .map_err(|_| ApiError::unavailable("import worker unavailable"))?;
+    let mut child = Command::new(executable)
+        .arg("--import-worker-v1")
+        .env_clear()
+        .current_dir(std::env::temp_dir())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|_| ApiError::unavailable("import worker unavailable"))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| ApiError::unavailable("import worker unavailable"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| ApiError::unavailable("import worker unavailable"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| ApiError::unavailable("import worker unavailable"))?;
+
+    let response_limit = max_units
+        .saturating_mul(6)
+        .saturating_add(MAX_WORKER_HEADER_BYTES);
+    let mut writer = tokio::spawn(async move {
+        stdin.write_all(&input).await?;
+        stdin.shutdown().await
+    });
+    let mut stdout_reader = tokio::spawn(read_worker_pipe(stdout, response_limit));
+    let mut stderr_reader = tokio::spawn(read_worker_pipe(stderr, MAX_WORKER_STDERR_BYTES));
+
+    let worker_deadline = admission
+        .deadline
+        .checked_sub(WORKER_REAP_RESERVE)
+        .unwrap_or(admission.deadline);
+    if Instant::now() >= worker_deadline {
+        reap_worker(&mut child).await;
+        writer.abort();
+        stdout_reader.abort();
+        stderr_reader.abort();
+        return Err(ApiError::unavailable("import timed out"));
+    }
+    let completed = tokio::time::timeout_at(worker_deadline, async {
+        (&mut writer)
+            .await
+            .map_err(|_| ApiError::unavailable("import worker failed"))?
+            .map_err(|_| ApiError::unavailable("import worker failed"))?;
+        let status = child
+            .wait()
+            .await
+            .map_err(|_| ApiError::unavailable("import worker failed"))?;
+        let stdout = (&mut stdout_reader)
+            .await
+            .map_err(|_| ApiError::unavailable("import worker failed"))?
+            .map_err(|_| ApiError::unavailable("import worker failed"))?;
+        let _stderr = (&mut stderr_reader)
+            .await
+            .map_err(|_| ApiError::unavailable("import worker failed"))?
+            .map_err(|_| ApiError::unavailable("import worker failed"))?;
+        Ok::<_, ApiError>((status, stdout))
+    })
+    .await;
+
+    let (status, stdout) = match completed {
+        Ok(Ok(result)) => result,
+        Ok(Err(error)) => {
+            reap_worker(&mut child).await;
+            writer.abort();
+            stdout_reader.abort();
+            stderr_reader.abort();
+            let _ = writer.await;
+            let _ = stdout_reader.await;
+            let _ = stderr_reader.await;
+            return Err(error);
+        }
+        Err(_) => {
+            reap_worker(&mut child).await;
+            writer.abort();
+            stdout_reader.abort();
+            stderr_reader.abort();
+            let _ = writer.await;
+            let _ = stdout_reader.await;
+            let _ = stderr_reader.await;
+            return Err(ApiError::unavailable("import timed out"));
+        }
+    };
+    if !status.success() {
+        return Err(ApiError::unavailable("import worker failed"));
+    }
+    match serde_json::from_slice::<WorkerResponse>(&stdout)
+        .map_err(|_| ApiError::unavailable("import worker failed"))?
+    {
+        WorkerResponse::Ok(result) => Ok(Ok(result)),
+        WorkerResponse::Error(error) => Ok(Err(error)),
+    }
+}
+
+/// Private child-process entry point. It deliberately initializes neither the
+/// database nor tracing, inherits no environment, accepts one bounded framed
+/// request, emits one bounded JSON response, and exits.
+pub fn worker_main() -> i32 {
+    let mut stdin = std::io::stdin().lock();
+    let max_input = MAX_IMPORT_BYTES
+        .saturating_add(MAX_WORKER_HEADER_BYTES)
+        .saturating_add(4);
+    let mut encoded = Vec::new();
+    if stdin
+        .by_ref()
+        .take(max_input.saturating_add(1) as u64)
+        .read_to_end(&mut encoded)
+        .is_err()
+        || encoded.len() > max_input
+    {
+        return 2;
+    }
+    let Some(header_bytes) = encoded.get(..4) else {
+        return 2;
+    };
+    let header_len = u32::from_be_bytes(header_bytes.try_into().expect("four bytes")) as usize;
+    if header_len == 0 || header_len > MAX_WORKER_HEADER_BYTES {
+        return 2;
+    }
+    let Some(header_end) = 4_usize.checked_add(header_len) else {
+        return 2;
+    };
+    let Some(header) = encoded.get(4..header_end) else {
+        return 2;
+    };
+    let Some(body) = encoded.get(header_end..) else {
+        return 2;
+    };
+    let Ok(request) = serde_json::from_slice::<WorkerRequest>(header) else {
+        return 2;
+    };
+    let profile_limit = match crate::engine_profile::get() {
+        Ok(profile) => profile.limits.max_document_units,
+        Err(_) => return 2,
+    };
+    let converted = match request {
+        WorkerRequest::File {
+            filename,
+            max_units,
+        } if max_units > 0 && max_units <= profile_limit => {
+            convert_file(&filename, body.to_vec(), max_units)
+        }
+        WorkerRequest::Web {
+            html_is_plain_text,
+            final_url,
+            host_title,
+            max_units,
+        } if max_units > 0 && max_units <= profile_limit => {
+            let html = String::from_utf8_lossy(body);
+            convert_web_page(
+                &html,
+                html_is_plain_text,
+                &final_url,
+                &host_title,
+                max_units,
+            )
+        }
+        _ => return 2,
+    };
+    let response = match converted {
+        Ok(result) => WorkerResponse::Ok(result),
+        Err(error) => WorkerResponse::Error(error),
+    };
+    let stdout = std::io::stdout();
+    let mut stdout = stdout.lock();
+    if serde_json::to_writer(&mut stdout, &response).is_err() || stdout.flush().is_err() {
+        return 2;
+    }
+    0
 }
 
 fn convert_file(
@@ -265,7 +560,7 @@ fn convert_file(
     Ok(ImportResult {
         title: title_from_filename(filename),
         markdown,
-        kind,
+        kind: kind.to_owned(),
         source_url: None,
     })
 }
@@ -500,7 +795,7 @@ fn convert_web_page(
     Ok(ImportResult {
         title: clean_title(&title),
         markdown,
-        kind: "url",
+        kind: "url".to_owned(),
         source_url: Some(source_url.to_owned()),
     })
 }
@@ -569,6 +864,18 @@ fn clean_title(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timed_out_worker_is_killed_and_reaped() {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "sleep 30"])
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        reap_worker(&mut child).await;
+        assert!(child.try_wait().unwrap().is_some());
+    }
 
     #[test]
     fn spreadsheet_rendering_emits_only_bounded_pipe_tables() {

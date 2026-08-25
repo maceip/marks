@@ -73,8 +73,45 @@ async fn principal_ticket(
         .unwrap()
 }
 
+async fn connection_count(
+    base: &str,
+    http: &reqwest::Client,
+    auth: &str,
+    document_id: &str,
+) -> u64 {
+    let response = http
+        .get(format!("{base}/v1/documents/{document_id}"))
+        .header("Authorization", auth)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    json_of(response).await["connections"].as_u64().unwrap()
+}
+
 fn fresh_doc(site: u128) -> esbt::Document {
     esbt::Document::with_defaults(site).expect("client replica")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn document_metadata_reads_the_cheap_live_connection_counter() {
+    let server = TestServer::spawn(temp_db("room-connection-counter")).await;
+    let http = reqwest::Client::new();
+    let base = server.base.clone();
+    let (auth, document_id) = scratch_document(&base, &http).await;
+    assert_eq!(connection_count(&base, &http, &auth, &document_id).await, 0);
+
+    let first_ticket = scratch_ticket(&base, &http, &auth, &document_id, None).await;
+    let first = Peer::connect(&base, &first_ticket, fresh_doc(first_ticket.site), None).await;
+    assert_eq!(connection_count(&base, &http, &auth, &document_id).await, 1);
+
+    let second_ticket = scratch_ticket(&base, &http, &auth, &document_id, None).await;
+    let second = Peer::connect(&base, &second_ticket, fresh_doc(second_ticket.site), None).await;
+    assert_eq!(connection_count(&base, &http, &auth, &document_id).await, 2);
+
+    drop(first);
+    drop(second);
+    server.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -915,6 +952,75 @@ async fn session_revocation_closes_open_sockets() {
     let denied = principal_ticket(&base, &http, &user.cookie, &document_id).await;
     assert_eq!(denied.status(), 401);
 
+    server.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn durable_commit_revalidates_session_when_control_delivery_is_missed() {
+    let server = TestServer::spawn(temp_db("room-revocation-transaction")).await;
+    let http = reqwest::Client::new();
+    let base = server.base.clone();
+    let user = create_principal(&base, &http, "revtx001").await;
+    let created = json_of(
+        http.post(format!("{base}/v1/documents"))
+            .header("Cookie", &user.cookie)
+            .header("Origin", &base)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    let document_id = created["document"]["id"].as_str().unwrap().to_owned();
+    let ticket = Ticket::from_json(
+        &json_of(principal_ticket(&base, &http, &user.cookie, &document_id).await).await,
+    );
+    let mut peer = Peer::connect(&base, &ticket, fresh_doc(ticket.site), Some(&user.cookie)).await;
+
+    // Simulate a committed revocation whose best-effort in-memory signal was
+    // lost. The next mutation must still fail inside its own durable SQLite
+    // transaction and leave no journal row behind.
+    server
+        .app
+        .db
+        .tx(|conn| {
+            conn.execute(
+                "UPDATE sessions SET revoked_at = ?2 WHERE principal_id = ?1",
+                rusqlite::params![
+                    user.principal_id,
+                    marks_server::store::ms(marks_server::ids::now_ms())
+                ],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let update = peer
+        .doc
+        .insert(0, "must not persist", None)
+        .unwrap()
+        .unwrap();
+    peer.send_mutation(MutationKind::Update, &update.canonical_bytes)
+        .await;
+    assert_eq!(peer.expect_close().await, Some(4401));
+
+    server
+        .app
+        .db
+        .read(|conn| {
+            let updates: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM document_updates WHERE document_id = ?1",
+                [&document_id],
+                |row| row.get(0),
+            )?;
+            let chars: i64 = conn.query_row(
+                "SELECT chars FROM documents WHERE id = ?1",
+                [&document_id],
+                |row| row.get(0),
+            )?;
+            assert_eq!((updates, chars), (0, 0));
+            Ok(())
+        })
+        .unwrap();
     server.stop().await;
 }
 

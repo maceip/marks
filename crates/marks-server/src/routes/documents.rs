@@ -366,12 +366,7 @@ pub async fn get(
         resolve_caller_role(conn, &caller, &row)?;
         Ok(row)
     })?;
-    let connections = app
-        .rooms
-        .read(&document_id)
-        .await
-        .map(|read| read.connections)
-        .unwrap_or(0);
+    let connections = app.rooms.connection_count(&document_id).unwrap_or(0);
     Ok(Json(json!({ "document": meta(&row), "connections": connections })).into_response())
 }
 
@@ -526,11 +521,9 @@ pub async fn delete(
         )?;
         Ok(())
     })?;
-    app.rooms
-        .control(Control::Deleted {
-            document_id: document_id.as_str().to_owned(),
-        })
-        .await;
+    app.rooms.control(Control::Deleted {
+        document_id: document_id.as_str().to_owned(),
+    });
     Ok(Json(json!({ "deleted": true })).into_response())
 }
 
@@ -1024,12 +1017,10 @@ pub async fn share_put(
         )?;
         bump_epoch(conn, &document_id)
     })?;
-    app.rooms
-        .control(Control::EpochChanged {
-            document_id: document_id.as_str().to_owned(),
-            epoch,
-        })
-        .await;
+    app.rooms.control(Control::EpochChanged {
+        document_id: document_id.as_str().to_owned(),
+        epoch,
+    });
     Ok(Json(json!({ "role": store::role_to_str(role) })).into_response())
 }
 
@@ -1052,12 +1043,10 @@ pub async fn share_delete(
         )?;
         bump_epoch(conn, &document_id)
     })?;
-    app.rooms
-        .control(Control::EpochChanged {
-            document_id: document_id.as_str().to_owned(),
-            epoch,
-        })
-        .await;
+    app.rooms.control(Control::EpochChanged {
+        document_id: document_id.as_str().to_owned(),
+        epoch,
+    });
     Ok(Json(json!({ "revoked": true })).into_response())
 }
 
@@ -1135,12 +1124,10 @@ pub async fn link_create(
         )?;
         bump_epoch(conn, &document_id)
     })?;
-    app.rooms
-        .control(Control::EpochChanged {
-            document_id: document_id.as_str().to_owned(),
-            epoch,
-        })
-        .await;
+    app.rooms.control(Control::EpochChanged {
+        document_id: document_id.as_str().to_owned(),
+        epoch,
+    });
     Ok(Json(json!({
         "token": Base64UrlUnpadded::encode_string(&token),
         "role": store::role_to_str(role),
@@ -1167,12 +1154,10 @@ pub async fn link_revoke(
         )?;
         bump_epoch(conn, &document_id)
     })?;
-    app.rooms
-        .control(Control::EpochChanged {
-            document_id: document_id.as_str().to_owned(),
-            epoch,
-        })
-        .await;
+    app.rooms.control(Control::EpochChanged {
+        document_id: document_id.as_str().to_owned(),
+        epoch,
+    });
     Ok(Json(json!({ "revoked": true })).into_response())
 }
 

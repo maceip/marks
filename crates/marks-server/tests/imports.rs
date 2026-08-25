@@ -7,6 +7,9 @@ use common::{TestServer, temp_db};
 use office_oxide::xlsx::write::{CellData, XlsxWriter};
 use serde_json::{Value, json};
 use std::io::Cursor;
+use std::net::SocketAddr;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 
 async fn scratch_authority(base: &str, http: &reqwest::Client) -> String {
     let scratch: Value = http
@@ -36,6 +39,60 @@ fn formula_workbook() -> Vec<u8> {
     let mut bytes = Cursor::new(Vec::new());
     workbook.write_to(&mut bytes).unwrap();
     bytes.into_inner()
+}
+
+async fn partial_import(addr: SocketAddr, authority: Option<&str>) -> TcpStream {
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let authorization = authority
+        .map(|authority| format!("Authorization: {authority}\r\n"))
+        .unwrap_or_default();
+    let request = format!(
+        "POST /v1/import/file HTTP/1.1\r\nHost: {addr}\r\n{authorization}X-Marks-Filename: held.pdf\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        marks_server::routes::imports::MAX_IMPORT_BYTES
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    stream
+}
+
+async fn response_head(stream: &mut TcpStream) -> String {
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        let mut response = Vec::new();
+        let mut buffer = [0_u8; 512];
+        while !response.windows(4).any(|window| window == b"\r\n\r\n") {
+            let read = stream.read(&mut buffer).await.unwrap();
+            assert_ne!(read, 0, "server closed before returning an HTTP response");
+            response.extend_from_slice(&buffer[..read]);
+        }
+        String::from_utf8(response).unwrap()
+    })
+    .await
+    .expect("response must not wait for the request body")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn import_authentication_and_capacity_happen_before_body_upload() {
+    let server = TestServer::spawn(temp_db("imports-prebody-admission")).await;
+    let http = reqwest::Client::new();
+    let authority = scratch_authority(&server.base, &http).await;
+
+    let mut unauthenticated = partial_import(server.addr, None).await;
+    let response = response_head(&mut unauthenticated).await;
+    assert!(response.starts_with("HTTP/1.1 401"), "{response}");
+
+    // Four admitted requests deliberately stop after their headers. The fifth
+    // is rejected immediately instead of joining an unbounded semaphore wait
+    // or requiring any body bytes to arrive.
+    let mut held = Vec::new();
+    for _ in 0..4 {
+        held.push(partial_import(server.addr, Some(&authority)).await);
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let mut overflow = partial_import(server.addr, Some(&authority)).await;
+    let response = response_head(&mut overflow).await;
+    assert!(response.starts_with("HTTP/1.1 503"), "{response}");
+
+    drop(held);
+    server.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

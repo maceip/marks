@@ -114,11 +114,20 @@ pub fn router(app: Arc<App>) -> Router {
         post(routes::practical::check_links).layer(DefaultBodyLimit::max(96 * 1024));
     let practical_citation_lookup =
         post(routes::practical::citation_lookup).layer(DefaultBodyLimit::max(4 * 1024));
-    let import_file =
-        post(routes::imports::file).layer(DefaultBodyLimit::max(routes::imports::MAX_IMPORT_BYTES));
-    let import_url = post(routes::imports::url).layer(DefaultBodyLimit::max(
-        routes::imports::MAX_URL_REQUEST_BYTES,
-    ));
+    let import_file = post(routes::imports::file)
+        .layer(DefaultBodyLimit::max(routes::imports::MAX_IMPORT_BYTES))
+        .layer(middleware::from_fn_with_state(
+            app.clone(),
+            routes::imports::admit,
+        ));
+    let import_url = post(routes::imports::url)
+        .layer(DefaultBodyLimit::max(
+            routes::imports::MAX_URL_REQUEST_BYTES,
+        ))
+        .layer(middleware::from_fn_with_state(
+            app.clone(),
+            routes::imports::admit,
+        ));
     let api = Router::new()
         // Identity: docs/AUTHN-AUTHZ-PROTOCOL.md §10.
         .route("/v1/auth/scratch", post(routes::auth::scratch_create))
@@ -174,7 +183,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/v1/agent/runs/{id}/tool-results", agent_tool_result)
         .route("/v1/agent/runs/{id}", delete(routes::agent::cancel))
         // Bounded, authenticated document conversion. URL imports resolve and
-        // pin public IPs on every redirect; local files never leave this process.
+        // pin public IPs on every redirect; parsers run in a killable worker.
         .route("/v1/import/file", import_file)
         .route("/v1/import/url", import_url)
         // Documents.

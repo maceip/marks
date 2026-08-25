@@ -72,6 +72,10 @@ pub struct Config {
     /// after a deployment instead of receiving 404s. Entries are content-
     /// hashed by the client build, so the union across releases is safe.
     pub asset_pool: Option<PathBuf>,
+    /// Optional explicit path to the process-isolated import worker. Production
+    /// re-executes the current `marks-server` artifact; integration tests point
+    /// at Cargo's separately-built server binary instead of their test harness.
+    pub import_worker_path: Option<PathBuf>,
     /// Device Bound Session Credentials: send `Secure-Session-Registration`
     /// on login responses and serve the register/refresh endpoints. Browsers
     /// without DBSC support ignore the header entirely, so this is additive.
@@ -147,6 +151,9 @@ impl Config {
         validate_origin(&origin)?;
         let static_dir = std::env::var("MARKS_STATIC_DIR").ok().map(PathBuf::from);
         let asset_pool = std::env::var("MARKS_ASSET_POOL").ok().map(PathBuf::from);
+        let import_worker_path = std::env::var("MARKS_IMPORT_WORKER_PATH")
+            .ok()
+            .map(PathBuf::from);
         // Sessions must outlive script-writable storage eviction: the cookie
         // is server-set (exempt from Safari's 7-day proactive eviction) and
         // rotation on use keeps an active device signed in indefinitely.
@@ -248,6 +255,7 @@ impl Config {
             origin,
             static_dir,
             asset_pool,
+            import_worker_path,
             dbsc_enabled,
             evt_enabled,
             evt_locator_key,

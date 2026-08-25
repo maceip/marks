@@ -22,12 +22,15 @@ use crate::store;
 use esbt::Artifact;
 use esbt::ErrorCode;
 use esbt::clock::Version;
-use marks_auth::{DocumentAction, DocumentId, DocumentRole, RoomActor, authorize_room_action};
+use marks_auth::{
+    DocumentAction, DocumentId, DocumentRole, PrincipalId, RoomActor, ScratchId, SessionId,
+    authorize_room_action,
+};
 use rusqlite::{OptionalExtension, params};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use tokio::sync::mpsc;
 
 /// Presence frames are relayed, never persisted; bound them separately.
@@ -270,6 +273,7 @@ struct Room {
     commit_batches: Arc<AtomicU64>,
     committed_mutations: Arc<AtomicU64>,
     presence: Arc<PresenceCounters>,
+    connections: Arc<AtomicUsize>,
 }
 
 pub(super) struct TaskContext {
@@ -280,9 +284,14 @@ pub(super) struct TaskContext {
     pub(super) commit_batches: Arc<AtomicU64>,
     pub(super) committed_mutations: Arc<AtomicU64>,
     pub(super) presence: Arc<PresenceCounters>,
+    pub(super) connections: Arc<AtomicUsize>,
 }
 
-pub(super) async fn run(context: TaskContext, mut rx: mpsc::Receiver<RoomMsg>) {
+pub(super) async fn run(
+    context: TaskContext,
+    mut rx: mpsc::Receiver<RoomMsg>,
+    mut control_rx: mpsc::Receiver<Control>,
+) {
     let TaskContext {
         document_id,
         db,
@@ -291,6 +300,7 @@ pub(super) async fn run(context: TaskContext, mut rx: mpsc::Receiver<RoomMsg>) {
         commit_batches,
         committed_mutations,
         presence,
+        connections,
     } = context;
     let hydrated = db.read(|conn| {
         let row = store::load_document(conn, &document_id)?.ok_or_else(ApiError::not_found)?;
@@ -320,6 +330,7 @@ pub(super) async fn run(context: TaskContext, mut rx: mpsc::Receiver<RoomMsg>) {
             commit_batches,
             committed_mutations,
             presence,
+            connections,
         },
         Err(_) => {
             // Refuse every join and drain; the manager entry drops with us.
@@ -340,28 +351,73 @@ pub(super) async fn run(context: TaskContext, mut rx: mpsc::Receiver<RoomMsg>) {
     };
 
     let mut deferred = None;
+    let mut deferred_control = None;
+    let mut control_open = true;
 
     loop {
-        let message = if deferred.is_some() {
-            deferred.take()
-        } else if room.sockets.is_empty() && room.dead.is_none() {
+        let immediate_control = deferred_control.take().or_else(|| {
+            if !control_open {
+                return None;
+            }
+            match control_rx.try_recv() {
+                Ok(control) => Some(control),
+                Err(mpsc::error::TryRecvError::Empty) => None,
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    control_open = false;
+                    None
+                }
+            }
+        });
+        if let Some(control) = immediate_control {
+            room.control(control);
+            continue;
+        }
+
+        let receive = async {
+            if let Some(message) = deferred.take() {
+                return Some(Ok(message));
+            }
+            if control_open {
+                tokio::select! {
+                    biased;
+                    control = control_rx.recv() => match control {
+                        Some(control) => Some(Err(control)),
+                        None => {
+                            control_open = false;
+                            rx.recv().await.map(Ok)
+                        }
+                    },
+                    message = rx.recv() => message.map(Ok),
+                }
+            } else {
+                rx.recv().await.map(Ok)
+            }
+        };
+        let input = if room.sockets.is_empty() && room.dead.is_none() {
             match tokio::time::timeout(
                 std::time::Duration::from_millis(room.config.room_idle_ms),
-                rx.recv(),
+                receive,
             )
             .await
             {
-                Ok(message) => message,
+                Ok(input) => input,
                 Err(_) => {
                     room.compact(true);
                     return;
                 }
             }
         } else {
-            rx.recv().await
+            receive.await
         };
-        let Some(message) = message else {
+        let Some(input) = input else {
             break;
+        };
+        let message = match input {
+            Ok(message) => message,
+            Err(control) => {
+                room.control(control);
+                continue;
+            }
         };
         match message {
             RoomMsg::Join {
@@ -370,33 +426,68 @@ pub(super) async fn run(context: TaskContext, mut rx: mpsc::Receiver<RoomMsg>) {
                 out,
                 resp,
             } => {
-                let _ = resp.send(room.join(*actor, client_version, out));
+                if !resp.is_closed() {
+                    let joined = room.join(*actor, client_version, out);
+                    let admitted = joined.as_ref().ok().copied();
+                    if resp.send(joined).is_err()
+                        && let Some(conn) = admitted
+                    {
+                        room.sockets.remove(&conn);
+                        room.update_connection_count();
+                    }
+                }
             }
             RoomMsg::Frame { conn, data } => {
                 let mut frames = vec![(conn, data)];
                 let deadline = tokio::time::Instant::now()
                     + std::time::Duration::from_millis(room.config.commit_batch_delay_ms);
                 while frames.len() < room.config.commit_batch_max {
-                    match tokio::time::timeout_at(deadline, rx.recv()).await {
-                        Ok(Some(RoomMsg::Frame { conn, data })) => frames.push((conn, data)),
-                        Ok(Some(other)) => {
-                            deferred = Some(other);
-                            break;
+                    if control_open {
+                        tokio::select! {
+                            biased;
+                            control = control_rx.recv() => match control {
+                                Some(control) => {
+                                    deferred_control = Some(control);
+                                    break;
+                                }
+                                None => control_open = false,
+                            },
+                            next = tokio::time::timeout_at(deadline, rx.recv()) => match next {
+                                Ok(Some(RoomMsg::Frame { conn, data })) => frames.push((conn, data)),
+                                Ok(Some(other)) => {
+                                    deferred = Some(other);
+                                    break;
+                                }
+                                Ok(None) | Err(_) => break,
+                            },
                         }
-                        Ok(None) | Err(_) => break,
+                    } else {
+                        match tokio::time::timeout_at(deadline, rx.recv()).await {
+                            Ok(Some(RoomMsg::Frame { conn, data })) => frames.push((conn, data)),
+                            Ok(Some(other)) => {
+                                deferred = Some(other);
+                                break;
+                            }
+                            Ok(None) | Err(_) => break,
+                        }
                     }
+                }
+                if let Some(control) = deferred_control.take() {
+                    room.control(control);
                 }
                 room.frames(frames);
             }
             RoomMsg::Leave { conn } => {
                 room.sockets.remove(&conn);
+                room.update_connection_count();
                 if room.sockets.is_empty() && room.dead.is_none() {
                     room.compact(true);
                 }
             }
-            RoomMsg::Control(control) => room.control(control),
             RoomMsg::Read { resp } => {
-                let _ = resp.send(room.read());
+                if !resp.is_closed() {
+                    let _ = resp.send(room.read());
+                }
             }
             RoomMsg::Shutdown { resp } => {
                 if room.dead.is_none() {
@@ -411,6 +502,7 @@ pub(super) async fn run(context: TaskContext, mut rx: mpsc::Receiver<RoomMsg>) {
     if room.dead.is_none() {
         room.compact(true);
     }
+    room.connections.store(0, Ordering::Release);
 }
 
 impl Room {
@@ -510,6 +602,7 @@ impl Room {
                 ephemeral_refill: std::time::Instant::now(),
             },
         );
+        self.update_connection_count();
         Ok(conn)
     }
 
@@ -879,9 +972,19 @@ impl Room {
             .map(|commit| commit.committed_at)
             .max()
             .unwrap_or_default();
+        let authority_checked_at = now_ms();
         let committed: ApiResult<()> = self.db.tx(|db| {
             require_live_epoch(db, &document_id, epoch)?;
+            let mut validated_actors = HashSet::new();
             for commit in &prepared {
+                let actor_key = (
+                    commit.actor.kind,
+                    commit.actor.id.as_str(),
+                    commit.actor.session_id.as_deref(),
+                );
+                if validated_actors.insert(actor_key) {
+                    require_live_actor(db, &commit.actor, authority_checked_at)?;
+                }
                 match &commit.action {
                     CommitAction::Receipt => {}
                     CommitAction::Update {
@@ -1401,6 +1504,7 @@ impl Room {
     fn close_one(&mut self, conn: u64, code: u16) {
         if let Some(socket) = self.sockets.remove(&conn) {
             let _ = socket.out.try_send(OutMsg::Close(code));
+            self.update_connection_count();
         }
     }
 
@@ -1409,6 +1513,11 @@ impl Room {
         for conn in conns {
             self.close_one(conn, code);
         }
+    }
+
+    fn update_connection_count(&self) {
+        self.connections
+            .store(self.sockets.len(), Ordering::Release);
     }
 
     fn read(&self) -> RoomRead {
@@ -1577,6 +1686,56 @@ fn require_live_epoch(
     // A missed in-memory control event cannot authorize a durable write.
     if row.record.authorization_epoch != epoch {
         return Err(ApiError::conflict());
+    }
+    Ok(())
+}
+
+/// Controls close live sockets promptly, but durable authority never depends
+/// on delivery of an in-memory signal. Re-check the admitted actor in the same
+/// SQLite transaction that appends its mutation.
+fn require_live_actor(db: &rusqlite::Connection, actor: &ActorReceipt, now: u64) -> ApiResult<()> {
+    match actor.kind {
+        "scratch" => {
+            let scratch_id = ScratchId::new(actor.id.clone()).map_err(|_| ApiError::conflict())?;
+            store::load_scratch(db, &scratch_id)?
+                .filter(|scratch| {
+                    scratch.revoked_at_ms.is_none()
+                        && scratch.claimed_by.is_none()
+                        && now < scratch.expires_at_ms
+                })
+                .ok_or_else(ApiError::conflict)?;
+            if actor.session_id.is_some() {
+                return Err(ApiError::conflict());
+            }
+        }
+        "principal" => {
+            let principal_id =
+                PrincipalId::new(actor.id.clone()).map_err(|_| ApiError::conflict())?;
+            let session_id = actor
+                .session_id
+                .as_ref()
+                .ok_or_else(ApiError::conflict)
+                .and_then(|id| SessionId::new(id.clone()).map_err(|_| ApiError::conflict()))?;
+            let session = store::load_session(db, &session_id)?
+                .filter(|session| {
+                    session.record.revoked_at_ms.is_none()
+                        && now < session.record.expires_at_ms
+                        && session.record.principal_id == principal_id
+                })
+                .ok_or_else(ApiError::conflict)?;
+            let device_id = session.record.device_id.clone();
+            store::load_device(db, &device_id)?
+                .filter(|device| {
+                    device.revoked_at_ms.is_none()
+                        && device.principal_id == principal_id
+                        && device.id == session.record.device_id
+                })
+                .ok_or_else(ApiError::conflict)?;
+            let principal =
+                store::load_principal(db, &principal_id)?.ok_or_else(ApiError::conflict)?;
+            marks_auth::require_active_principal(&principal).map_err(|_| ApiError::conflict())?;
+        }
+        _ => return Err(ApiError::conflict()),
     }
     Ok(())
 }

@@ -56,6 +56,7 @@ impl TestServer {
             origin: format!("http://{addr}"),
             static_dir: None,
             asset_pool: None,
+            import_worker_path: Some(PathBuf::from(env!("CARGO_BIN_EXE_marks-server"))),
             dbsc_enabled: true,
             evt_enabled: true,
             evt_locator_key: vec![7_u8; 32],
