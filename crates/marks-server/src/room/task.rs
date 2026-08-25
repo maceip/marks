@@ -11,7 +11,7 @@ use super::{
     CLOSE_CAPACITY, CLOSE_DOCUMENT_DELETED, CLOSE_FORBIDDEN_WRITE, CLOSE_INTERNAL,
     CLOSE_INVALID_PAYLOAD, CLOSE_UNAUTHORIZED, Control, JoinRefusal, MSG_COMMITTED, MSG_EPHEMERAL,
     MSG_MUTATION, MSG_PRESENCE_DELTA, MSG_SERVER_VV, MSG_SNAPSHOT, MSG_SYNCED, MSG_UPDATE, OutMsg,
-    PresenceCounters, RoomMsg, RoomRead, frame,
+    PresenceCounters, RoomControl, RoomMsg, RoomRead, frame,
 };
 use crate::config::Config;
 use crate::db::Db;
@@ -290,7 +290,7 @@ pub(super) struct TaskContext {
 pub(super) async fn run(
     context: TaskContext,
     mut rx: mpsc::Receiver<RoomMsg>,
-    mut control_rx: mpsc::Receiver<Control>,
+    mut control_rx: mpsc::Receiver<RoomControl>,
 ) {
     let TaskContext {
         document_id,
@@ -476,13 +476,6 @@ pub(super) async fn run(
                     room.control(control);
                 }
                 room.frames(frames);
-            }
-            RoomMsg::Leave { conn } => {
-                room.sockets.remove(&conn);
-                room.update_connection_count();
-                if room.sockets.is_empty() && room.dead.is_none() {
-                    room.compact(true);
-                }
             }
             RoomMsg::Read { resp } => {
                 if !resp.is_closed() {
@@ -1390,7 +1383,19 @@ impl Room {
         }
     }
 
-    fn control(&mut self, control: Control) {
+    fn control(&mut self, control: RoomControl) {
+        let control = match control {
+            RoomControl::Authority(control) => control,
+            RoomControl::Leave { conn, resp } => {
+                self.sockets.remove(&conn);
+                self.update_connection_count();
+                let _ = resp.send(());
+                if self.sockets.is_empty() && self.dead.is_none() {
+                    self.compact(true);
+                }
+                return;
+            }
+        };
         match control {
             Control::Deleted { document_id } => {
                 if document_id == self.document_id.as_str() {

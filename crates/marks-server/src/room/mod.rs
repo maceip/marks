@@ -9,6 +9,7 @@ pub mod ws;
 use crate::config::Config;
 use crate::db::Db;
 use crate::store;
+use futures_util::future::join_all;
 use marks_auth::{DocumentId, RoomActor};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -95,9 +96,6 @@ pub enum RoomMsg {
         conn: u64,
         data: Vec<u8>,
     },
-    Leave {
-        conn: u64,
-    },
     Read {
         resp: oneshot::Sender<RoomRead>,
     },
@@ -106,9 +104,17 @@ pub enum RoomMsg {
     },
 }
 
+pub(super) enum RoomControl {
+    Authority(Control),
+    Leave {
+        conn: u64,
+        resp: oneshot::Sender<()>,
+    },
+}
+
 struct RoomEntry {
     tx: mpsc::Sender<RoomMsg>,
-    control_tx: mpsc::Sender<Control>,
+    control_tx: mpsc::Sender<RoomControl>,
     connections: Arc<AtomicUsize>,
     handle: JoinHandle<()>,
 }
@@ -124,9 +130,12 @@ fn dispatch_control(map: &mut HashMap<String, RoomEntry>, control: &Control) -> 
         _ => map.keys().cloned().collect(),
     };
     for document_id in targets {
-        let delivered = map
-            .get(&document_id)
-            .is_some_and(|entry| entry.control_tx.try_send(control.clone()).is_ok());
+        let delivered = map.get(&document_id).is_some_and(|entry| {
+            entry
+                .control_tx
+                .try_send(RoomControl::Authority(control.clone()))
+                .is_ok()
+        });
         let deleted = matches!(
             control,
             Control::Deleted {
@@ -335,6 +344,41 @@ impl Rooms {
         Ok(JoinedRoom { conn, tx })
     }
 
+    /// Remove a socket through the room's bounded owner queue. A full, closed,
+    /// or wedged priority queue cannot leave the writer task or connection
+    /// accounting alive indefinitely. The separate priority lane also means a
+    /// client that fills the frame queue can be evicted without disrupting its
+    /// healthy peers; only a room that cannot acknowledge control is aborted.
+    pub async fn leave(&self, document_id: &DocumentId, joined: &JoinedRoom) {
+        let control_tx = {
+            let map = self.map.lock().unwrap_or_else(|poison| poison.into_inner());
+            map.get(document_id.as_str())
+                .filter(|entry| entry.tx.same_channel(&joined.tx))
+                .map(|entry| entry.control_tx.clone())
+        };
+        let Some(control_tx) = control_tx else {
+            return;
+        };
+        if handoff_leave(&control_tx, joined.conn, ROOM_REPLY_TIMEOUT).await {
+            return;
+        }
+
+        let failed = {
+            let mut map = self.map.lock().unwrap_or_else(|poison| poison.into_inner());
+            if map
+                .get(document_id.as_str())
+                .is_some_and(|entry| entry.tx.same_channel(&joined.tx))
+            {
+                map.remove(document_id.as_str())
+            } else {
+                None
+            }
+        };
+        if let Some(entry) = failed {
+            entry.handle.abort();
+        }
+    }
+
     /// Cheap best-effort metadata: no room message, snapshot export, or await.
     /// A contended owner map reports zero through `None` instead of delaying a
     /// document GET behind room creation or teardown.
@@ -383,13 +427,46 @@ impl Rooms {
             let mut map = self.map.lock().unwrap_or_else(|poison| poison.into_inner());
             map.drain().map(|(_, entry)| entry).collect()
         };
-        for entry in entries {
-            let (resp, rx) = oneshot::channel();
-            if entry.tx.send(RoomMsg::Shutdown { resp }).await.is_ok() {
-                let _ = rx.await;
-            }
-            let _ = entry.handle.await;
-        }
+        join_all(
+            entries
+                .into_iter()
+                .map(|entry| shutdown_entry(entry, ROOM_REPLY_TIMEOUT)),
+        )
+        .await;
+    }
+}
+
+async fn handoff_leave(tx: &mpsc::Sender<RoomControl>, conn: u64, deadline: Duration) -> bool {
+    let (resp, rx) = oneshot::channel();
+    if tx.try_send(RoomControl::Leave { conn, resp }).is_err() {
+        return false;
+    }
+    matches!(tokio::time::timeout(deadline, rx).await, Ok(Ok(())))
+}
+
+async fn shutdown_entry(entry: RoomEntry, timeout: Duration) {
+    let RoomEntry { tx, mut handle, .. } = entry;
+    let deadline = tokio::time::Instant::now() + timeout;
+    let (resp, rx) = oneshot::channel();
+    let acknowledged = matches!(
+        tokio::time::timeout_at(deadline, async {
+            tx.send(RoomMsg::Shutdown { resp }).await.ok()?;
+            rx.await.ok()
+        })
+        .await,
+        Ok(Some(()))
+    );
+    drop(tx);
+
+    if !acknowledged {
+        handle.abort();
+        return;
+    }
+    if tokio::time::timeout_at(deadline, &mut handle)
+        .await
+        .is_err()
+    {
+        handle.abort();
     }
 }
 
@@ -402,9 +479,9 @@ mod manager_tests {
         let (tx, _rx) = mpsc::channel(1);
         let (control_tx, _control_rx) = mpsc::channel(1);
         control_tx
-            .try_send(Control::SessionRevoked {
+            .try_send(RoomControl::Authority(Control::SessionRevoked {
                 session_id: "session_first".to_owned(),
-            })
+            }))
             .unwrap();
         let handle = tokio::spawn(std::future::pending::<()>());
         let mut map = HashMap::from([(
@@ -429,5 +506,105 @@ mod manager_tests {
             entry.handle.abort();
             let _ = entry.handle.await;
         }
+    }
+
+    #[tokio::test]
+    async fn saturated_frame_lane_does_not_block_leave_handoff() {
+        let (tx, _rx) = mpsc::channel(1);
+        tx.try_send(RoomMsg::Frame {
+            conn: 1,
+            data: vec![1],
+        })
+        .unwrap();
+        let (control_tx, mut control_rx) = mpsc::channel(1);
+        let responder = tokio::spawn(async move {
+            if let Some(RoomControl::Leave { resp, .. }) = control_rx.recv().await {
+                let _ = resp.send(());
+            }
+        });
+        let result = handoff_leave(&control_tx, 2, Duration::from_secs(5)).await;
+
+        assert!(result);
+        assert_eq!(tx.capacity(), 0);
+        responder.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn wedged_leave_handoff_stops_at_its_deadline() {
+        let (tx, rx) = mpsc::channel(1);
+        let deadline = Duration::from_millis(20);
+        let started = tokio::time::Instant::now();
+
+        let result = tokio::time::timeout(Duration::from_secs(1), handoff_leave(&tx, 1, deadline))
+            .await
+            .expect("a wedged room must not retain a disconnect indefinitely");
+
+        assert!(!result);
+        assert!(tokio::time::Instant::now() - started >= deadline);
+        assert_eq!(rx.len(), 1);
+    }
+
+    fn test_entry(tx: mpsc::Sender<RoomMsg>, handle: JoinHandle<()>) -> RoomEntry {
+        let (control_tx, _control_rx) = mpsc::channel(1);
+        RoomEntry {
+            tx,
+            control_tx,
+            connections: Arc::new(AtomicUsize::new(0)),
+            handle,
+        }
+    }
+
+    #[tokio::test]
+    async fn saturated_shutdown_admission_stops_at_the_room_deadline() {
+        let (tx, _rx) = mpsc::channel(1);
+        tx.try_send(RoomMsg::Frame {
+            conn: 1,
+            data: vec![1],
+        })
+        .unwrap();
+        let deadline = Duration::from_millis(20);
+        let started = tokio::time::Instant::now();
+        let entry = test_entry(tx, tokio::spawn(std::future::pending()));
+
+        tokio::time::timeout(Duration::from_secs(1), shutdown_entry(entry, deadline))
+            .await
+            .expect("a saturated room must not block server shutdown");
+
+        assert!(tokio::time::Instant::now() - started >= deadline);
+    }
+
+    #[tokio::test]
+    async fn wedged_shutdown_ack_stops_at_the_room_deadline() {
+        let (tx, rx) = mpsc::channel(1);
+        let deadline = Duration::from_millis(20);
+        let started = tokio::time::Instant::now();
+        let entry = test_entry(tx, tokio::spawn(std::future::pending()));
+
+        tokio::time::timeout(Duration::from_secs(1), shutdown_entry(entry, deadline))
+            .await
+            .expect("a room that never acknowledges must not block server shutdown");
+
+        assert!(tokio::time::Instant::now() - started >= deadline);
+        assert_eq!(rx.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn wedged_shutdown_task_join_stops_at_the_same_room_deadline() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let handle = tokio::spawn(async move {
+            if let Some(RoomMsg::Shutdown { resp }) = rx.recv().await {
+                let _ = resp.send(());
+            }
+            std::future::pending::<()>().await;
+        });
+        let deadline = Duration::from_millis(20);
+        let started = tokio::time::Instant::now();
+        let entry = test_entry(tx, handle);
+
+        tokio::time::timeout(Duration::from_secs(1), shutdown_entry(entry, deadline))
+            .await
+            .expect("an acknowledged but wedged task must not block server shutdown");
+
+        assert!(tokio::time::Instant::now() - started >= deadline);
     }
 }
