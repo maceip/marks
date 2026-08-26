@@ -98,7 +98,29 @@ FETCH_EGRESS_POLICY_TEXT = (
 RELEASE_ROOT = Path("/usr/local/sbin/marks-release-root")
 TEMPLATE = fixed_path("MARKS_TEST_TEMPLATE", "/etc/marks/marks.service.template")
 UNIT = fixed_path("MARKS_TEST_UNIT", "/etc/systemd/system/marks.service")
-NODE = fixed_path("MARKS_TEST_NODE", "/usr/bin/node")
+NODE_TOOLCHAIN_ROOT = fixed_path(
+    "MARKS_TEST_NODE_TOOLCHAIN_ROOT",
+    "/opt/marks-build-tools/node-v24.19.0-linux-x64",
+)
+NODE = fixed_path(
+    "MARKS_TEST_NODE",
+    "/opt/marks-build-tools/node-v24.19.0-linux-x64/bin/node",
+)
+NPM_CLI = fixed_path(
+    "MARKS_TEST_NPM_CLI",
+    "/opt/marks-build-tools/node-v24.19.0-linux-x64/lib/node_modules/npm/bin/npm-cli.js",
+)
+NPM_ROOT = fixed_path(
+    "MARKS_TEST_NPM_ROOT",
+    "/opt/marks-build-tools/node-v24.19.0-linux-x64/lib/node_modules/npm",
+)
+NODE_TOOLCHAIN_VERSION = "v24.19.0"
+NPM_TOOLCHAIN_VERSION = "11.17.0"
+NODE_ARCHIVE = "node-v24.19.0-linux-x64.tar.xz"
+NODE_ARCHIVE_SHA256 = "14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647"
+NODE_BINARY_SHA256 = "bc17c508ffeed0ec622934f9b7fa72f8e78da65350e63c3eceb56fa688aa5e12"
+NPM_CLI_SHA256 = "8e5f6f3429f8cdbe693cdc29904e9d5a7b127a494bd15c804bd54c7403bfcbe7"
+NPM_TREE_SHA256 = "55af62da9d601e0e132bd9c043c63dcaa9bddae2bf08266c029db18082ce7554"
 SERVICE = "marks.service"
 REMOTE = "https://github.com/maceip/marks.git"
 PUBLIC_ORIGIN = "https://marks.secure.build"
@@ -961,6 +983,142 @@ def hash_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def immutable_tool_tree_digest(root: Path, *, owner, label: str) -> str:
+    """Hash one non-writable regular-file tree with an unambiguous manifest."""
+    try:
+        entries = [root, *root.rglob("*")]
+    except OSError as error:
+        fail(f"{label} tree cannot be enumerated: {error}")
+    digest = hashlib.sha256()
+    for item in sorted(
+        entries,
+        key=lambda entry: b"" if entry == root else os.fsencode(entry.relative_to(root)),
+    ):
+        try:
+            info = item.lstat()
+        except OSError as error:
+            fail(f"{label} tree entry is unavailable: {item}: {error}")
+        if (
+            stat.S_ISLNK(info.st_mode)
+            or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode))
+            or (info.st_uid, info.st_gid) != owner
+            or info.st_mode & 0o022
+        ):
+            fail(f"{label} tree contains an unsafe entry: {item}")
+        relative = b"" if item == root else os.fsencode(item.relative_to(root))
+        kind = b"d" if stat.S_ISDIR(info.st_mode) else b"f"
+        digest.update(kind)
+        digest.update(stat.S_IMODE(info.st_mode).to_bytes(4, "big"))
+        digest.update(len(relative).to_bytes(4, "big"))
+        digest.update(relative)
+        if kind == b"f":
+            if info.st_nlink != 1:
+                fail(f"{label} tree contains a multiply linked file: {item}")
+            digest.update(info.st_size.to_bytes(8, "big"))
+            digest.update(bytes.fromhex(hash_file(item)))
+    return digest.hexdigest()
+
+
+def validate_node_toolchain_contract(
+    root: Path,
+    node: Path,
+    npm_cli: Path,
+    *,
+    owner,
+    node_sha256: str,
+    npm_cli_sha256: str,
+) -> None:
+    """Validate the immutable Node/npm bytes and every directory above them."""
+    if not node.is_relative_to(root) or not npm_cli.is_relative_to(root):
+        fail("Node toolchain executables escape the fixed toolchain root")
+    checked_directories = set()
+    for tool in (node, npm_cli):
+        current = tool.parent
+        while True:
+            checked_directories.add(current)
+            if current == root.parent:
+                break
+            if current == current.parent:
+                fail("Node toolchain path does not reach its fixed parent")
+            current = current.parent
+    for directory in sorted(checked_directories, key=lambda item: len(item.parts)):
+        try:
+            info = directory.lstat()
+        except OSError as error:
+            fail(f"Node toolchain directory is unavailable: {directory}: {error}")
+        if (
+            stat.S_ISLNK(info.st_mode)
+            or not stat.S_ISDIR(info.st_mode)
+            or (info.st_uid, info.st_gid) != owner
+            or info.st_mode & 0o022
+        ):
+            fail(f"Node toolchain directory is unsafe: {directory}")
+    for tool, label, expected_digest, executable in (
+        (node, "Node binary", node_sha256, True),
+        (npm_cli, "npm CLI", npm_cli_sha256, False),
+    ):
+        try:
+            info = tool.lstat()
+        except OSError as error:
+            fail(f"{label} is unavailable: {error}")
+        if (
+            stat.S_ISLNK(info.st_mode)
+            or not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or (info.st_uid, info.st_gid) != owner
+            or info.st_mode & 0o022
+            or (executable and not info.st_mode & stat.S_IXUSR)
+        ):
+            fail(f"{label} has unsafe ownership, type, links, or mode")
+        if hash_file(tool) != expected_digest:
+            fail(f"{label} differs from the pinned Node toolchain")
+
+
+def validate_node_toolchain():
+    """Require one root-owned Node 24 toolchain, independent of host packages."""
+    validate_node_toolchain_contract(
+        NODE_TOOLCHAIN_ROOT,
+        NODE,
+        NPM_CLI,
+        owner=(0, 0),
+        node_sha256=NODE_BINARY_SHA256,
+        npm_cli_sha256=NPM_CLI_SHA256,
+    )
+    npm_tree_digest = immutable_tool_tree_digest(
+        NPM_ROOT,
+        owner=(0, 0),
+        label="npm runtime",
+    )
+    if npm_tree_digest != NPM_TREE_SHA256:
+        fail("npm runtime tree differs from the pinned Node archive")
+    node_version = run(
+        [NODE, "--version"],
+        capture=True,
+        capture_limit=128,
+        env=fixed_environment(),
+    ).stdout.strip()
+    npm_version = run(
+        [NODE, NPM_CLI, "--version"],
+        capture=True,
+        capture_limit=128,
+        env=fixed_environment(),
+    ).stdout.strip()
+    if node_version != NODE_TOOLCHAIN_VERSION or npm_version != NPM_TOOLCHAIN_VERSION:
+        fail("installed Node toolchain version differs from the pinned release")
+    return {
+        "root": str(NODE_TOOLCHAIN_ROOT),
+        "nodePath": str(NODE),
+        "npmCliPath": str(NPM_CLI),
+        "nodeVersion": node_version,
+        "npmVersion": npm_version,
+        "archive": NODE_ARCHIVE,
+        "archiveSha256": NODE_ARCHIVE_SHA256,
+        "nodeSha256": NODE_BINARY_SHA256,
+        "npmCliSha256": NPM_CLI_SHA256,
+        "npmTreeSha256": npm_tree_digest,
+    }
+
+
 def read_bounded_json_file(path: Path, label: str, limit: int):
     """Read one regular no-follow JSON file without trusting its size first."""
     if limit <= 0:
@@ -1366,12 +1524,15 @@ def sandboxed_npm(
         "--property=ProtectKernelModules=yes", "--property=ProtectControlGroups=yes",
         "--property=InaccessiblePaths=/var/lib/marks /etc/marks /home /root /run/docker.sock",
         "--property=ReadWritePaths=/work",
+        f"--setenv=PATH={NODE.parent}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         "--setenv=HOME=/work/.marks-npm-home",
         "--setenv=npm_config_cache=/work/.marks-npm-cache",
         "--setenv=npm_config_userconfig=/marks-npm-config/user",
         "--setenv=npm_config_globalconfig=/marks-npm-config/global",
         "--setenv=npm_config_registry=https://registry.npmjs.org/",
         "--setenv=npm_config_audit=false", "--setenv=npm_config_fund=false",
+        "--setenv=npm_config_engine_strict=true",
+        "--setenv=npm_config_strict_allow_scripts=true",
         "--setenv=npm_config_proxy=", "--setenv=npm_config_https_proxy=",
     ]
     if allow_network:
@@ -1388,9 +1549,9 @@ def sandboxed_npm(
             "--property=RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
             "--setenv=npm_config_offline=true",
         ])
-    command.extend(["/usr/bin/npm", *arguments])
+    command.extend([NODE, NPM_CLI, *arguments])
     for key, value in (extra_env or {}).items():
-        command.insert(command.index("/usr/bin/npm"), f"--setenv={key}={value}")
+        command.insert(command.index(NODE), f"--setenv={key}={value}")
     run(command)
 
 
@@ -1813,8 +1974,8 @@ def seal_release(source: Path, cargo: Path, revision: str, build) -> Path:
             "serverCargoFeatures": build["cargoFeatures"],
             "createdAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "builderImage": BUILDER_IMAGE,
-            "nodeVersion": run(["/usr/bin/node", "--version"], capture=True).stdout.strip(),
-            "npmVersion": run(["/usr/bin/npm", "--version"], capture=True).stdout.strip(),
+            "nodeVersion": NODE_TOOLCHAIN_VERSION,
+            "npmVersion": NPM_TOOLCHAIN_VERSION,
             "schemaVersion": schema_receipt["schemaVersion"],
             "maxCompatibleSchema": schema_receipt["maxCompatibleSchema"],
         }
@@ -2726,6 +2887,11 @@ def build_deploy(revision: str, requested_variant: str, expected_digest: str) ->
             f"this deployment target is fixed to {TARGET_PRODUCT_VARIANT}; "
             "provision a separate target before deploying another product variant"
         )
+    # main() admits build/deploy only as root. Keep the unprivileged contract-test
+    # seam usable while making every real host build prove the immutable toolchain
+    # before it claims uploaded source or mutates release state.
+    if os.geteuid() == 0:
+        validate_node_toolchain()
     # A prior deploy may have been killed after atomically publishing its
     # candidate but before activation/pruning. Bound visible releases and the
     # shared asset pool before creating at most one new candidate this run.
@@ -2876,11 +3042,12 @@ def releases_command() -> None:
 
 def probe() -> None:
     commands = (
-        "docker", "npm", "node", "git", "curl", "python3", "sha256sum",
+        "docker", "git", "curl", "python3", "sha256sum",
         "systemd-run", "timeout", "prlimit",
     )
     build_capacity = validate_build_filesystem()
     fetch_egress = validate_fetch_egress_policy()
+    node_toolchain = validate_node_toolchain()
     build_uid, build_gid = build_identity()
     for required in (Path("/usr/bin/timeout"), Path("/usr/bin/prlimit")):
         try:
@@ -2930,6 +3097,7 @@ def probe() -> None:
             "maximumBytes": MAX_BUILD_FILESYSTEM_BYTES,
         },
         "fetchEgress": fetch_egress,
+        "nodeToolchain": node_toolchain,
     }
     print(json.dumps(value, sort_keys=True))
 

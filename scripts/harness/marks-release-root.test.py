@@ -48,7 +48,10 @@ def load_helper(root: Path):
         root / "state" / "build" / "verified-git"
     )
     os.environ["MARKS_TEST_TEMPLATE"] = str(root / "marks.service.template")
+    os.environ["MARKS_TEST_NODE_TOOLCHAIN_ROOT"] = str(root / "node-toolchain")
     os.environ["MARKS_TEST_NODE"] = shutil.which("node") or "/usr/bin/node"
+    os.environ["MARKS_TEST_NPM_CLI"] = shutil.which("npm") or "/usr/bin/npm"
+    os.environ["MARKS_TEST_NPM_ROOT"] = str(root / "node-toolchain" / "npm")
     os.environ["MARKS_TEST_SQLITE_WORKER"] = str(
         REPO / "deploy" / "host" / "marks-sqlite-worker"
     )
@@ -746,6 +749,52 @@ class ReleaseRootContract(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "sparse"):
             mod.validate_loop_backing_contract(sparse, os.makedev(7, 41))
 
+    def test_node_toolchain_is_fixed_root_owned_single_link_content(self):
+        mod = self.mod
+        root = self.root / "node-toolchain"
+        node = root / "bin" / "node"
+        npm_cli = root / "lib" / "node_modules" / "npm" / "bin" / "npm-cli.js"
+        node.parent.mkdir(parents=True)
+        npm_cli.parent.mkdir(parents=True)
+        node.write_bytes(b"pinned node binary")
+        npm_cli.write_bytes(b"pinned npm cli")
+        os.chmod(node, 0o755)
+        os.chmod(npm_cli, 0o644)
+        owner = (os.getuid(), os.getgid())
+        arguments = {
+            "owner": owner,
+            "node_sha256": hashlib.sha256(node.read_bytes()).hexdigest(),
+            "npm_cli_sha256": hashlib.sha256(npm_cli.read_bytes()).hexdigest(),
+        }
+
+        mod.validate_node_toolchain_contract(root, node, npm_cli, **arguments)
+        tree_digest = mod.immutable_tool_tree_digest(
+            root / "lib" / "node_modules" / "npm",
+            owner=owner,
+            label="npm runtime",
+        )
+        self.assertRegex(tree_digest, r"^[0-9a-f]{64}$")
+        npm_cli.write_bytes(b"mutated npm cli")
+        self.assertNotEqual(
+            mod.immutable_tool_tree_digest(
+                root / "lib" / "node_modules" / "npm",
+                owner=owner,
+                label="npm runtime",
+            ),
+            tree_digest,
+        )
+        npm_cli.write_bytes(b"pinned npm cli")
+
+        alias = node.with_name("node-hardlink")
+        os.link(node, alias)
+        with self.assertRaisesRegex(RuntimeError, "unsafe ownership, type, links, or mode"):
+            mod.validate_node_toolchain_contract(root, node, npm_cli, **arguments)
+        alias.unlink()
+
+        os.chmod(root / "lib" / "node_modules", 0o775)
+        with self.assertRaisesRegex(RuntimeError, "directory is unsafe"):
+            mod.validate_node_toolchain_contract(root, node, npm_cli, **arguments)
+
     def test_build_and_canary_processes_have_hard_resource_deadlines(self):
         mod = self.mod
         workspace = self.root / "workspace"
@@ -787,6 +836,16 @@ class ReleaseRootContract(unittest.TestCase):
         )
         self.assertNotIn("--setenv=npm_config_userconfig=/dev/null", npm)
         self.assertNotIn("--setenv=npm_config_globalconfig=/dev/null", npm)
+        self.assertIn("--setenv=npm_config_engine_strict=true", npm)
+        self.assertIn("--setenv=npm_config_strict_allow_scripts=true", npm)
+        self.assertIn(
+            f"--setenv=PATH={mod.NODE.parent}:/usr/local/sbin:/usr/local/bin:"
+            "/usr/sbin:/usr/bin:/sbin:/bin",
+            npm,
+        )
+        self.assertIn(str(mod.NODE), npm)
+        self.assertIn(str(mod.NPM_CLI), npm)
+        self.assertLess(npm.index(str(mod.NODE)), npm.index(str(mod.NPM_CLI)))
         self.assertIn("--property=PrivateNetwork=yes", npm)
         self.assertIn("--property=ProtectProc=invisible", npm)
         self.assertIn("--property=ProcSubset=pid", npm)

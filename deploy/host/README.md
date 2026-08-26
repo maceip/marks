@@ -12,7 +12,7 @@ to deploy unless those hashes equal these checked-in files.
 | `marks-deploy-ssh` | `/usr/local/libexec/marks-deploy-ssh` | root:root 0755 |
 | `marks-upload` | `/usr/local/libexec/marks-upload` | root:root 0755 |
 | `marks-sqlite-worker` | `/usr/local/libexec/marks-sqlite-worker` | root:root 0755 |
-| `marks-release-root` | `/usr/local/sbin/marks-release-root` | root:root 0755 |
+| `marks-release-root` | `/usr/local/sbin/marks-release-root` | root:root 0700 |
 | `marks.service.template` | `/etc/marks/marks.service.template` | root:root 0644 |
 | `90-marks-deploy.sshd.conf` | `/etc/ssh/sshd_config.d/90-marks-deploy.conf` | root:root 0644 |
 | `sudoers-marks-deploy` | `/etc/sudoers.d/marks-deploy` | root:root 0440 |
@@ -58,6 +58,48 @@ Provisioning history, the acceptance evidence for this boundary, and the
 administrative recovery procedure are recorded on the host in
 `/etc/marks/deploy-protocol.md` (pre-change backups under
 `/root/marks-boundary-backup-*`).
+
+## Pinned Node build toolchain
+
+The host-wide `/usr/bin/node` and `/usr/bin/npm` are not part of the release
+build contract. The root helper invokes Node `v24.19.0` and npm `11.17.0`
+through fixed files beneath
+`/opt/marks-build-tools/node-v24.19.0-linux-x64`. It verifies every directory
+in that root-owned, non-group/world-writable path, both entry files' type,
+owner, mode, single-link status and SHA-256 digests, the canonical digest of
+all 2,376 directory/file entries in the bundled npm tree, and both reported
+versions before accepting `probe` or `deploy`. The helper invokes npm through
+those exact files and gives it a base PATH beginning with the pinned Node
+`bin/` directory. npm prepends locked package bins while running lifecycle
+scripts; the current lock exports no `node` bin. npm also runs with
+`engine-strict=true` and `strict-allow-scripts=true`, so the current build does
+not fall back to `/usr/bin/node`, and a newly locked lifecycle script must be
+explicitly listed in the repository's `allowScripts` policy. The probe receipt
+binds all of those identities and the deployment client checks them before
+uploading source.
+
+Provision the official Node archive once from an administrative session:
+
+```bash
+install -d -o root -g root -m 0755 /opt/marks-build-tools
+test ! -e /opt/marks-build-tools/node-v24.19.0-linux-x64
+curl --fail --location --proto '=https' --tlsv1.2 \
+  --output /root/node-v24.19.0-linux-x64.tar.xz \
+  https://nodejs.org/download/release/v24.19.0/node-v24.19.0-linux-x64.tar.xz
+printf '%s  %s\n' \
+  14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647 \
+  /root/node-v24.19.0-linux-x64.tar.xz | sha256sum --check --strict
+(umask 022 && tar --extract --xz \
+  --file /root/node-v24.19.0-linux-x64.tar.xz \
+  --directory /opt/marks-build-tools --no-same-owner --no-same-permissions)
+chown -R root:root /opt/marks-build-tools/node-v24.19.0-linux-x64
+chmod -R go-w /opt/marks-build-tools/node-v24.19.0-linux-x64
+rm /root/node-v24.19.0-linux-x64.tar.xz
+```
+
+Do not replace the versioned directory in place. A toolchain update uses a
+new directory, new checked-in archive/file digests and versions, an installed
+matching helper, a green probe, and then a normal receipt-bound deployment.
 
 The activation, retention, rollback-preflight, and backup contracts are
 tested directly against `marks-release-root` by
@@ -107,8 +149,12 @@ aggregate boundary during a failed or hostile build; locked stale-workspace
 cleanup is the tighter pre-build hygiene layer. `status`, `releases`, and rollback remain
 available if the disposable build filesystem is offline.
 
-The legacy `cache/` directory is empty and root-owned; no repository-writable
-tool state persists across releases. Every release gets a new npm home and
+The active `build/cache/` directory is empty and root-owned; no
+repository-writable tool state persists across releases. The deprecated
+pre-v2 top-level `/var/lib/marks-deploy/cache` is outside every current helper
+path and remains quarantined through the first v2 rollback window; remove it
+only after a second v2 deployment makes a receipt-bound release the normal
+rollback target. Every release gets a new npm home and
 cache inside its disposable workspace plus new empty Cargo home and target
 directories under a root-hidden per-release workspace; all three are deleted
 after success or failure, and all stale workspaces are purged at the start of

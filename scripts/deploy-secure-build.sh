@@ -297,6 +297,27 @@ check_remote_protocol() {
     ) {
       fail("installed helper did not prove the bounded build filesystem");
     }
+    const nodeToolchain = probe.nodeToolchain;
+    const expectedNodeToolchain = {
+      root: "/opt/marks-build-tools/node-v24.19.0-linux-x64",
+      nodePath: "/opt/marks-build-tools/node-v24.19.0-linux-x64/bin/node",
+      npmCliPath: "/opt/marks-build-tools/node-v24.19.0-linux-x64/lib/node_modules/npm/bin/npm-cli.js",
+      nodeVersion: "v24.19.0",
+      npmVersion: "11.17.0",
+      archive: "node-v24.19.0-linux-x64.tar.xz",
+      archiveSha256: "14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647",
+      nodeSha256: "bc17c508ffeed0ec622934f9b7fa72f8e78da65350e63c3eceb56fa688aa5e12",
+      npmCliSha256: "8e5f6f3429f8cdbe693cdc29904e9d5a7b127a494bd15c804bd54c7403bfcbe7",
+      npmTreeSha256: "55af62da9d601e0e132bd9c043c63dcaa9bddae2bf08266c029db18082ce7554",
+    };
+    if (
+      !nodeToolchain ||
+      Object.entries(expectedNodeToolchain).some(
+        ([key, value]) => nodeToolchain[key] !== value,
+      )
+    ) {
+      fail("installed helper did not prove the pinned Node 24 build toolchain");
+    }
     if (
       probe.identities?.ingress !== "marks-deploy" ||
       probe.identities?.build !== "marks-build" ||
@@ -394,13 +415,13 @@ run_local_gate() {
   require_command rustup
   require_command curl
   require_command python3
-  node -e '
-    const [major, minor] = process.versions.node.split(".").map(Number);
-    if (major < 22 || (major === 22 && minor < 12)) process.exit(1);
-  ' || die "Node 22.12 or newer is required"
+  [[ "$(node --version)" == "v24.19.0" ]] \
+    || die "Node v24.19.0 is required"
+  [[ "$(npm --version)" == "11.17.0" ]] \
+    || die "npm 11.17.0 is required"
 
   echo "==> installing locked browser dependencies"
-  (cd "$ROOT" && npm ci)
+  (cd "$ROOT" && npm ci --engine-strict --strict-allow-scripts)
 
   echo "==> Rust format, workspace tests, and warnings-as-errors lint"
   (cd "$ROOT" && cargo_pinned fmt --all --check)

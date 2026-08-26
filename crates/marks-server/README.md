@@ -17,11 +17,12 @@ receives site IDs and bytes only — never a session, an email, or a role.
 cargo run -p marks-server
 ```
 
-The Marks workspace requires Node.js 22.12 or newer as well as Rust. For an
-ordinary no-feature development build, `build.rs` invokes the checked-in Node
-variant resolver to obtain the canonical `stable`/local plan; it does not keep
-a second Rust copy of that default. Release builds and any build with
-nondefault Cargo features must supply an explicit resolver-produced plan.
+The Marks workspace pins Node.js 24.19.0 (with npm 11.17.0) in
+[`/.node-version`](../../.node-version) as well as Rust. For an ordinary
+no-feature development build, `build.rs` invokes the checked-in Node variant
+resolver to obtain the canonical `stable`/local plan; it does not keep a second
+Rust copy of that default. Release builds and any build with nondefault Cargo
+features must supply an explicit resolver-produced plan.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |

@@ -31,10 +31,13 @@ test('scheduled proof uses the current service boundary and explicit rendering b
 });
 
 test('actions are immutable full-commit revisions on Node 24 runtime releases', () => {
-  const workflows = [
+  const workflowSources = [
     readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8'),
     readFileSync(scheduledPath, 'utf8'),
     readFileSync(resolve(root, '.github/workflows/production.yml'), 'utf8'),
+  ];
+  const workflows = [
+    ...workflowSources,
     readFileSync(resolve(root, '.github/workflows/dependabot-merge.yml'), 'utf8'),
   ].join('\n');
 
@@ -50,6 +53,28 @@ test('actions are immutable full-commit revisions on Node 24 runtime releases', 
   assert.doesNotMatch(workflows, /actions\/(?:checkout|setup-node)@v\d/);
   assert.match(workflows, /actions\/checkout@[0-9a-f]{40} # v7\./);
   assert.match(workflows, /actions\/setup-node@[0-9a-f]{40} # v7\./);
+
+  assert.equal(readFileSync(resolve(root, '.node-version'), 'utf8'), '24.19.0\n');
+  const setupNodeSteps = workflowSources.flatMap((workflow) =>
+    workflow
+      .split(/(?=^ {6}- name:)/mu)
+      .filter((step) => /uses: actions\/setup-node@[0-9a-f]{40}/u.test(step)),
+  );
+  assert.equal(setupNodeSteps.length, 7, 'every setup-node step must be audited');
+  for (const step of setupNodeSteps) {
+    assert.match(step, /^ {10}node-version-file: '\.node-version'$/mu);
+    assert.doesNotMatch(step, /^\s*node-version:/mu);
+  }
+
+  const workflowInstalls = workflowSources
+    .flatMap((workflow) => workflow.match(/^\s*run: npm ci.*$/gmu) ?? []);
+  assert.equal(workflowInstalls.length, 5, 'every workflow npm install must be audited');
+  for (const install of workflowInstalls) {
+    assert.match(
+      install,
+      /run: npm ci --engine-strict --strict-allow-scripts$/u,
+    );
+  }
 });
 
 test('coupled RustCrypto majors stay in one dependabot pull request', () => {

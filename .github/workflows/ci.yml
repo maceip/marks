@@ -58,7 +58,7 @@ jobs:
       - name: Setup Node.js v24
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '24'
+          node-version-file: '.node-version'
 
       - name: Classify the complete change
         id: classify
@@ -162,7 +162,7 @@ jobs:
           needs.impact.outputs.run_harness == 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '24'
+          node-version-file: '.node-version'
           cache: 'npm'
 
       - name: Reject retired duplicate implementations
@@ -230,7 +230,7 @@ jobs:
 
       - name: Install dependencies
         if: needs.impact.outputs.run_web == 'true' || needs.impact.outputs.run_harness == 'true'
-        run: npm ci
+        run: npm ci --engine-strict --strict-allow-scripts
 
       - name: Enforce product feature source and catalog contracts
         if: needs.impact.outputs.run_web == 'true'
@@ -357,11 +357,11 @@ jobs:
       - name: Setup Node.js v24
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '24'
+          node-version-file: '.node-version'
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --engine-strict --strict-allow-scripts
 
       - name: Resolve the stable service build plan
         shell: bash
@@ -498,11 +498,11 @@ jobs:
       - name: Setup Node.js v24
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '24'
+          node-version-file: '.node-version'
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --engine-strict --strict-allow-scripts
 
       - name: Resolve the requested product build plan
         id: plan

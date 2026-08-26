@@ -41,7 +41,10 @@ The Cloud Agent snapshot has two different Chrome entry points. They are not int
 
 `PLAYWRIGHT_SERVICE_URL` may be set (hosted Playwright). The harness does not use it — tests stay on local Chrome/Chromium.
 
-`agent-browser` 0.34 declares `engines.node >= 24`. This repo's engine is Node 22; npm warns, the CLI still runs. Do not run `agent-browser install` here — system Chrome is already present.
+`agent-browser` 0.34 declares `engines.node >= 24`. This repository pins Node
+24.19.0 with its bundled npm 11.17.0, and locked installs run with
+`engine-strict`; an engine mismatch is a failure, not a tolerated warning. Do
+not run `agent-browser install` here — system Chrome is already present.
 
 Override any of this with `CHROMIUM_PATH`, `CHROME_PATH`, `PUPPETEER_EXECUTABLE_PATH`, or `AGENT_BROWSER_EXECUTABLE_PATH`.
 
