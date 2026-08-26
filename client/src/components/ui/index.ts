@@ -2,6 +2,7 @@ export * from './Button';
 export * from './Comment';
 export * from './Divider';
 export * from './Icon';
+export { iconLabel } from '../icons/catalog';
 export * from './IconButton';
 export * from './Menu';
 export * from './Modal';

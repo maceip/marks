@@ -94,6 +94,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Checkout reconciliation policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: LLM-assisted verification of safe merges and resolved remediation
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_DEPENDABOT_MODEL: gpt-5.4-mini
+          REPO: ${{ github.repository }}
+        run: node scripts/dependabot-llm-reconcile.mjs
       - name: Reconcile dependabot pull requests missed by event automation
         shell: bash
         env:

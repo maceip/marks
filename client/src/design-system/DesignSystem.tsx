@@ -19,6 +19,7 @@ import {
   Divider,
   ICON_NAMES,
   Icon,
+  iconLabel,
   IconButton,
   MarksMark,
   Menu,
@@ -234,7 +235,7 @@ export function DesignSystem({ onBack }: { onBack: () => void }) {
           </div>
           <h3>Isometric icons</h3>
           <p>Custom 2.5D slabs, not a stroke pack. Hover tilts the tile; press depresses it.</p>
-          <div className="ds-icon-grid">{ICON_NAMES.map((name) => <span className="icon-demo" title={name} key={name}><Icon name={name} size={28} /></span>)}</div>
+          <div className="ds-icon-grid">{ICON_NAMES.map((name) => <span className="icon-demo" title={iconLabel(name)} key={name}><Icon name={name} size={28} /><span>{iconLabel(name)}</span></span>)}</div>
         </Section>
 
         <Section id="controls" title="Controls">

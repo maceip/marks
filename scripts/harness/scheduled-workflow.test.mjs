@@ -104,4 +104,8 @@ test('failed dependabot CI is recorded durably and its pull request is closed', 
   assert.match(workflow, /age < 86400/);
   assert.match(workflow, /select\(\.name == "CI gate" and \.app\.slug == "github-actions"\)/);
   assert.match(workflow, /gh pr merge/);
+  assert.match(workflow, /OPENAI_API_KEY:.*secrets\.OPENAI_API_KEY/);
+  assert.match(workflow, /LLM-assisted verification[\s\S]*?continue-on-error: true/);
+  assert.match(workflow, /Checkout reconciliation policy\s*\n\s*uses: actions\/checkout@[0-9a-f]{40}/);
+  assert.match(workflow, /node scripts\/dependabot-llm-reconcile\.mjs/);
 });

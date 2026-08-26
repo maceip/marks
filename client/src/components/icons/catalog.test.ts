@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { inflateSync } from 'node:zlib';
 import test from 'node:test';
 import { SHEET_ICON_NAMES, SHEET_ICON_SIZE, VECTOR_ONLY_ICON_NAMES } from './assets.ts';
-import { ICON_MARKS, ICON_NAMES, isIconName } from './catalog.ts';
+import { ICON_MARKS, ICON_NAMES, iconLabel, isIconName } from './catalog.ts';
 import { createIconActivationPlan, ICON_ACTIVATION_MOTION } from './motion.ts';
 
 const ICON_ASSET_DIRECTORY = new URL('../../../public/icons/isometric/', import.meta.url);
@@ -94,6 +94,12 @@ test('every named icon has a mark and is addressable without a third-party pack'
     assert.match(ICON_MARKS[name], /[ML]/);
   }
   assert.equal(isIconName('feather'), false);
+});
+
+test('icon labels expose readable product language instead of internal identifiers', () => {
+  assert.equal(iconLabel('toc'), 'Table of contents');
+  assert.equal(iconLabel('ghostOverlay'), 'Ghost Overlay');
+  assert.equal(iconLabel('bold'), 'Bold');
 });
 
 test('the typed sheet manifest exactly matches the PNG filesystem', () => {
