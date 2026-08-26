@@ -11,6 +11,7 @@ import {
   RibbonToolbar,
 } from '../components/chrome/RibbonCommand';
 import type { AgentChatState } from '../components/agent/agent-chat-model';
+import { iconLabel } from '../components/icons/catalog';
 import {
   Avatar,
   Button,
@@ -19,7 +20,6 @@ import {
   Divider,
   ICON_NAMES,
   Icon,
-  iconLabel,
   IconButton,
   MarksMark,
   Menu,
