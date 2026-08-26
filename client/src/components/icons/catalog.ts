@@ -16,6 +16,15 @@ export const ICON_NAMES = [
 
 export type IconName = (typeof ICON_NAMES)[number];
 
+const ICON_LABELS: Partial<Record<IconName, string>> = {
+  toc: 'Table of contents',
+};
+
+/** Human-readable copy for icon catalogs, tooltips, and accessible names. */
+export function iconLabel(name: IconName): string {
+  return ICON_LABELS[name] ?? name.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, (letter) => letter.toUpperCase());
+}
+
 export const ICON_TONE: Record<IconName, IconTone> = {
   bold: 'blue', italic: 'blue', strike: 'blue', strikethrough: 'blue', underline: 'blue',
   highlight: 'amber', code: 'navy', heading: 'blue', clear: 'slate', grow: 'blue', shrink: 'blue',
