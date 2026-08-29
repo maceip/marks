@@ -185,7 +185,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        browser: [firefox, webkit]
+        browser: [chromium, firefox, webkit]
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -231,7 +231,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Build marks-server
-        run: cargo build -p marks-server --locked --no-default-features
+        run: cargo build -p marks-server --release --locked --no-default-features
         env:
           MARKS_BUILD_REVISION: ${{ github.sha }}
           MARKS_SOURCE_DIRTY: '0'
@@ -265,7 +265,7 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/run-service-ci.sh \
-            --bin target/debug/marks-server \
+            --bin target/release/marks-server \
             --static-dir client/dist \
             --browser "${MARKS_BROWSER}"
 
