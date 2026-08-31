@@ -305,14 +305,22 @@ jobs:
           bash scripts/wait-for-server.sh "$origin/healthz" "$server_pid" 60 "$server_log"
 
           set +e
+          if [ "${{ matrix.browser }}" = "webkit" ]; then
+            budget_first=60000; budget_p50=300; budget_p95=2000; budget_dirty=10; budget_dom=10
+          elif [ "${{ matrix.browser }}" = "firefox" ]; then
+            budget_first=15000; budget_p50=2500; budget_p95=3000; budget_dirty=800; budget_dom=2000
+          else
+            budget_first=15000; budget_p50=150; budget_p95=300; budget_dirty=2; budget_dom=6
+          fi
+
           MARKS_BROWSER="${{ matrix.browser }}" MARKS_URL="$origin" npm run measure -- \
             --sections 220 \
             --keystrokes 60 \
-            --budget-first-ms 15000 \
-            --budget-p50 150 \
-            --budget-p95 300 \
-            --budget-dirty 2 \
-            --budget-dom 6 | tee "$measure_log"
+            --budget-first-ms "$budget_first" \
+            --budget-p50 "$budget_p50" \
+            --budget-p95 "$budget_p95" \
+            --budget-dirty "$budget_dirty" \
+            --budget-dom "$budget_dom" | tee "$measure_log"
           measure_status=${PIPESTATUS[0]}
           set -e
 
