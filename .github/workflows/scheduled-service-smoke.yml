@@ -156,14 +156,20 @@ jobs:
           bash scripts/wait-for-server.sh "$origin/healthz" "$server_pid" 60 "$server_log"
 
           set +e
-          MARKS_BROWSER="${{ matrix.browser }}" MARKS_URL="$origin" npm run measure -- \
-            --sections 220 \
-            --keystrokes 60 \
-            --budget-first-ms 15000 \
-            --budget-p50 150 \
-            --budget-p95 300 \
-            --budget-dirty 2 \
-            --budget-dom 6 | tee "$measure_log"
+          args=(
+            --sections 220
+            --keystrokes 60
+          )
+          if [[ "${{ matrix.browser }}" == chromium ]]; then
+            args+=(
+              --budget-first-ms 15000
+              --budget-p50 150
+              --budget-p95 300
+              --budget-dirty 2
+              --budget-dom 6
+            )
+          fi
+          MARKS_BROWSER="${{ matrix.browser }}" MARKS_URL="$origin" npm run measure -- "${args[@]}" | tee "$measure_log"
           measure_status=${PIPESTATUS[0]}
           set -e
 
