@@ -60,7 +60,7 @@ test('actions are immutable full-commit revisions on Node 24 runtime releases', 
       .split(/(?=^ {6}- name:)/mu)
       .filter((step) => /uses: actions\/setup-node@[0-9a-f]{40}/u.test(step)),
   );
-  assert.equal(setupNodeSteps.length, 7, 'every setup-node step must be audited');
+  assert.equal(setupNodeSteps.length, 6, 'every setup-node step must be audited');
   for (const step of setupNodeSteps) {
     assert.match(step, /^ {10}node-version-file: '\.node-version'$/mu);
     assert.doesNotMatch(step, /^\s*node-version:/mu);
@@ -68,7 +68,7 @@ test('actions are immutable full-commit revisions on Node 24 runtime releases', 
 
   const workflowInstalls = workflowSources
     .flatMap((workflow) => workflow.match(/^\s*run: npm ci.*$/gmu) ?? []);
-  assert.equal(workflowInstalls.length, 5, 'every workflow npm install must be audited');
+  assert.equal(workflowInstalls.length, 4, 'every workflow npm install must be audited');
   for (const install of workflowInstalls) {
     assert.match(
       install,
