@@ -13,7 +13,7 @@
  *   node scripts/measure.mjs 400
  *   node scripts/measure.mjs --budget-p50 150 --budget-p95 300 --budget-first-ms 20000
  */
-import { chromium } from 'playwright';
+import { chromium, firefox, webkit } from 'playwright';
 import { CHROME_LAUNCH_ARGS, launchEnv } from './harness/env.mjs';
 import {
   USAGE,
@@ -53,9 +53,14 @@ function document_(sections) {
   return out.join('\n');
 }
 
-const browser = await chromium.launch({
-  executablePath: CHROMIUM,
-  args: CHROME_LAUNCH_ARGS,
+const browserName = process.env.MARKS_BROWSER || 'chromium';
+const browserType = browserName === 'firefox' ? firefox : browserName === 'webkit' ? webkit : chromium;
+const launchArgs = browserName === 'chromium' ? CHROME_LAUNCH_ARGS : undefined;
+const executablePath = browserName === 'chromium' ? CHROMIUM : undefined;
+
+const browser = await browserType.launch({
+  executablePath,
+  args: launchArgs,
   env: launchEnv(),
 });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
