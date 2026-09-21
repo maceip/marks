@@ -52,10 +52,10 @@
     "deploy:status": "bash scripts/deploy-secure-build.sh status"
   },
   "devDependencies": {
-    "@bytecodealliance/jco-transpile": "0.12.1",
-    "agent-browser": "^0.34.0",
-    "playwright": "^1.62.1",
-    "puppeteer-core": "^25.8.0",
+    "@bytecodealliance/jco-transpile": "0.14.0",
+    "agent-browser": "^0.38.1",
+    "playwright": "^1.63.0",
+    "puppeteer-core": "^25.11.0",
     "typescript": "^5.9.3"
   },
   "allowScripts": {
