@@ -403,7 +403,7 @@ jobs:
           github.event_name == 'workflow_dispatch' &&
           steps.request.outputs.operation == 'deploy' &&
           steps.impact.outputs.should_deploy == 'true'
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # immutable action revision
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # immutable action revision
         with:
           toolchain: 1.88.0
           components: clippy, rustfmt
