@@ -1323,9 +1323,9 @@ dependencies = [
 
 [[package]]
 name = "office_oxide"
-version = "0.1.10"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e24abf918ad56eb7e4091e6e5b0dc8bad554e4f032d2a467634551f7e84b564e"
+checksum = "25caa1da7142070699529cfc8f276a739101c22ffccc572644d3c59278f19b56"
 dependencies = [
  "atoi_simd",
  "encoding_rs",
@@ -1381,9 +1381,9 @@ dependencies = [
 
 [[package]]
 name = "pdf-extract"
-version = "0.12.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "417e8fdc940f1d5bc62c5f89864c3a2255f74f69aa353c98509213d67df61e73"
+checksum = "e5c4820f5811e424ce037d08493ac87752ecc54339e0f1e40c3d17da93278861"
 dependencies = [
  "adobe-cmap-parser",
  "cff-parser",
