@@ -230,8 +230,8 @@ jobs:
             printf 'MARKS_EXPECT_BUILD_PLAN_SHA256=%s\n' "$digest"
           } >> "$GITHUB_ENV"
 
-      - name: Build marks-server
-        run: cargo build -p marks-server --locked --no-default-features
+      - name: Build release marks-server
+        run: cargo build -p marks-server --release --locked --no-default-features
         env:
           MARKS_BUILD_REVISION: ${{ github.sha }}
           MARKS_SOURCE_DIRTY: '0'
@@ -265,7 +265,7 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/run-service-ci.sh \
-            --bin target/debug/marks-server \
+            --bin target/release/marks-server \
             --static-dir client/dist \
             --browser "${MARKS_BROWSER}"
 
