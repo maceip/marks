@@ -536,7 +536,9 @@ class ReleaseRootContract(unittest.TestCase):
         v2 = Path(mod.RELEASES) / f".{revision}.stable.{digest}.staging.123"
         legacy = Path(mod.RELEASES) / ".legacy-20260825T010203Z.staging.456"
         v2.mkdir()
+        os.chmod(v2, 0o755)
         legacy.mkdir()
+        os.chmod(legacy, 0o755)
         (v2 / "partial").write_bytes(b"bounded abandoned release")
         mod.purge_stale_release_staging()
         self.assertFalse(v2.exists())
@@ -752,10 +754,19 @@ class ReleaseRootContract(unittest.TestCase):
     def test_node_toolchain_is_fixed_root_owned_single_link_content(self):
         mod = self.mod
         root = self.root / "node-toolchain"
+        root.mkdir(parents=True)
+        os.chmod(root, 0o755)
         node = root / "bin" / "node"
         npm_cli = root / "lib" / "node_modules" / "npm" / "bin" / "npm-cli.js"
         node.parent.mkdir(parents=True)
         npm_cli.parent.mkdir(parents=True)
+
+        def chmod_tree(p):
+            if p.is_dir():
+                os.chmod(p, 0o755)
+                for child in p.iterdir():
+                    chmod_tree(child)
+        chmod_tree(root)
         node.write_bytes(b"pinned node binary")
         npm_cli.write_bytes(b"pinned npm cli")
         os.chmod(node, 0o755)
