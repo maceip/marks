@@ -5,10 +5,10 @@ the chrome, the *platform* work that decides whether the editor feels like a
 document or like a web page. The implementation lives in `client/src/browser/`
 and is wired through the ESBT engine, CodeMirror, and the preview.
 
-## Google Docs feature map
+## Collaborative editing feature map
 
-Core / most-loved Docs behaviours, scored against marks. "Surface" means the
-browser layer this pass owns. "CRDT" means the merge engine. "Product" is
+Common collaborative editing behaviors, mapped against Marks. "Surface" means
+the browser layer this pass owns. "CRDT" means the merge engine. "Product" is
 intentionally out of scope here.
 
 | Feature | Docs | marks | Owner |
@@ -110,7 +110,7 @@ sequenced work is in [ESBT-COMPLETION-PLAN.md](ESBT-COMPLETION-PLAN.md).
 Old snapshots can still contain the legacy map payload so their markdown stays
 readable, but the browser does not render or generate those records.
 
-### Are we caching in a way that is smart but will not annoy users?
+### How does caching remain predictable for users?
 
 Yes. The rules:
 
@@ -165,7 +165,7 @@ reconciles by key. New here:
 
 Typing still never waits on any of that.
 
-### Are the loading animations crisp?
+### How are loading animations handled?
 
 The opening shell is a transform-only shimmer (compositor thread) over a
 static skeleton. `prefers-reduced-motion` already zeroes animation duration
@@ -173,9 +173,9 @@ globally. The overlay is `pointer-events: none` so a late hydration cannot
 eat the first keystroke. Copy is "Opening document…", "Showing your last
 copy…", or "Opening your last local copy…" — not a branded theatre.
 
-### Would this pass a Google code review?
+### What engineering checks cover this surface?
 
-The bar we used:
+The review covers:
 
 - Small modules with the invariant in the file comment, not in a wiki.
 - Every browser capability is optional; missing SpeechRecognition / Web
