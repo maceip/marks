@@ -152,6 +152,7 @@ jobs:
           bash scripts/wait-for-server.sh "$origin/healthz" "$server_pid" 60 "$server_log"
 
           set +e
+          MARKS_TEST_SERVICE_WORKER=1 \
           MARKS_URL="$origin" npm run measure -- \
             --sections 220 \
             --keystrokes 60 \
