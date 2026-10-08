@@ -537,8 +537,6 @@ class ReleaseRootContract(unittest.TestCase):
         legacy = Path(mod.RELEASES) / ".legacy-20260825T010203Z.staging.456"
         v2.mkdir()
         legacy.mkdir()
-        os.chmod(v2, 0o755)
-        os.chmod(legacy, 0o755)
         (v2 / "partial").write_bytes(b"bounded abandoned release")
         mod.purge_stale_release_staging()
         self.assertFalse(v2.exists())
