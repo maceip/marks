@@ -146,6 +146,7 @@ jobs:
           MARKS_LISTEN=127.0.0.1:3319 \
           MARKS_ORIGIN="$origin" \
           MARKS_DB="$run_root/marks.sqlite" \
+          MARKS_TEST_SERVICE_WORKER=1 \
           MARKS_STATIC_DIR="$GITHUB_WORKSPACE/client/dist" \
             target/release/marks-server >"$server_log" 2>&1 &
           server_pid=$!
