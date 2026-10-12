@@ -53,7 +53,7 @@ jobs:
           key: ${{ runner.os }}-rust-1.88.0-${{ hashFiles('Cargo.lock') }}-release-current
 
       - name: Install pinned Rust toolchain
-        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # immutable action revision
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # immutable action revision
         with:
           toolchain: 1.88.0
 
@@ -200,7 +200,7 @@ jobs:
           key: ${{ runner.os }}-rust-1.88.0-${{ hashFiles('Cargo.lock') }}-service-current
 
       - name: Install pinned Rust toolchain
-        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # immutable action revision
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # immutable action revision
         with:
           toolchain: 1.88.0
           components: rustfmt
