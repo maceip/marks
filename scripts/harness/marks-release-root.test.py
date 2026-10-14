@@ -212,6 +212,7 @@ def install_fixture_sqlite_worker(mod):
 class ReleaseRootContract(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="marks-release-root-test.")).resolve()
+        os.chmod(self.root, 0o755)
         self.addCleanup(shutil.rmtree, self.root, True)
         self.mod = load_helper(self.root)
         Path(self.mod.RELEASES).mkdir(parents=True)
@@ -535,8 +536,12 @@ class ReleaseRootContract(unittest.TestCase):
         digest = "b" * 64
         v2 = Path(mod.RELEASES) / f".{revision}.stable.{digest}.staging.123"
         legacy = Path(mod.RELEASES) / ".legacy-20260825T010203Z.staging.456"
+        os.chmod(v2.parent, 0o755)
         v2.mkdir()
+        os.chmod(v2, 0o755)
+        os.chmod(legacy.parent, 0o755)
         legacy.mkdir()
+        os.chmod(legacy, 0o755)
         (v2 / "partial").write_bytes(b"bounded abandoned release")
         mod.purge_stale_release_staging()
         self.assertFalse(v2.exists())
@@ -754,8 +759,14 @@ class ReleaseRootContract(unittest.TestCase):
         root = self.root / "node-toolchain"
         node = root / "bin" / "node"
         npm_cli = root / "lib" / "node_modules" / "npm" / "bin" / "npm-cli.js"
-        node.parent.mkdir(parents=True)
-        npm_cli.parent.mkdir(parents=True)
+        os.makedirs(node.parent, mode=0o755)
+        os.chmod(root, 0o755)
+        os.chmod(root / 'bin', 0o755)
+        os.makedirs(npm_cli.parent, mode=0o755)
+        os.chmod(root / 'lib', 0o755)
+        os.chmod(root / 'lib' / 'node_modules', 0o755)
+        os.chmod(root / 'lib' / 'node_modules' / 'npm', 0o755)
+        os.chmod(root / 'lib' / 'node_modules' / 'npm' / 'bin', 0o755)
         node.write_bytes(b"pinned node binary")
         npm_cli.write_bytes(b"pinned npm cli")
         os.chmod(node, 0o755)
