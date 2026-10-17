@@ -118,6 +118,8 @@ jobs:
 
       - name: Enforce large-document rendering budgets
         shell: bash
+        env:
+          MARKS_TEST_SERVICE_WORKER: '1'
         run: |
           set -euo pipefail
           origin=http://127.0.0.1:3319
