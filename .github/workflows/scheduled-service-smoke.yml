@@ -118,6 +118,8 @@ jobs:
 
       - name: Enforce large-document rendering budgets
         shell: bash
+        env:
+          MARKS_TEST_SERVICE_WORKER: '1'
         run: |
           set -euo pipefail
           origin=http://127.0.0.1:3319
@@ -127,10 +129,10 @@ jobs:
           server_pid=""
           mkdir -p "$run_root"
 
-          # shellcheck disable=SC2317 # Invoked indirectly by the EXIT/INT/TERM trap.
           cleanup() {
             status=$?
             trap - EXIT INT TERM
+            # shellcheck disable=SC2317 # Invoked indirectly by the EXIT/INT/TERM trap.
             if [ -n "$server_pid" ]; then
               kill "$server_pid" 2>/dev/null || true
               wait "$server_pid" 2>/dev/null || true
