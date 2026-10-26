@@ -19,7 +19,7 @@ test('scheduled proof uses the current service boundary and explicit rendering b
   assert.match(workflow, /MARKS_BUILD_PLAN_SHA256/);
   assert.match(workflow, /MARKS_EXPECT_PRODUCT_VARIANT=stable/);
   assert.match(workflow, /scripts\/run-service-ci\.sh --bin target\/release\/marks-server/);
-  assert.match(workflow, /npm run measure --/);
+  assert.match(workflow, /MARKS_TEST_SERVICE_WORKER=1 MARKS_URL="\$origin" npm run measure --/);
   assert.match(workflow, /--budget-first-ms 15000/);
   assert.match(workflow, /--budget-p50 150/);
   assert.match(workflow, /--budget-p95 300/);
