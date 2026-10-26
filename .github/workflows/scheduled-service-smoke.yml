@@ -143,6 +143,7 @@ jobs:
           }
           trap cleanup EXIT INT TERM
 
+          MARKS_REQUIRE_RELEASE=1 \
           MARKS_LISTEN=127.0.0.1:3319 \
           MARKS_ORIGIN="$origin" \
           MARKS_DB="$run_root/marks.sqlite" \
@@ -152,6 +153,7 @@ jobs:
           bash scripts/wait-for-server.sh "$origin/healthz" "$server_pid" 60 "$server_log"
 
           set +e
+          MARKS_TEST_SERVICE_WORKER=1 \
           MARKS_URL="$origin" npm run measure -- \
             --sections 220 \
             --keystrokes 60 \
