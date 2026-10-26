@@ -537,6 +537,8 @@ class ReleaseRootContract(unittest.TestCase):
         legacy = Path(mod.RELEASES) / ".legacy-20260825T010203Z.staging.456"
         v2.mkdir()
         legacy.mkdir()
+        os.chmod(v2, 0o755)
+        os.chmod(legacy, 0o755)
         (v2 / "partial").write_bytes(b"bounded abandoned release")
         mod.purge_stale_release_staging()
         self.assertFalse(v2.exists())
@@ -758,6 +760,9 @@ class ReleaseRootContract(unittest.TestCase):
         npm_cli.parent.mkdir(parents=True)
         node.write_bytes(b"pinned node binary")
         npm_cli.write_bytes(b"pinned npm cli")
+        for p in (root, node.parent, npm_cli.parent, npm_cli.parent.parent, npm_cli.parent.parent.parent, npm_cli.parent.parent.parent.parent):
+            if p.exists():
+                os.chmod(p, 0o755)
         os.chmod(node, 0o755)
         os.chmod(npm_cli, 0o644)
         owner = (os.getuid(), os.getgid())
@@ -784,6 +789,9 @@ class ReleaseRootContract(unittest.TestCase):
             tree_digest,
         )
         npm_cli.write_bytes(b"pinned npm cli")
+        for p in (root, node.parent, npm_cli.parent, npm_cli.parent.parent, npm_cli.parent.parent.parent, npm_cli.parent.parent.parent.parent):
+            if p.exists():
+                os.chmod(p, 0o755)
 
         alias = node.with_name("node-hardlink")
         os.link(node, alias)
