@@ -147,6 +147,7 @@ jobs:
           MARKS_ORIGIN="$origin" \
           MARKS_DB="$run_root/marks.sqlite" \
           MARKS_STATIC_DIR="$GITHUB_WORKSPACE/client/dist" \
+          MARKS_TEST_SERVICE_WORKER='1' \
             target/release/marks-server >"$server_log" 2>&1 &
           server_pid=$!
           bash scripts/wait-for-server.sh "$origin/healthz" "$server_pid" 60 "$server_log"
