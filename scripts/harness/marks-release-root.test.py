@@ -536,7 +536,9 @@ class ReleaseRootContract(unittest.TestCase):
         v2 = Path(mod.RELEASES) / f".{revision}.stable.{digest}.staging.123"
         legacy = Path(mod.RELEASES) / ".legacy-20260825T010203Z.staging.456"
         v2.mkdir()
+        os.chmod(v2, 0o755)
         legacy.mkdir()
+        os.chmod(legacy, 0o755)
         (v2 / "partial").write_bytes(b"bounded abandoned release")
         mod.purge_stale_release_staging()
         self.assertFalse(v2.exists())
@@ -756,6 +758,9 @@ class ReleaseRootContract(unittest.TestCase):
         npm_cli = root / "lib" / "node_modules" / "npm" / "bin" / "npm-cli.js"
         node.parent.mkdir(parents=True)
         npm_cli.parent.mkdir(parents=True)
+        for d in [root] + list(root.rglob("*")):
+            if d.is_dir():
+                os.chmod(d, 0o755)
         node.write_bytes(b"pinned node binary")
         npm_cli.write_bytes(b"pinned npm cli")
         os.chmod(node, 0o755)
