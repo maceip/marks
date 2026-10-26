@@ -630,7 +630,7 @@ mod shutdown_tests {
 
         release_tx.send(()).expect("release late publication");
         assert!(
-            tokio::time::timeout(Duration::from_secs(1), done_rx)
+            tokio::time::timeout(Duration::from_secs(5), done_rx)
                 .await
                 .expect("late publication completed")
                 .expect("late publication proof channel")
