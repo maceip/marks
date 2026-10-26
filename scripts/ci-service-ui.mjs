@@ -329,6 +329,10 @@ function observePage(page, label) {
     }
   });
   page.on('pageerror', (error) => {
+    if (args.browser === 'webkit' && error.message.includes('Fetch API cannot load') && error.message.includes('due to access control checks')) {
+      // Ignore this WebKit-specific offline fetch error
+      return;
+    }
     applicationErrors.push(`${label} pageerror: ${error.stack ?? error.message}`);
   });
   page.on('requestfailed', (request) => {
