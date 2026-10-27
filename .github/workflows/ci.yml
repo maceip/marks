@@ -416,6 +416,9 @@ jobs:
           attempt() { timeout 300 npx playwright install --with-deps "$BROWSER"; }
           attempt || {
             echo "playwright install stalled or failed once; retrying" >&2
+            sudo killall apt-get apt dpkg || true
+            sudo rm -f /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend || true
+            sudo dpkg --configure -a || true
             attempt
           }
 
@@ -632,6 +635,9 @@ jobs:
           attempt() { timeout 300 npx playwright install --with-deps "$MARKS_BROWSER"; }
           attempt || {
             echo "playwright install stalled or failed once; retrying" >&2
+            sudo killall apt-get apt dpkg || true
+            sudo rm -f /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend || true
+            sudo dpkg --configure -a || true
             attempt
           }
 
