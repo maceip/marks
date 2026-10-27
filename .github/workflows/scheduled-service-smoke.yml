@@ -100,7 +100,7 @@ jobs:
 
       - name: Install Playwright Chromium
         shell: bash
-        timeout-minutes: 12
+        timeout-minutes: 20
         run: |
           set -euo pipefail
           attempt() { timeout 300 npx playwright install --with-deps chromium; }
@@ -248,7 +248,7 @@ jobs:
 
       - name: Install Playwright browser with a bounded retry
         shell: bash
-        timeout-minutes: 12
+        timeout-minutes: 20
         env:
           BROWSER: ${{ matrix.browser }}
         run: |

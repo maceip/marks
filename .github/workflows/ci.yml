@@ -408,7 +408,7 @@ jobs:
       # each attempt and allow exactly one controlled retry.
       - name: Install Playwright browser with a bounded retry
         shell: bash
-        timeout-minutes: 12
+        timeout-minutes: 20
         env:
           BROWSER: ${{ matrix.browser }}
         run: |
@@ -627,7 +627,7 @@ jobs:
       - name: Install the selected Playwright browser
         if: matrix.browser != 'none'
         shell: bash
-        timeout-minutes: 12
+        timeout-minutes: 20
         env:
           MARKS_BROWSER: ${{ matrix.browser }}
         run: |
