@@ -100,12 +100,15 @@ jobs:
 
       - name: Install Playwright Chromium
         shell: bash
-        timeout-minutes: 12
+        timeout-minutes: 20
         run: |
           set -euo pipefail
           attempt() { timeout 300 npx playwright install --with-deps chromium; }
           attempt || {
             echo "playwright install stalled or failed once; retrying" >&2
+            sudo killall apt-get apt dpkg || true
+            sudo rm -f /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend || true
+            sudo dpkg --configure -a || true
             attempt
           }
 
@@ -127,7 +130,7 @@ jobs:
           server_pid=""
           mkdir -p "$run_root"
 
-          # shellcheck disable=SC2317 # Invoked indirectly by the EXIT/INT/TERM trap.
+          # shellcheck disable=SC2317,SC2329 # Invoked indirectly by the EXIT/INT/TERM trap.
           cleanup() {
             status=$?
             trap - EXIT INT TERM
@@ -152,7 +155,7 @@ jobs:
           bash scripts/wait-for-server.sh "$origin/healthz" "$server_pid" 60 "$server_log"
 
           set +e
-          MARKS_URL="$origin" npm run measure -- \
+          MARKS_TEST_SERVICE_WORKER=1 MARKS_URL="$origin" npm run measure -- \
             --sections 220 \
             --keystrokes 60 \
             --budget-first-ms 15000 \
@@ -245,7 +248,7 @@ jobs:
 
       - name: Install Playwright browser with a bounded retry
         shell: bash
-        timeout-minutes: 12
+        timeout-minutes: 20
         env:
           BROWSER: ${{ matrix.browser }}
         run: |
@@ -253,6 +256,9 @@ jobs:
           attempt() { timeout 300 npx playwright install --with-deps "$BROWSER"; }
           attempt || {
             echo "playwright install stalled or failed once; retrying" >&2
+            sudo killall apt-get apt dpkg || true
+            sudo rm -f /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend || true
+            sudo dpkg --configure -a || true
             attempt
           }
 
