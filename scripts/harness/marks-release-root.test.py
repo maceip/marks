@@ -537,6 +537,13 @@ class ReleaseRootContract(unittest.TestCase):
         legacy = Path(mod.RELEASES) / ".legacy-20260825T010203Z.staging.456"
         v2.mkdir()
         legacy.mkdir()
+
+        for directory in (v2, legacy):
+            current = directory
+            while current >= Path(mod.RELEASES):
+                os.chmod(current, 0o755)
+                current = current.parent
+
         (v2 / "partial").write_bytes(b"bounded abandoned release")
         mod.purge_stale_release_staging()
         self.assertFalse(v2.exists())
@@ -544,6 +551,7 @@ class ReleaseRootContract(unittest.TestCase):
 
         outside = self.root / "outside-release-stage"
         outside.mkdir()
+        os.chmod(outside, 0o755)
         unsafe = Path(mod.RELEASES) / f".{revision}.staging.789"
         unsafe.symlink_to(outside, target_is_directory=True)
         with self.assertRaisesRegex(RuntimeError, "unsafe hidden object"):
@@ -758,8 +766,13 @@ class ReleaseRootContract(unittest.TestCase):
         npm_cli.parent.mkdir(parents=True)
         node.write_bytes(b"pinned node binary")
         npm_cli.write_bytes(b"pinned npm cli")
-        os.chmod(node, 0o755)
-        os.chmod(npm_cli, 0o644)
+
+        for tool in (node, npm_cli):
+            current = tool
+            while current >= root:
+                os.chmod(current, 0o755 if current.is_dir() or current == node else 0o644)
+                current = current.parent
+
         owner = (os.getuid(), os.getgid())
         arguments = {
             "owner": owner,
