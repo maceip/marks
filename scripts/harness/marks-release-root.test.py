@@ -757,9 +757,6 @@ class ReleaseRootContract(unittest.TestCase):
         node = root / "bin" / "node"
         npm_cli = root / "lib" / "node_modules" / "npm" / "bin" / "npm-cli.js"
         node.parent.mkdir(parents=True)
-        os.chmod(node.parent.parent, 0o755)
-        os.chmod(node.parent, 0o755)
-        os.chmod(root, 0o755)
         npm_cli.parent.mkdir(parents=True)
         os.chmod(npm_cli.parent.parent.parent.parent, 0o755)
         os.chmod(npm_cli.parent.parent.parent, 0o755)
