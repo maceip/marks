@@ -103,7 +103,7 @@ jobs:
         timeout-minutes: 12
         run: |
           set -euo pipefail
-          attempt() { timeout 300 npx playwright install --with-deps chromium; }
+          attempt() { sudo rm -f /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock /var/lib/dpkg/lock || true; timeout 300 npx playwright install --with-deps chromium; }
           attempt || {
             echo "playwright install stalled or failed once; retrying" >&2
             attempt
@@ -250,7 +250,7 @@ jobs:
           BROWSER: ${{ matrix.browser }}
         run: |
           set -euo pipefail
-          attempt() { timeout 300 npx playwright install --with-deps "$BROWSER"; }
+          attempt() { sudo rm -f /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock /var/lib/dpkg/lock || true; timeout 300 npx playwright install --with-deps "$BROWSER"; }
           attempt || {
             echo "playwright install stalled or failed once; retrying" >&2
             attempt
