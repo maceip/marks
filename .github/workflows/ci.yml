@@ -413,7 +413,7 @@ jobs:
           BROWSER: ${{ matrix.browser }}
         run: |
           set -euo pipefail
-          attempt() { timeout 300 npx playwright install --with-deps "$BROWSER"; }
+          attempt() { sudo rm -f /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock /var/lib/dpkg/lock || true; timeout 300 npx playwright install --with-deps "$BROWSER"; }
           attempt || {
             echo "playwright install stalled or failed once; retrying" >&2
             attempt
@@ -629,7 +629,7 @@ jobs:
           MARKS_BROWSER: ${{ matrix.browser }}
         run: |
           set -euo pipefail
-          attempt() { timeout 300 npx playwright install --with-deps "$MARKS_BROWSER"; }
+          attempt() { sudo rm -f /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock /var/lib/dpkg/lock || true; timeout 300 npx playwright install --with-deps "$MARKS_BROWSER"; }
           attempt || {
             echo "playwright install stalled or failed once; retrying" >&2
             attempt
@@ -645,6 +645,7 @@ jobs:
           run_root="$RUNNER_TEMP/marks-variant-${MARKS_PRODUCT_VARIANT}-${MARKS_BROWSER}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p "$run_root/assets" "$run_root/backups"
           server_pid=""
+          # shellcheck disable=SC2317,SC2329
           cleanup() {
             if [[ -n "$server_pid" ]]; then
               kill "$server_pid" >/dev/null 2>&1 || true
