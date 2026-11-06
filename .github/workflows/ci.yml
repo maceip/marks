@@ -645,6 +645,7 @@ jobs:
           run_root="$RUNNER_TEMP/marks-variant-${MARKS_PRODUCT_VARIANT}-${MARKS_BROWSER}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p "$run_root/assets" "$run_root/backups"
           server_pid=""
+          # shellcheck disable=SC2317,SC2329
           cleanup() {
             if [[ -n "$server_pid" ]]; then
               kill "$server_pid" >/dev/null 2>&1 || true
