@@ -994,6 +994,7 @@ export async function runSurface(session, { check }) {
     await session.waitForSelector('.wild-studio[data-shell="fold-laptop"][data-wild-capability="consequences"]');
     check('possibility layer respects the unfolded laptop posture',
       (await session.count('.wild-studio[data-shell="fold-laptop"] .consequence-lanes [data-lane]')) === 5);
+    await session.wait(150);
     await session.click('button[aria-label="Close possibility layer"]');
   }
 
