@@ -27,7 +27,7 @@ tokio-util = { version = "0.7", features = ["io", "rt"] }
 tower-http = { version = "0.7", features = ["fs"] }
 tower = { version = "0.5", features = ["util"] }
 futures-util = "0.3"
-htmd = "0.5.5"
+htmd = "0.6.0"
 libc = "0.2"
 office_oxide = "0.1.8"
 pdf-extract = "0.12.0"
